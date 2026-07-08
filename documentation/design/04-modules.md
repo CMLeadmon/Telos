@@ -78,15 +78,15 @@ The manifesto includes a terminal-styled block, set in the monospace stack, show
 
 ```yaml
 services:
-  telos:
-    image: ghcr.io/telos-project/telos:latest
+  traefik:
     ports:
-      - "127.0.0.1:8443:8443"
+      - "127.0.0.1:443:443"   # loopback-only bind: reachable via your tunnel, invisible to the open net
+
+  telos-core:
+    build:
+      context: ./backend       # built from source — Telos ships no published image
     environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DATABASE_USERNAME: ${DATABASE_USERNAME}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
-      SESSION_SECRET: ${SESSION_SECRET}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 ```
 
 For the authoritative, complete deployment configuration, see [`../architecture/02-deployment.md`](../architecture/02-deployment.md).
