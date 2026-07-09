@@ -8,6 +8,8 @@ This file is the single source of truth for color, type, iconography, radii, sem
 
 The palette is grayscale neutrals, a stark white, and exactly one blue. This is the only file in the documentation set permitted to name the forbidden hues, and only to state the prohibition: do not introduce semantic accent hues (red, green, yellow, amber, emerald). No other document, and no implementation code, may reference these hues in any form.
 
+The grayscale-plus-single-blue rule above governs the light and dark themes. The vaporwave theme (§8) substitutes its own accent set, but the ban on *semantic* accent hues — color carrying state meaning — holds in every theme without exception; states stay structural per §6 regardless of which theme is active.
+
 ### Surfaces (dark default)
 
 | Token | Value | Tailwind | Usage |
@@ -33,7 +35,7 @@ Contrast note: `slate-500` on Deep Void or Dark Slate does not meet body-text co
 | Sovereign Blue | `#0EA5E9` | `sky-500` | Active states, primary buttons, AI/oracle features, progress bars |
 | Blue Wash | — | `sky-500/10` bg, `sky-400` text | Badges, active voice states |
 
-Rule: at most one Sovereign Blue emphasis per visual region. Do not stack multiple high-saturation blue elements (a filled button and a pulsing dot and a progress bar) in the same visual region — pick the single element that most needs emphasis.
+Rule: at most one accent emphasis per visual region (Sovereign Blue in light/dark; hot pink in vaporwave — see §8). Do not stack multiple high-saturation accent elements (a filled button and a pulsing dot and a progress bar) in the same visual region — pick the single element that most needs emphasis.
 
 ## 2. Light mode
 
@@ -68,6 +70,10 @@ Icons come from `lucide-react` exclusively. All icons are monochromatic outlines
 
 Border color: `border-slate-800` on dark surfaces, `border-slate-200` on light surfaces.
 
+### Elevation (flat rule)
+
+Light and dark are strictly flat: no box-shadows, no blurred backdrops, no gradients. Surface separation comes from 1px borders and surface-color steps (background → panel → elevated) only. The only sanctioned deviations from this rule live in §8 (the vaporwave glow exception) and the vaporwave logo variant (gradient permitted only there — see [`01-brand-identity.md`](./01-brand-identity.md)).
+
 ## 6. Semantic states without semantic color
 
 Telos communicates state through icon, weight, and copy — never through hue. The following six states are exhaustive; do not introduce additional states or merge these rows.
@@ -91,3 +97,36 @@ Rationale *(informative)*: meaning is carried by icon, weight, and copy rather t
 | Layout change | 300ms |
 
 Every `animate-*` utility must be paired with its `motion-reduce:` variant so motion-sensitive users see static equivalents.
+
+## 8. Theming
+
+Telos ships three themes: light, dark, and vaporwave. Dark is the default.
+
+Mechanism: themes are applied as `data-theme="light" | "dark" | "vaporwave"` on the root element. Tokens are exposed as CSS custom properties; components consume the variables and never branch their logic per theme. The user's selection is persisted (localStorage).
+
+### Vaporwave palette
+
+Vaporwave replaces the light/dark surface, text, and accent values with the palette below. Values are given as hex only — never Tailwind color-family classes.
+
+| Token | Value | Role |
+| --- | --- | --- |
+| Surface | `#0D0221` | App background |
+| Panel | `#1A0B3B` | Panels, cards |
+| Border | `#2E1A5E` | Dividers, outlines |
+| Text | `#F8F8FF` | Primary text |
+| Secondary | `#C8BFE7` | Secondary text |
+| Hot Pink | `#FF71CE` | Primary actions — takes the role Sovereign Blue has in light/dark |
+| Neon Cyan | `#01CDFE` | Links, active states, live indicators |
+| Purple | `#B967FF` | Badge wash (`#B967FF` at ~15% alpha background with `#B967FF` text) |
+
+### Glow exception
+
+Vaporwave alone may use a neon glow, and only on live/active indicators and the logo. The glow is written as a CSS property — never a Tailwind `shadow-*` class:
+
+```css
+box-shadow: 0 0 12px rgba(1, 205, 254, 0.35);
+```
+
+Semantic-state patterns defined in §6 are theme-independent: only the accent hue serving each pattern changes with the active theme, never the underlying icon-plus-copy structure.
+
+Cross-links: the theme selector UI is specified in [`03-application-shell.md`](./03-application-shell.md); the vaporwave logo variant is specified in [`01-brand-identity.md`](./01-brand-identity.md).
