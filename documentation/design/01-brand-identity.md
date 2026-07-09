@@ -51,3 +51,13 @@ Use this exact mark snippet:
 </svg>
 <span class="text-lg font-semibold tracking-wide">Telos</span>
 ```
+
+## Vaporwave logo variant
+
+The vaporwave theme uses a distinct rendering of the mark rather than the standard monochrome lockup above.
+
+- The variant artwork is supplied by the project owner. Once delivered, it lives at `resources/Telos_vaporwave.png` as the canonical render.
+- Usage: the variant is shown ONLY when `data-theme="vaporwave"`. Every other theme uses the standard monochrome mark defined above.
+- The in-app vector derived from the artwork may use a hot-pink-to-neon-cyan gradient (`#FF71CE` → `#01CDFE`) — the single sanctioned gradient in the product — and may carry the neon glow permitted for vaporwave per the tokens doc's [Theming §8](./02-design-tokens.md#8-theming) glow exception.
+- Fallback: until the asset is integrated, implementations use the standard monochrome mark, which inherits vaporwave's text color via `currentColor`.
+- Outside of this variant, the flat rule holds: no blurred backdrops and no shadows on the standard mark in light or dark mode.
