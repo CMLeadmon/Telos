@@ -27,7 +27,9 @@ The Global Header is `h-14` and divides into three zones:
 
 - **Left:** the logo lockup, composed exactly per the logo composition rule in [`01-brand-identity.md`](./01-brand-identity.md#logo-composition-rule). No local variant of the mark or wordmark is defined in this document.
 - **Center:** the global search input. Placeholder text, verbatim: `Title, Author, Series, Genre, or Tags...`. The input's focus state uses the Sovereign Blue focus ring defined in §8 (*Focus*).
-- **Right:** three icon buttons — `Activity`, `Sparkles`, `Settings` — followed by a voice status indicator, a Sun/Moon theme toggle, and the `SOVEREIGNTY MANIFESTO` toggle button.
+- **Right:** three icon buttons — `Activity`, `Sparkles`, `Settings` — followed by a voice status indicator, a theme selector, and the `SOVEREIGNTY MANIFESTO` toggle button.
+
+The theme selector is a three-state control cycling light → dark → vaporwave, using `lucide-react` icons `Sun` (light), `Moon` (dark), and `Waves` (vaporwave). Its `aria-label` announces the *next* theme the control will switch to, e.g. `Switch theme (next: vaporwave)`. Selecting a state applies `data-theme` per the theming mechanism in [`02-design-tokens.md` §8](./02-design-tokens.md#8-theming).
 
 All icons in the Global Header are `lucide-react` icons per [`02-design-tokens.md` §4](./02-design-tokens.md#4-iconography). Icon-only buttons require an `aria-label` per §8 (*Motion & screen readers*).
 
@@ -87,6 +89,11 @@ Two behaviors hold at every tier: the voice call bar is a floating overlay regar
 | `sky-500` | `#0B0D13` | 6.8:1 | Pass |
 | `slate-500` | `#0B0D13` | 4.6:1 | Large text only |
 | `sky-400` on `sky-500/10` | over `#121620` | 8:1 | Pass |
+| `#F8F8FF` | `#0D0221` | 18:1 | Pass |
+| `#FF71CE` | `#0D0221` | 8:1 | Pass |
+| `#01CDFE` | `#0D0221` | 11:1 | Pass |
+| `#B967FF` | `#0D0221` | 6:1 | Pass |
+| `#C8BFE7` | `#0D0221` | 12:1 | Pass |
 
 ### Focus
 
@@ -97,6 +104,8 @@ focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 focu
 ```
 
 Outlines must never be removed without this replacement in place.
+
+The ring color follows the theme accent: `sky-500` in light and dark themes, `#01CDFE` in vaporwave, applied via the ring CSS var so no per-component override is needed.
 
 ### Keyboard map
 
