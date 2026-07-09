@@ -139,6 +139,40 @@ internally consistent, one concern per file.
 - `grep -rn "cite:" documentation/` returns nothing.
 - `grep -rniE "emerald|amber|rose-|cyan-" documentation/` returns nothing
   (except prose explicitly listing forbidden colors).
+- `grep -rnE "shadow-[a-z0-9]|backdrop-blur" documentation/` returns nothing
+  (flat rule; CSS `box-shadow:` property form for the vaporwave glow is
+  permitted).
 - All internal cross-links between the new files resolve.
 - Old `design.md` / `implementation.md` removed; originals reachable via
   `git show 8bf9c24`.
+
+## Amendment (2026-07-08, approved): Theming & Antigravity executability
+
+Added mid-execution at the owner's direction, after Tasks 1–8 landed.
+
+1. **Three themes.** `data-theme="light" | "dark" | "vaporwave"` CSS custom
+   properties on the root; dark remains default; selection persisted. Header
+   Sun/Moon toggle becomes a three-state selector (lucide Sun / Moon / Waves).
+2. **Flat rule.** Light and dark are strictly flat: no box-shadows, no
+   backdrop-blur, no gradients. Separation via 1px borders and surface steps.
+   Tailwind `shadow-*` / `backdrop-blur*` classes are banned across the docs.
+3. **Vaporwave theme (classic neon).** Surface `#0D0221`, panel `#1A0B3B`,
+   border `#2E1A5E`, text `#F8F8FF`, secondary `#C8BFE7`; accents: hot pink
+   `#FF71CE` (primary-action role), neon cyan `#01CDFE` (links/active/live),
+   purple `#B967FF` (badge wash). Hex/CSS-var form only — never Tailwind
+   color-family classes. Semantic-state patterns remain structural across
+   themes. One scoped exception: vaporwave may use neon glow (CSS
+   `box-shadow:` property form) only on live/active indicators and the logo.
+4. **Vaporwave logo.** Artwork supplied by the owner; expected path
+   `resources/Telos_vaporwave.png`; swaps in for vaporwave mode only;
+   fallback is the standard monochrome mark. Gradients permitted only in
+   this variant.
+5. **Antigravity executability.** New `documentation/design/06-design-prompts.md`
+   (three self-contained frontend design prompts: flat dark, flat light,
+   vaporwave) and repo-root `AGENTS.md` (doc map, build order, verification
+   commands, pointer to the prompts). Docs stay agent-agnostic: plain
+   markdown + plain shell verification.
+6. **Retrofits.** design/01 (logo variant section), design/02 (theming
+   section + flat rule), design/03 (theme selector + vaporwave contrast
+   rows), design/05 (flat, three-theme reference snippet). Plan Task 9's
+   call-bar snippet goes flat; Task 11's README gains the new rows/links.

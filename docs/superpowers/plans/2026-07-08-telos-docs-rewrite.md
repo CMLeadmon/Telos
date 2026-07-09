@@ -24,6 +24,12 @@ Every file written by every task MUST honor these. Copy values exactly.
 - **Licenses:** Jellyfin GPL-2.0 (`https://github.com/jellyfin/jellyfin`), Grimmory AGPL-3.0, LiveKit Apache-2.0 (`https://github.com/livekit/livekit`).
 - **Responsive tiers:** ≥`xl` full 4-pane; <`xl` SLA sidebar hidden; <`lg` contextual sidebar becomes overlay drawer; <`md` left nav strip becomes bottom tab bar.
 - **Cross-links:** relative markdown links between docs (e.g., `../design/02-design-tokens.md`); logo renders referenced as `../../resources/Telos_1.png` etc.
+- **Theming (amendment):** three themes via `data-theme="light" | "dark" | "vaporwave"` CSS custom properties on the root element; dark is default; selection persisted. The header theme control is a three-state selector with lucide icons Sun (light), Moon (dark), Waves (vaporwave).
+- **Flat rule (amendment):** light and dark themes are strictly flat — no box-shadows, no backdrop-blur, no gradients; separation via 1px borders and surface-color steps. Tailwind `shadow-*` and `backdrop-blur*` classes are banned in every doc (verify grep pattern: `shadow-[a-z0-9]|backdrop-blur`).
+- **Vaporwave palette (amendment, exact):** surface `#0D0221`, panel `#1A0B3B`, border `#2E1A5E`, text `#F8F8FF`, secondary `#C8BFE7`; accents: hot pink `#FF71CE` (takes the primary-action role Sovereign Blue has in light/dark), neon cyan `#01CDFE` (links/active/live), purple `#B967FF` (badge-wash role, e.g. `#B967FF` at ~15% alpha bg with `#B967FF` text). Express ONLY as hex values or CSS vars — never Tailwind color-family classes. Approximate WCAG ratios on `#0D0221`: text ≈18:1, pink ≈8:1, cyan ≈11:1, purple ≈6:1, secondary ≈12:1. Semantic-state patterns (tokens §6) remain structural and theme-independent.
+- **Vaporwave glow exception (amendment):** vaporwave alone may use neon glow, ONLY on live/active indicators and the logo, written as a CSS property (e.g. `box-shadow: 0 0 12px rgba(1, 205, 254, 0.35);`) — never as a Tailwind class, so the flat-rule grep stays silent.
+- **Vaporwave logo (amendment):** artwork is supplied by the project owner; expected path `resources/Telos_vaporwave.png`; in vaporwave mode the mark swaps to this variant; until the asset lands, implementations fall back to the standard monochrome mark inheriting `currentColor`. Gradients are permitted only in this logo variant.
+- **Agent-agnostic docs (amendment):** everything under `documentation/` and the repo-root `AGENTS.md` must be executable by any coding agent (Antigravity, Claude, Cursor): plain markdown, plain shell verification commands, no references to session-specific paths or Claude-specific tooling.
 - **Commit format:** each task commits with a `docs:` prefix message ending in the trailer `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`.
 - **Verification helper (used by several tasks; create once in Task 1, Step 2):** save as `/tmp/claude-1000/-var-home-cleadmon-Projects-Telos/f9542da3-740c-479c-b6b5-ded02b7bccea/scratchpad/check_yaml.py`:
 
@@ -861,7 +867,7 @@ export const CoreAppShell: React.FC = () => {
 
       {/* Floating call bar: mounted at shell level so navigation never drops the call. */}
       {connectionStatus === ConnectionState.Connected && activeChannelId && (
-        <div className="absolute bottom-6 right-6 z-50 flex items-center gap-4 rounded-xl border border-sky-500/20 bg-slate-950/90 p-4 shadow-2xl backdrop-blur-md">
+        <div className="absolute bottom-6 right-6 z-50 flex items-center gap-4 rounded-xl border border-sky-500/20 bg-slate-950 p-4">
           <div className="flex flex-col gap-0.5">
             <span className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-sky-400">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500 motion-reduce:animate-none" />
@@ -899,9 +905,11 @@ export const CoreAppShell: React.FC = () => {
 
 4. **Module rendering** — `SubModuleRenderer` swaps module pages (chat/stream/books/files); page DOM is disposable, shell + stores are not. Recommended stack *(informative)*: React + TypeScript + Zustand, HLS.js for the media player; adapt to host framework per `../design/05-reference-implementation.md`.
 
+5. **Theming state** — theme selection (`light` / `dark` / `vaporwave`) lives in a small persisted UI store (Zustand + localStorage) and is applied as a `data-theme` attribute on the root element; components consume the CSS custom properties defined in `../design/02-design-tokens.md` rather than branching per theme. The call bar above is flat per the design system's flat rule (solid surface + border, no elevation utilities).
+
 - [ ] **Step 2: Verify**
 
-Run: `grep -nE "cite:|TODO|TBD|emerald|amber|rose-|cyan-|audioDefaults|\.participants\b" documentation/architecture/04-frontend-architecture.md`
+Run: `grep -nE "cite:|TODO|TBD|emerald|amber|rose-|cyan-|audioDefaults|\.participants\b|shadow-[a-z0-9]|backdrop-blur" documentation/architecture/04-frontend-architecture.md`
 Expected: no output.
 
 - [ ] **Step 3: Commit**
@@ -955,9 +963,9 @@ git commit -m "docs: add roadmap and licensing analysis (architecture/05)"
 - [ ] **Step 1: Write `documentation/README.md`** — H1 `# Telos Documentation`, audience preamble, then:
 
 1. **Vision** — 2–3 sentences: Telos merges Discord-style chat/voice, Jellyfin-style streaming, Grimmory-style publication management, and file management into one self-hosted, single-origin application; an infrastructure of digital sovereignty. Quote both slogans.
-2. **Quick facts** — table: default host `telos.local`; stack Go/Rust core + React/TS/Zustand client; services Traefik, PostgreSQL 16, Redis 7, Jellyfin, Grimmory, MariaDB 10.11, LiveKit; license target MIT/Apache-2.0 core with GPL/AGPL headless children (see licensing doc).
-3. **Document map** — two tables (Design, Architecture), one row per file with relative link and one-line purpose, exactly matching the 10 files created in Tasks 1–10.
-4. **Reading order** — for UI work start at `design/01`, for deployment `architecture/01` → `02`; note that `resources/Telos_[1-3].png` are the canonical logo renders.
+2. **Quick facts** — table: default host `telos.local`; stack Go/Rust core + React/TS/Zustand client; services Traefik, PostgreSQL 16, Redis 7, Jellyfin, Grimmory, MariaDB 10.11, LiveKit; themes flat light / flat dark (default) / vaporwave; license target MIT/Apache-2.0 core with GPL/AGPL headless children (see licensing doc).
+3. **Document map** — two tables (Design, Architecture), one row per file with relative link and one-line purpose, exactly matching the 11 files created in Tasks 1–10 and 12–16 (design/01–06, architecture/01–05).
+4. **Reading order** — for UI work start at `design/01`; implementing agents building the frontend should start from the ready-to-use prompts in `design/06-design-prompts.md` and the repo-root agent guide `../AGENTS.md`; for deployment `architecture/01` → `02`; note that `resources/Telos_[1-3].png` are the canonical logo renders and `resources/Telos_vaporwave.png` is the expected path for the owner-supplied vaporwave logo.
 5. **History note** *(informative)* — this set supersedes the original `design.md`/`implementation.md`, preserved in git history.
 
 - [ ] **Step 2: Delete the originals**
@@ -969,13 +977,15 @@ git rm documentation/design.md documentation/implementation.md
 - [ ] **Step 3: Full verification suite**
 
 ```bash
-grep -rn "cite:" documentation/ ; echo "exit=$?"                       # expect no matches, exit=1
-grep -rnE "TODO|TBD" documentation/ ; echo "exit=$?"                   # expect no matches, exit=1
-grep -rnE "cyan-|emerald|amber|rose-" documentation/ --include="*.md" \
+grep -rn "cite:" documentation/ AGENTS.md ; echo "exit=$?"             # expect no matches, exit=1
+grep -rnE "TODO|TBD" documentation/ AGENTS.md ; echo "exit=$?"         # expect no matches, exit=1
+grep -rnE "cyan-|emerald|amber|rose-" documentation/ AGENTS.md \
   | grep -v "02-design-tokens.md" ; echo "exit=$?"                     # expect no matches, exit=1
+grep -rnE "shadow-[a-z0-9]|backdrop-blur" documentation/ AGENTS.md      # expect no matches (flat rule)
 grep -rnE "SecurePass|SecureRedis|SecureMariaDB|z-25" documentation/    # expect no matches
 python3 <scratchpad>/check_yaml.py                                      # expect YAML OK
-ls documentation/design documentation/architecture                      # expect 5 files each
+ls documentation/design documentation/architecture                      # expect 6 and 5 files
+test -f AGENTS.md && echo "AGENTS.md present"                           # expect present
 ```
 
 Then check every relative link resolves:
@@ -1001,4 +1011,396 @@ Expected: `LINKS OK`.
 ```bash
 git add documentation/README.md
 git commit -m "docs: add documentation index; remove superseded monolithic docs"
+```
+
+---
+
+## Amendment tasks (approved 2026-07-08): theming + Antigravity
+
+Execution order for remaining work: 12 → 13 → 14 → 15 → 16 → 9 → 10 → 17 → 11.
+IMPORTANT for Tasks 13, 16, 17 and 11: `resources/Telos_vaporwave.png` does not
+exist yet (owner-supplied later) — reference that path as inline code only,
+NEVER as a markdown link, or the link checker in Task 11 fails.
+
+### Task 12: Retrofit `documentation/design/02-design-tokens.md` — theming + flat rule
+
+**Files:**
+- Modify: `documentation/design/02-design-tokens.md`
+
+**Interfaces:**
+- Consumes: existing sections 1–7 of the file.
+- Produces: section "8. Theming" and the flat rule that Tasks 13–16 and 9 reference; the accent-role mapping (Sovereign Blue role ↔ hot pink in vaporwave).
+
+- [ ] **Step 1: Edit the file**
+
+1. In section 1 (Color system), after the hard rule, add one scoping sentence: the grayscale + single-blue rule governs the light and dark themes; the vaporwave theme (§8) substitutes its own accent set, but the ban on *semantic* accent hues (state meaning carried by color) holds in every theme — states stay structural per §6.
+2. Amend the "at most one Sovereign Blue emphasis per visual region" rule to: at most one accent emphasis per visual region (Sovereign Blue in light/dark; hot pink in vaporwave).
+3. In section 5 (Borders & radii) add an "Elevation (flat rule)" subsection: light and dark are strictly flat — no box-shadows, no backdrop-blur, no gradients; separation via 1px borders and surface steps; the only sanctioned deviations live in §8 (vaporwave glow) and the vaporwave logo variant (gradient, see `01-brand-identity.md`).
+4. Append new section `## 8. Theming`:
+   - Mechanism: themes applied as `data-theme="light" | "dark" | "vaporwave"` on the root element; tokens exposed as CSS custom properties; components consume vars, never branch per theme; dark is default; selection persisted (localStorage).
+   - Vaporwave palette table (hex only, with role column): surface `#0D0221`, panel `#1A0B3B`, border `#2E1A5E`, text `#F8F8FF`, secondary `#C8BFE7`, hot pink `#FF71CE` primary actions (the role Sovereign Blue has in light/dark), neon cyan `#01CDFE` links/active/live, purple `#B967FF` badge wash (`#B967FF` at ~15% alpha bg + `#B967FF` text).
+   - Glow exception: vaporwave alone may use neon glow, only on live/active indicators and the logo, written as a CSS property, e.g. `box-shadow: 0 0 12px rgba(1, 205, 254, 0.35);` — never a Tailwind class.
+   - One line: semantic-state patterns in §6 are theme-independent; only the accent hue serving each pattern changes with the theme.
+   - Cross-link: theme selector spec lives in `03-application-shell.md`; vaporwave logo variant in `01-brand-identity.md`.
+
+- [ ] **Step 2: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|shadow-[a-z0-9]|backdrop-blur" documentation/design/02-design-tokens.md`
+Expected: no output.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add documentation/design/02-design-tokens.md
+git commit -m "docs: add theming section (flat rule + vaporwave) to design tokens (design/02)"
+```
+
+---
+
+### Task 13: Retrofit `documentation/design/01-brand-identity.md` — vaporwave logo variant
+
+**Files:**
+- Modify: `documentation/design/01-brand-identity.md`
+
+**Interfaces:**
+- Consumes: tokens §8 (Task 12) for the glow rule.
+- Produces: the vaporwave logo usage rules Tasks 15/16 reference.
+
+- [ ] **Step 1: Edit the file** — append a new H2 `## Vaporwave logo variant`:
+
+1. The variant artwork is supplied by the project owner; once delivered it lives at `resources/Telos_vaporwave.png` (inline code, NOT a markdown link — the file does not exist yet) as the canonical render.
+2. Usage: shown ONLY when `data-theme="vaporwave"`; all other themes use the standard monochrome mark.
+3. The in-app vector derived from the artwork may use a hot-pink→neon-cyan gradient (`#FF71CE` → `#01CDFE`) — the single sanctioned gradient in the product — and may carry the neon glow per the tokens doc §8.
+4. Fallback: until the asset is integrated, implementations use the standard monochrome mark, which inherits vaporwave's text color via `currentColor`.
+5. Cross-link tokens §8 (relative link with anchor).
+
+- [ ] **Step 2: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|shadow-[a-z0-9]|backdrop-blur" documentation/design/01-brand-identity.md; grep -n "](.*Telos_vaporwave" documentation/design/01-brand-identity.md`
+Expected: no output from either grep (second confirms no markdown link to the missing asset).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add documentation/design/01-brand-identity.md
+git commit -m "docs: spec vaporwave logo variant usage (design/01)"
+```
+
+---
+
+### Task 14: Retrofit `documentation/design/03-application-shell.md` — theme selector + vaporwave a11y
+
+**Files:**
+- Modify: `documentation/design/03-application-shell.md`
+
+**Interfaces:**
+- Consumes: tokens §8 (Task 12).
+- Produces: the three-state theme selector spec Tasks 15/16 reference.
+
+- [ ] **Step 1: Edit the file**
+
+1. In section 2 (Global Header): replace the "Sun/Moon theme toggle" item with: theme selector — a three-state control cycling light → dark → vaporwave, lucide icons Sun (light), Moon (dark), Waves (vaporwave), `aria-label` announcing the NEXT theme (e.g. `Switch theme (next: vaporwave)`); applies `data-theme` per the tokens doc §8 (cross-link).
+2. In section 8 (Accessibility), contrast table: append five vaporwave rows — `#F8F8FF` on `#0D0221` ≈ 18:1 (pass); `#FF71CE` on `#0D0221` ≈ 8:1 (pass); `#01CDFE` on `#0D0221` ≈ 11:1 (pass); `#B967FF` on `#0D0221` ≈ 6:1 (pass); `#C8BFE7` on `#0D0221` ≈ 12:1 (pass).
+3. In the Focus subsection add: the focus ring color follows the theme accent — `sky-500` in light/dark, `#01CDFE` in vaporwave (via the ring CSS var).
+
+- [ ] **Step 2: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|emerald|amber|rose-|shadow-[a-z0-9]|backdrop-blur" documentation/design/03-application-shell.md`
+Expected: no output.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add documentation/design/03-application-shell.md
+git commit -m "docs: three-state theme selector + vaporwave contrast rows (design/03)"
+```
+
+---
+
+### Task 15: Retrofit `documentation/design/05-reference-implementation.md` — flat, three-theme snippet
+
+**Files:**
+- Modify: `documentation/design/05-reference-implementation.md`
+
+**Interfaces:**
+- Consumes: tokens §8, shell theme selector (Tasks 12/14).
+
+- [ ] **Step 1: Replace the tsx code block** with EXACTLY this (byte-for-byte):
+
+```tsx
+import React, { useState } from 'react';
+import {
+  Activity, BookOpen, Folder, MessageSquare, Moon, Search, Settings,
+  Sparkles, Sun, Tv, Waves,
+} from 'lucide-react';
+
+const MODULES = [
+  { id: 'chat', icon: MessageSquare, label: 'Chat' },
+  { id: 'stream', icon: Tv, label: 'Stream' },
+  { id: 'books', icon: BookOpen, label: 'Books' },
+  { id: 'files', icon: Folder, label: 'Files' },
+] as const;
+
+const THEMES = ['light', 'dark', 'vaporwave'] as const;
+type Theme = (typeof THEMES)[number];
+
+// Structural reference only: production consumes the CSS custom properties
+// defined in design/02-design-tokens.md (section 8) instead of class maps.
+const T: Record<Theme, {
+  app: string; header: string; nav: string; sidebar: string; sla: string;
+  input: string; searchIcon: string; active: string; idle: string;
+  avatar: string; eye: string;
+}> = {
+  light: {
+    app: 'bg-[#F1F5F9] text-[#111827]',
+    header: 'border-slate-200 bg-white',
+    nav: 'border-slate-200 bg-[#F8FAFC]',
+    sidebar: 'border-slate-200 bg-white',
+    sla: 'border-slate-200 bg-white',
+    input:
+      'border-slate-300 bg-slate-100 text-[#111827] placeholder-slate-500 focus:border-sky-400 focus:bg-white focus-visible:ring-sky-500',
+    searchIcon: 'group-focus-within:text-sky-500',
+    active: 'bg-sky-500/10 text-sky-600',
+    idle: 'text-slate-500 hover:bg-slate-200 hover:text-slate-700',
+    avatar: 'bg-slate-200 text-slate-700',
+    eye: '#FFFFFF',
+  },
+  dark: {
+    app: 'bg-[#0B0D13] text-[#F8FAFC]',
+    header: 'border-slate-800 bg-[#121620]',
+    nav: 'border-slate-800 bg-[#10131C]',
+    sidebar: 'border-slate-800 bg-[#151924]',
+    sla: 'border-slate-800 bg-[#121621]',
+    input:
+      'border-slate-700 bg-[#1A1E29] text-[#F8FAFC] placeholder-slate-500 focus:border-sky-500/50 focus-visible:ring-sky-500',
+    searchIcon: 'group-focus-within:text-sky-500',
+    active: 'bg-sky-500/10 text-sky-400',
+    idle: 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200',
+    avatar: 'bg-slate-800 text-slate-200',
+    eye: '#0B0D13',
+  },
+  vaporwave: {
+    app: 'bg-[#0D0221] text-[#F8F8FF]',
+    header: 'border-[#2E1A5E] bg-[#1A0B3B]',
+    nav: 'border-[#2E1A5E] bg-[#120732]',
+    sidebar: 'border-[#2E1A5E] bg-[#160939]',
+    sla: 'border-[#2E1A5E] bg-[#160939]',
+    input:
+      'border-[#2E1A5E] bg-[#120732] text-[#F8F8FF] placeholder-[#C8BFE7] focus:border-[#01CDFE] focus-visible:ring-[#01CDFE]',
+    searchIcon: 'group-focus-within:text-[#01CDFE]',
+    active: 'bg-[#B967FF]/15 text-[#FF71CE]',
+    idle: 'text-[#C8BFE7] hover:bg-[#2E1A5E]/60 hover:text-[#F8F8FF]',
+    avatar: 'bg-[#2E1A5E] text-[#F8F8FF]',
+    eye: '#0D0221',
+  },
+};
+
+const THEME_ICONS: Record<Theme, typeof Sun> = {
+  light: Sun,
+  dark: Moon,
+  vaporwave: Waves,
+};
+
+export default function App() {
+  const [theme, setTheme] = useState<Theme>('dark');
+  const [activeModule, setActiveModule] =
+    useState<'chat' | 'stream' | 'books' | 'files'>('chat');
+
+  const t = T[theme];
+  const nextTheme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  const NextThemeIcon = THEME_ICONS[nextTheme];
+
+  return (
+    <div
+      data-theme={theme}
+      className={`flex min-h-screen flex-col font-sans transition-colors duration-300 ${t.app}`}
+    >
+      {/* 1. Global Header */}
+      <header
+        className={`z-20 flex h-14 items-center justify-between border-b px-6 transition-colors ${t.header}`}
+      >
+        <div className="flex w-48 items-center gap-2">
+          {/* Ouroboros mark + HTML wordmark (design/01-brand-identity.md).
+              Vaporwave mode swaps in the owner-supplied logo variant once it
+              lands; this monochrome mark is the documented fallback. */}
+          <svg viewBox="0 0 100 100" className="h-10 w-10" role="img" aria-label="Telos ouroboros mark">
+            <path d="M 33 14 A 40 40 0 1 1 12 40" fill="none" stroke="currentColor"
+                  strokeWidth="4.5" strokeLinecap="round" />
+            <path d="M 34 14 C 26 10, 18 16, 21 24 C 24 29, 32 27, 36 22 C 39 18, 38 15, 34 14 Z"
+                  fill="currentColor" />
+            <circle cx="26" cy="19" r="1.5" fill={t.eye} />
+          </svg>
+          <span className="text-lg font-semibold tracking-wide">Telos</span>
+        </div>
+
+        {/* Global search */}
+        <div className="mx-8 hidden max-w-xl flex-1 md:flex">
+          <div className="group relative w-full">
+            <Search className={`absolute left-4 top-2 h-4 w-4 text-slate-400 transition-colors ${t.searchIcon}`} />
+            <input
+              type="text"
+              placeholder="Title, Author, Series, Genre, or Tags..."
+              className={`w-full rounded-lg border py-1.5 pl-11 pr-4 text-sm transition-all focus:outline-none focus-visible:ring-2 ${t.input}`}
+            />
+          </div>
+        </div>
+
+        {/* Quick actions */}
+        <div className="flex w-48 items-center justify-end gap-3">
+          <button aria-label="Activity" className={t.idle}><Activity className="h-4 w-4" /></button>
+          <button aria-label="AI features" className={t.idle}><Sparkles className="h-4 w-4" /></button>
+          <button aria-label="Settings" className={t.idle}><Settings className="h-4 w-4" /></button>
+          <button
+            aria-label={`Switch theme (next: ${nextTheme})`}
+            onClick={() => setTheme(nextTheme)}
+            className={t.idle}
+          >
+            <NextThemeIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* 2. Global Nav Strip */}
+        <nav
+          className={`flex w-[72px] flex-shrink-0 flex-col items-center justify-between border-r py-4 transition-colors ${t.nav}`}
+        >
+          <div className="flex flex-col gap-2">
+            {MODULES.map(({ id, icon: Icon, label }) => (
+              <button
+                key={id}
+                aria-label={label}
+                onClick={() => setActiveModule(id)}
+                className={`rounded-xl p-3 transition-colors ${
+                  activeModule === id ? t.active : t.idle
+                }`}
+              >
+                <Icon className="h-5 w-5" />
+              </button>
+            ))}
+          </div>
+          <button
+            aria-label="Profile: AD"
+            className={`flex h-10 w-10 items-center justify-center rounded-full text-xs font-semibold ${t.avatar}`}
+          >
+            AD
+          </button>
+        </nav>
+
+        {/* 3. Contextual Sidebar */}
+        <aside
+          className={`hidden w-64 flex-shrink-0 flex-col border-r transition-colors lg:flex ${t.sidebar}`}
+        >
+          <div className="flex-1 overflow-y-auto py-3">{/* module sub-navigation */}</div>
+        </aside>
+
+        {/* 4. Central Arena */}
+        <main className="flex flex-1 flex-col overflow-hidden">
+          {/* active module renders here */}
+        </main>
+
+        {/* 5. Server SLA Sidebar */}
+        <aside
+          className={`hidden w-64 flex-shrink-0 flex-col border-l transition-colors xl:flex ${t.sla}`}
+        >
+          {/* server specs, slogans, peers */}
+        </aside>
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 2: Update the corrections list** — append one item with EXACTLY this wording: "elevation utilities removed for the flat rule; boolean dark-mode state replaced by a three-theme selector (light, dark, vaporwave) per the tokens doc."
+
+- [ ] **Step 3: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|emerald|amber|rose-|z-25|shadow-[a-z0-9]|backdrop-blur|isDarkMode" documentation/design/05-reference-implementation.md`
+Expected: no output.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add documentation/design/05-reference-implementation.md
+git commit -m "docs: flat three-theme reference shell (design/05)"
+```
+
+---
+
+### Task 16: Create `documentation/design/06-design-prompts.md` — sample frontend design prompts
+
+**Files:**
+- Create: `documentation/design/06-design-prompts.md`
+
+**Interfaces:**
+- Consumes: tokens (Task 12), shell (Task 14), brand (Task 13), modules (design/04).
+
+- [ ] **Step 1: Write the file** — H1 `# Frontend Design Prompts`, audience preamble, then:
+
+1. **How to use** — these are ready-to-paste prompts for any coding agent (Antigravity, Claude Code, Cursor) implementing the Telos frontend; each is self-contained, but when the repo is available the agent should also read `02-design-tokens.md`, `03-application-shell.md`, and `04-modules.md` (relative links). One prompt per theme; build dark first (default), then light, then vaporwave.
+2. Three H2 sections — "Prompt: flat dark (default)", "Prompt: flat light", "Prompt: vaporwave" — each containing ONE fenced ```text block with a complete prompt. Every prompt must include, in its own words:
+   - Subject grounding: Telos, a self-hosted sovereign platform (chat/voice, media streaming, book library, file manager) in a 4-pane shell (Global Header, Global Nav Strip, Contextual Sidebar, Central Arena, Server SLA Sidebar); audience = self-hosters; the shell's job is calm, dense utility.
+   - The theme's exact palette as hex values with roles (dark: `#0B0D13`/`#121620`/`#F8FAFC`/slate secondaries/accent `#0EA5E9`; light: `#F1F5F9`/`#FFFFFF`/`#111827`/slate borders/accent `#0EA5E9`; vaporwave: `#0D0221`/`#1A0B3B`/`#2E1A5E`/`#F8F8FF`/`#C8BFE7` + `#FF71CE` primary, `#01CDFE` links/active/live, `#B967FF` badge wash).
+   - Flat discipline: no box-shadows, no backdrop-blur, no gradients; 1px borders + surface steps for separation. In the vaporwave prompt ONLY: the two sanctioned deviations — neon glow (CSS `box-shadow:` property form) on live/active indicators and the logo; gradient only in the logo variant (owner-supplied artwork expected at `resources/Telos_vaporwave.png`, inline code not a link; fallback = monochrome mark via currentColor).
+   - Typography: Inter/Geist Sans UI + JetBrains Mono for metrics/paths/logs; serif only inside the book reader.
+   - Semantic states carried structurally (icon + weight + copy + confirmation for irreversible actions), never by extra hues; at most one accent emphasis per visual region.
+   - Iconography: lucide only, no emojis; radii 8px inputs/buttons, 12–16px cards.
+   - Quality floor: responsive tiers (≥xl 4-pane; <xl SLA hidden; <lg sidebar drawer; <md bottom tab bar), visible `focus-visible` rings in the theme accent, `prefers-reduced-motion` respected, `aria-label` on icon-only controls.
+   - Deliverable: the shell + one module screen (chat), matching `05-reference-implementation.md`'s structure.
+3. Close with an *(informative)* note: prompts deliberately restate token values so they work standalone; the token doc remains the source of truth when they disagree.
+
+- [ ] **Step 2: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|emerald|amber|rose-|shadow-[a-z0-9]|backdrop-blur" documentation/design/06-design-prompts.md; grep -n "](.*Telos_vaporwave" documentation/design/06-design-prompts.md`
+Expected: no output from either.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add documentation/design/06-design-prompts.md
+git commit -m "docs: add ready-to-paste frontend design prompts (design/06)"
+```
+
+---
+
+### Task 17: Create repo-root `AGENTS.md` — agent execution guide
+
+**Files:**
+- Create: `AGENTS.md` (repo root)
+
+**Interfaces:**
+- Consumes: the full documentation set (Tasks 1–16) and roadmap (Task 10).
+
+- [ ] **Step 1: Write the file** — H1 `# Telos — Agent Guide`, then:
+
+1. **What this repo is** — documentation-first repo for Telos (one paragraph, both slogans quoted); no application code yet; these docs are the buildable spec.
+2. **Read this first** — table mapping intent → entry point: build the frontend → `documentation/design/06-design-prompts.md` (ready-to-paste prompts) then `documentation/design/01`–`05`; deploy/infra → `documentation/architecture/01`–`03`; frontend state → `documentation/architecture/04`; roadmap/licensing → `documentation/architecture/05`; full index → `documentation/README.md`.
+3. **Build order** — condensed from the roadmap: Phase 1 chat core (Postgres/Redis/WS gateway), Phase 2 storage+media (volumes, Jellyfin, HLS.js), Phase 3 catalog (Grimmory, watch folders, reader), Phase 4 real-time (LiveKit, voice store).
+4. **Hard constraints digest** — grayscale + single accent per theme; three themes (flat light, flat dark default, vaporwave per tokens §8); flat rule; lucide icons only, no emojis; semantic states structural; secrets via `.env` only; copyleft boundary: never link Jellyfin/Grimmory code into the core (process separation, see licensing doc).
+5. **Verify your work** — plain-shell block any agent can run: the cite/TODO grep, the palette-class grep, the flat-rule grep, a python one-liner YAML parse of fenced blocks, `docker compose config` once a compose file exists in the implementation.
+6. Note: `resources/Telos_[1-3].png` canonical logo renders; `resources/Telos_vaporwave.png` expected owner-supplied vaporwave variant (inline code, not a link).
+
+- [ ] **Step 2: Verify**
+
+Run: `grep -nE "cite:|TODO|TBD|cyan-|emerald|amber|rose-|shadow-[a-z0-9]|backdrop-blur" AGENTS.md; grep -n "](.*Telos_vaporwave" AGENTS.md`
+Expected: no output from either. Then check AGENTS.md's own relative links resolve:
+
+```bash
+python3 - <<'EOF'
+import pathlib, re, sys
+p = pathlib.Path("AGENTS.md")
+bad = [t for t in re.findall(r"\]\((?!https?://|#)([^)#]+)", p.read_text())
+       if not (p.parent / t).resolve().exists()]
+print("LINKS OK" if not bad else f"broken: {bad}")
+sys.exit(1 if bad else 0)
+EOF
+```
+
+Expected: `LINKS OK`.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add AGENTS.md
+git commit -m "docs: add repo-root AGENTS.md agent execution guide"
 ```
