@@ -1,0 +1,215 @@
+networks:
+  telos-ingress:
+    name: telos-ingress
+    driver: bridge
+  telos-backend:
+    name: telos-backend
+    driver: bridge
+    internal: true
+  telos-db:
+    name: telos-db
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:
+  redis_data:
+  jellyfin_config:
+  grimmory_config:
+  grimmory_db_data:
+
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: telos-traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+      - label=disable
+    networks:
+      - telos-ingress
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock:ro,z
+      - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
+      - ./config/certs:/certs:ro,z
+      - ./config/dynamic:/etc/traefik/dynamic:ro,z
+
+  telos-core:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: telos-core
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - telos-ingress
+      - telos-backend
+      - telos-db
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
+      - GRIMMORY_API_TOKEN=${GRIMMORY_API_TOKEN}
+    volumes:
+      - /mnt/storage/shared:/data/shared:z
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=telos-ingress"
+      - "traefik.http.routers.telos-core.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.telos-core.entrypoints=websecure"
+      - "traefik.http.routers.telos-core.tls=true"
+      - "traefik.http.routers.telos-core.middlewares=upload-limits"
+      - "traefik.http.middlewares.upload-limits.buffering.maxRequestBodyBytes=104857600"
+      - "traefik.http.services.telos-core.loadbalancer.server.port=8080"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: telos-postgres
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - telos-db
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: telos-redis
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - telos-backend
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    environment:
+      - REDISCLI_AUTH=${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: telos-jellyfin
+    restart: unless-stopped
+    user: "${APP_UID}:${APP_GID}"
+    networks:
+      - telos-ingress
+      - telos-backend
+    environment:
+      - TZ=${TZ}
+      - JELLYFIN_PublishedServerUrl=https://${TELOS_DOMAIN}/jellyfin
+    volumes:
+      - jellyfin_config:/config
+      - /mnt/storage/shared/media:/data/media:ro,z
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=telos-ingress"
+      - "traefik.http.routers.jellyfin.rule=PathPrefix(`/jellyfin`)"
+      - "traefik.http.routers.jellyfin.entrypoints=websecure"
+      - "traefik.http.routers.jellyfin.tls=true"
+      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
+
+  grimmory-db:
+    image: mariadb:10.11
+    container_name: telos-grimmory-db
+    restart: unless-stopped
+    networks:
+      - telos-db
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MARIADB_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${GRIMMORY_DB_NAME}
+      - MYSQL_USER=${GRIMMORY_DB_USER}
+      - MYSQL_PASSWORD=${GRIMMORY_DB_PASSWORD}
+    volumes:
+      - grimmory_db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  grimmory:
+    image: grimmory/grimmory:latest
+    container_name: telos-grimmory
+    restart: unless-stopped
+    depends_on:
+      grimmory-db:
+        condition: service_healthy
+    networks:
+      - telos-ingress
+      - telos-backend
+      - telos-db
+    environment:
+      - USER_ID=${APP_UID}
+      - GROUP_ID=${APP_GID}
+      - TZ=${TZ}
+      - DATABASE_URL=jdbc:mariadb://grimmory-db:3306/${GRIMMORY_DB_NAME}
+      - DATABASE_USERNAME=${GRIMMORY_DB_USER}
+      - DATABASE_PASSWORD=${GRIMMORY_DB_PASSWORD}
+      - API_DOCS_ENABLED=true
+      - DISK_TYPE=LOCAL
+    volumes:
+      - grimmory_config:/app/data
+      - /mnt/storage/shared/books:/books:z
+      - /mnt/storage/shared/bookdrop:/bookdrop:z
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:6060/api/v1/healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=telos-ingress"
+      - "traefik.http.routers.grimmory.rule=PathPrefix(`/grimmory`)"
+      - "traefik.http.routers.grimmory.entrypoints=websecure"
+      - "traefik.http.routers.grimmory.tls=true"
+      - "traefik.http.services.grimmory.loadbalancer.server.port=6060"
+
+  livekit:
+    image: livekit/livekit-server:v1.10
+    container_name: telos-livekit
+    restart: unless-stopped
+    command: --config /etc/livekit/config.yaml
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - telos-ingress
+      - telos-backend
+    ports:
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "50000-50100:50000-50100/udp"
+    volumes:
+      - ./config/livekit.yaml:/etc/livekit/config.yaml:ro,z
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=telos-ingress"
+      - "traefik.http.routers.livekit.rule=PathPrefix(`/livekit`)"
+      - "traefik.http.routers.livekit.entrypoints=websecure"
+      - "traefik.http.routers.livekit.tls=true"
+      - "traefik.http.services.livekit.loadbalancer.server.port=7880"

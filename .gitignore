@@ -1,0 +1,11 @@
+.env
+.idea/
+.vscode/
+*.local
+node_modules/
+.next/
+out/
+dist/
+bin/
+config/certs/
+

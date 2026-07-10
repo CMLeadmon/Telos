@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+:root {
+  /* Default is dark theme */
+  --app-bg: #0B0D13;
+  --panel-bg: #121620;
+  --panel-nav: #10131C;
+  --panel-sidebar: #151924;
+  --panel-sla: #121621;
+  --border-color: #1E293B; /* border-slate-800 */
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
+  --accent: #0EA5E9;
+  --accent-wash: rgba(14, 165, 233, 0.1);
+  --accent-text: #38BDF8;
+  --accent-hover: #1E293B;
+  --avatar-bg: #1E293B;
+  --avatar-text: #E2E8F0;
+  --input-bg: #1A1E29;
+  --input-focus: rgba(14, 165, 233, 0.5);
+  --eye-color: #0B0D13;
+  --focus-ring: #0EA5E9;
+}
+
+[data-theme="light"] {
+  --app-bg: #F1F5F9;
+  --panel-bg: #FFFFFF;
+  --panel-nav: #F8FAFC;
+  --panel-sidebar: #FFFFFF;
+  --panel-sla: #FFFFFF;
+  --border-color: #E2E8F0; /* border-slate-200 */
+  --text-primary: #111827;
+  --text-secondary: #64748B;
+  --text-tertiary: #94A3B8;
+  --accent: #0EA5E9;
+  --accent-wash: rgba(14, 165, 233, 0.1);
+  --accent-text: #0284C7;
+  --accent-hover: #E2E8F0;
+  --avatar-bg: #E2E8F0;
+  --avatar-text: #475569;
+  --input-bg: #F1F5F9;
+  --input-focus: #38BDF8;
+  --eye-color: #FFFFFF;
+  --focus-ring: #0EA5E9;
+}
+
+[data-theme="vaporwave"] {
+  --app-bg: #0D0221;
+  --panel-bg: #1A0B3B;
+  --panel-nav: #120732;
+  --panel-sidebar: #160939;
+  --panel-sla: #160939;
+  --border-color: #2E1A5E;
+  --text-primary: #F8F8FF;
+  --text-secondary: #C8BFE7;
+  --text-tertiary: #B967FF;
+  --accent: #FF71CE; /* Hot Pink */
+  --accent-wash: rgba(185, 103, 255, 0.15); /* Purple badge wash */
+  --accent-text: #FF71CE;
+  --accent-hover: rgba(46, 26, 94, 0.6);
+  --avatar-bg: #2E1A5E;
+  --avatar-text: #F8F8FF;
+  --input-bg: #120732;
+  --input-focus: #01CDFE;
+  --eye-color: #0D0221;
+  --focus-ring: #01CDFE;
+}
+
+@theme {
+  --color-app-bg: var(--app-bg);
+  --color-panel-bg: var(--panel-bg);
+  --color-panel-nav: var(--panel-nav);
+  --color-panel-sidebar: var(--panel-sidebar);
+  --color-panel-sla: var(--panel-sla);
+  --color-border-color: var(--border-color);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent: var(--accent);
+  --color-accent-wash: var(--accent-wash);
+  --color-accent-text: var(--accent-text);
+  --color-accent-hover: var(--accent-hover);
+  --color-avatar-bg: var(--avatar-bg);
+  --color-avatar-text: var(--avatar-text);
+  --color-input-bg: var(--input-bg);
+  --color-focus-ring: var(--focus-ring);
+}
+
+/* Base style resets */
+body {
+  background-color: var(--app-bg);
+  color: var(--text-primary);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  margin: 0;
+  padding: 0;
+  transition: background-color 150ms, color 150ms;
+}
+
+/* Monospace font stack for metrics and code */
+.font-mono {
+  font-family: JetBrains Mono, Fira Code, monospace;
+}
+
+/* Custom glow exception for vaporwave */
+.vaporwave-glow {
+  box-shadow: 0 0 12px rgba(1, 205, 254, 0.35);
+}
