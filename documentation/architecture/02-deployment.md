@@ -80,20 +80,22 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+      - label=disable
     networks:
       - telos-ingress
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro
-      - ./config/certs:/certs:ro
+      - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock:ro,z
+      - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
+      - ./config/certs:/certs:ro,z
+      - ./config/dynamic:/etc/traefik/dynamic:ro,z
 
   telos-core:
     build:
-      context: ./backend
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: telos-core
     restart: unless-stopped
     depends_on:
@@ -113,12 +115,13 @@ services:
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
       - GRIMMORY_API_TOKEN=${GRIMMORY_API_TOKEN}
     volumes:
-      - /mnt/storage/shared:/data/shared
+      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.telos-core.rule=Host(`${TELOS_DOMAIN}`)"
+      - "traefik.http.routers.telos-core.rule=PathPrefix(`/`)"
       - "traefik.http.routers.telos-core.entrypoints=websecure"
+      - "traefik.http.routers.telos-core.tls=true"
       - "traefik.http.routers.telos-core.middlewares=upload-limits"
       - "traefik.http.middlewares.upload-limits.buffering.maxRequestBodyBytes=104857600"
       - "traefik.http.services.telos-core.loadbalancer.server.port=8080"
@@ -152,16 +155,17 @@ services:
     networks:
       - telos-backend
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    environment:
+      - REDISCLI_AUTH=${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a $$REDIS_PASSWORD ping | grep PONG"]
+      test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   jellyfin:
-    # Pin to a specific release in production.
     image: jellyfin/jellyfin:latest
     container_name: telos-jellyfin
     restart: unless-stopped
@@ -174,12 +178,13 @@ services:
       - JELLYFIN_PublishedServerUrl=https://${TELOS_DOMAIN}/jellyfin
     volumes:
       - jellyfin_config:/config
-      - /mnt/storage/shared/media:/data/media:ro
+      - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.jellyfin.rule=Host(`${TELOS_DOMAIN}`) && PathPrefix(`/jellyfin`)"
+      - "traefik.http.routers.jellyfin.rule=PathPrefix(`/jellyfin`)"
       - "traefik.http.routers.jellyfin.entrypoints=websecure"
+      - "traefik.http.routers.jellyfin.tls=true"
       - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
 
   grimmory-db:
@@ -202,7 +207,6 @@ services:
       retries: 3
 
   grimmory:
-    # Alternative registry: ghcr.io/grimmory-tools/grimmory
     image: grimmory/grimmory:latest
     container_name: telos-grimmory
     restart: unless-stopped
@@ -224,8 +228,8 @@ services:
       - DISK_TYPE=LOCAL
     volumes:
       - grimmory_config:/app/data
-      - /mnt/storage/shared/books:/books
-      - /mnt/storage/shared/bookdrop:/bookdrop
+      - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/bookdrop:z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:6060/api/v1/healthcheck"]
       interval: 60s
@@ -235,32 +239,39 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.grimmory.rule=Host(`${TELOS_DOMAIN}`) && PathPrefix(`/grimmory`)"
+      - "traefik.http.routers.grimmory.rule=PathPrefix(`/grimmory`)"
       - "traefik.http.routers.grimmory.entrypoints=websecure"
+      - "traefik.http.routers.grimmory.tls=true"
       - "traefik.http.services.grimmory.loadbalancer.server.port=6060"
 
   livekit:
     image: livekit/livekit-server:v1.10
     container_name: telos-livekit
     restart: unless-stopped
-    command: --config /etc/livekit/config.yaml
+    command: --config /etc/livekit/config.yaml --redis-password ${REDIS_PASSWORD}
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - telos-ingress
       - telos-backend
+    environment:
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     ports:
-      - "7881:7881"                      # WebRTC over TCP fallback
-      - "3478:3478/udp"                  # STUN/TURN
-      - "50000-50100:50000-50100/udp"    # RTP media range
+      - "7881:7881"
+      - "3478:3478/udp"
+      - "50000-50100:50000-50100/udp"
     volumes:
-      - ./config/livekit.yaml:/etc/livekit/config.yaml:ro
+      - ./config/livekit.yaml:/etc/livekit/config.yaml:ro,z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.livekit.rule=Host(`${TELOS_DOMAIN}`) && PathPrefix(`/livekit`)"
+      - "traefik.http.routers.livekit.rule=PathPrefix(`/livekit`)"
       - "traefik.http.routers.livekit.entrypoints=websecure"
+      - "traefik.http.routers.livekit.tls=true"
+      - "traefik.http.middlewares.livekit-strip.stripprefix.prefixes=/livekit"
+      - "traefik.http.routers.livekit.middlewares=livekit-strip"
       - "traefik.http.services.livekit.loadbalancer.server.port=7880"
 ```
 

@@ -48,6 +48,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    ports:
+      - "8080:8080"
     networks:
       - telos-ingress
       - telos-backend
@@ -58,9 +60,11 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
+      - JELLYFIN_USER_NAME=${JELLYFIN_USER_NAME:-}
       - GRIMMORY_API_TOKEN=${GRIMMORY_API_TOKEN}
+      - TELOS_DOMAIN=${TELOS_DOMAIN}
     volumes:
-      - /mnt/storage/shared:/data/shared:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
@@ -123,7 +127,7 @@ services:
       - JELLYFIN_PublishedServerUrl=https://${TELOS_DOMAIN}/jellyfin
     volumes:
       - jellyfin_config:/config
-      - /mnt/storage/shared/media:/data/media:ro,z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
@@ -173,8 +177,8 @@ services:
       - DISK_TYPE=LOCAL
     volumes:
       - grimmory_config:/app/data
-      - /mnt/storage/shared/books:/books:z
-      - /mnt/storage/shared/bookdrop:/bookdrop:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/bookdrop:z
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O - http://localhost:6060/api/v1/healthcheck"]
       interval: 60s
@@ -193,13 +197,16 @@ services:
     image: livekit/livekit-server:v1.10
     container_name: telos-livekit
     restart: unless-stopped
-    command: --config /etc/livekit/config.yaml
+    command: --config /etc/livekit/config.yaml --redis-password ${REDIS_PASSWORD}
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - telos-ingress
       - telos-backend
+    environment:
+      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
     ports:
       - "7881:7881"
       - "3478:3478/udp"
@@ -212,4 +219,6 @@ services:
       - "traefik.http.routers.livekit.rule=PathPrefix(`/livekit`)"
       - "traefik.http.routers.livekit.entrypoints=websecure"
       - "traefik.http.routers.livekit.tls=true"
+      - "traefik.http.middlewares.livekit-strip.stripprefix.prefixes=/livekit"
+      - "traefik.http.routers.livekit.middlewares=livekit-strip"
       - "traefik.http.services.livekit.loadbalancer.server.port=7880"

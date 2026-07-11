@@ -9,3 +9,5 @@ dist/
 bin/
 config/certs/
 
+test-results/
+playwright-report/

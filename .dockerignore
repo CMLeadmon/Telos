@@ -1,0 +1,13 @@
+# Ignore node modules and build outputs
+node_modules
+frontend/node_modules
+frontend/.next
+frontend/out
+backend/out
+backend/telos-core
+.git
+.idea
+.vscode
+.env
+.env.local
+config/certs

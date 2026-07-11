@@ -100,7 +100,7 @@ export const useVoiceSessionStore = create<VoiceSessionState>((set, get) => ({
 
 ## 3. Persistent App Shell
 
-The application shell mounts the voice call bar at the shell level. This guarantees that navigation does not interrupt the active voice session. The call bar is styled as a flat container (solid background and 1px border) to honor the design system constraints.
+The application shell mounts the voice call bar at the shell level. This guarantees that navigation does not interrupt the active voice session.
 
 ```tsx
 import React from 'react';
@@ -172,4 +172,4 @@ The `SubModuleRenderer` component swaps page views (Chat, Stream, Books, Files) 
 
 ## 5. Theming State
 
-Theme selection (`light`, `dark`, or `vaporwave`) is persisted in a local storage store managed via Zustand. The theme is applied as a `data-theme` attribute on the root element. Components must consume the CSS variables exposed under the selected theme rather than conditionally branching styles within components. The app shell call bar follows the flat design guidelines and avoids any elevation or shadow utility classes.
+Theme selection (`light`, `dark`, or `vaporwave`) is persisted in a local storage store managed via Zustand. The theme is applied as a `data-theme` attribute on the root element. Components must consume the CSS variables exposed under the selected theme rather than conditionally branching styles within components.

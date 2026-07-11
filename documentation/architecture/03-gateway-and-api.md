@@ -55,7 +55,7 @@ tls:
 | Media Stream | `GET /api/v1/media` | Jellyfin `GET /Users/{userId}/Views` | Lists the user's available media libraries (views) as Telos media sections. |
 | Media Catalog | `GET /api/v1/media/items` | Jellyfin `GET /Users/{userId}/Items` | Lists playable items within a library for the Telos media browser. |
 | Audio Stream | `GET /api/v1/stream/audio/{id}` | Jellyfin `GET /Audio/{itemId}/stream` | Proxies a direct audio stream for the requested item. |
-| Video Playback | `GET /api/v1/stream/video/{id}` | Jellyfin `GET /Videos/{itemId}/hls/{playlistId}/stream.m3u8` | Proxies the HLS playlist and segment stream for adaptive video playback. |
+| Video Playback | `GET /api/v1/stream/video/{id}` | Jellyfin `GET /Videos/{itemId}/main.m3u8?PlaySessionId={sessionId}` | Proxies the HLS playlist and segment stream for adaptive video playback. |
 | Digital Library | `GET /api/v1/library/books` | Grimmory `GET /api/v1/books` | Lists the book catalog for the Telos library view. |
 | Library Facets | `GET /api/v1/library/facets` | Grimmory `GET /api/v1/books/facets` | Returns facet values (author, series, tags, etc.) for catalog filtering. |
 | Read Progress | `POST /api/v1/library/progress` | Grimmory `POST /api/v1/books/progress` | Persists reading-progress updates against a book. |
