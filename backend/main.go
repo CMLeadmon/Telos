@@ -1,63 +1,38 @@
 // Package main implements the telos-core API gateway — the single entry point
 // for all client traffic in a self-hosted Telos community server.
-//
-// The gateway provides:
-//   - WebSocket chat with Redis pub/sub fanout and PostgreSQL persistence
-//   - LiveKit voice-channel token generation (hand-rolled HS256 JWT)
-//   - Jellyfin media proxy (libraries, items, audio/video streaming via HLS)
-//   - LiveKit signaling reverse proxy
-//   - Embedded static frontend served from the out/ directory
-//   - Health-check endpoint with per-service status
-//   - CORS middleware for cross-origin requests
-//
-// # API Endpoints
-//
-//	GET  /api/v1/health                  → Service health check
-//	GET  /api/v1/chat/ws                 → WebSocket chat (query: channel, user, token)
-//	GET  /api/v1/voice/token             → LiveKit JWT token (query: room, user)
-//	GET  /api/v1/media                   → Jellyfin library listing
-//	GET  /api/v1/media/items             → Jellyfin playable items (query: parentId)
-//	GET  /api/v1/stream/audio/{id}       → Jellyfin audio stream proxy
-//	GET  /api/v1/stream/video/{id}       → Jellyfin HLS video session bootstrap
-//	GET  /api/v1/stream/video/{id}/{p…}  → Jellyfin HLS segment proxy
-//	ANY  /livekit/*                      → LiveKit signaling reverse proxy
-//	GET  /*                              → Embedded static frontend file server
-//
-// # External Dependencies
-//
-//   - PostgreSQL (DATABASE_URL) — message persistence and user profiles
-//   - Redis      (REDIS_URL)    — pub/sub chat fanout and response caching
-//   - Jellyfin   (JELLYFIN_ADMIN_TOKEN, JELLYFIN_USER_NAME) — media backend
-//   - LiveKit    (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET) — voice
-//
-// # Planned
-//
-// Grimmory e-book integration (library, facets, progress tracking) is on the
-// Phase 3 roadmap and will add additional /api/v1/library/* routes.
 package main
 
 import (
 	"context"
-	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
+	"database/sql"
 	"embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/livekit/protocol/auth"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/crypto/argon2"
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -80,39 +55,21 @@ var (
 	}
 )
 
-// schemaSQL holds the DDL executed at startup to ensure the messages and
-// channels tables exist.
-//
-//go:embed db/schema.sql
-var schemaSQL string
+//go:embed db/migrations/*.sql
+var migrationsFS embed.FS
 
-// frontendFS embeds the Next.js static export from the out/ directory.
-// NOTE: The out/ directory must exist at build time for the embed directive to
-// succeed. Run the frontend build (e.g. `npm run build && npm run export`)
-// before compiling the Go binary, or create an empty out/ directory for
-// development builds.
-//
 //go:embed all:out
 var frontendFS embed.FS
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Types — Health
+// Types
 // ═══════════════════════════════════════════════════════════════════════════
 
-// HealthResponse is the JSON payload returned by the /api/v1/health endpoint.
-// It reports the overall gateway status and the individual status of each
-// backing service (database, redis).
 type HealthResponse struct {
 	Status   string            `json:"status"`
 	Services map[string]string `json:"services"`
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Types — Chat / WebSocket
-// ═══════════════════════════════════════════════════════════════════════════
-
-// WSMessage represents a single chat message as seen by clients, carrying
-// sender profile details alongside the content.
 type WSMessage struct {
 	ID        string `json:"id"`
 	Sender    string `json:"sender"`
@@ -122,14 +79,21 @@ type WSMessage struct {
 	Timestamp string `json:"timestamp"`
 }
 
-// WSNotification is the envelope sent over a WebSocket connection. Its Type
-// field is either "history" (initial batch of past messages) or "message"
-// (a single new message broadcast).
 type WSNotification struct {
 	Type     string      `json:"type"`               // "history" or "message"
 	Messages []WSMessage `json:"messages,omitempty"` // For history
 	Message  *WSMessage  `json:"message,omitempty"`  // For individual message
 }
+
+type UserContext struct {
+	ID       string
+	Username string
+	Roles    []string
+}
+
+type contextKey string
+
+const userContextKey contextKey = "user"
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Entrypoint
@@ -144,6 +108,11 @@ func main() {
 	databaseURL := os.Getenv("DATABASE_URL")
 	redisURL := os.Getenv("REDIS_URL")
 
+	// Validate production secrets fast
+	if os.Getenv("TELOS_ENV") != "development" {
+		validateSecrets()
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -151,24 +120,32 @@ func main() {
 	var err error
 	dbPool, err = pgxpool.New(ctx, databaseURL)
 	if err != nil {
-		log.Printf("Warning: Failed to connect to database: %v", err)
-	} else {
-		defer dbPool.Close()
-		// Initialize tables if pool connected successfully
-		if err := initDatabase(ctx); err != nil {
-			log.Printf("Warning: Failed to initialize database: %v", err)
-		} else {
-			log.Println("Database schema checked/initialized successfully")
-		}
+		log.Fatalf("Critical: Failed to connect to database: %v", err)
+	}
+	defer dbPool.Close()
+
+	// Initialize tables via migrations
+	if err := initDatabase(ctx); err != nil {
+		log.Fatalf("Critical: Database migration failed: %v", err)
 	}
 
 	// Initialize Redis Client
 	opt, err := redis.ParseURL(redisURL)
 	if err != nil {
-		log.Printf("Warning: Failed to parse Redis URL: %v", err)
-	} else {
-		redisClient = redis.NewClient(opt)
-		defer redisClient.Close()
+		log.Fatalf("Critical: Failed to parse Redis URL: %v", err)
+	}
+	redisClient = redis.NewClient(opt)
+	defer redisClient.Close()
+
+	// Ensure local directories exist
+	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
+		log.Printf("Warning: Failed to create staging dir: %v", err)
+	}
+	if err := os.MkdirAll("/data/shared/staging/library", 0755); err != nil {
+		log.Printf("Warning: Failed to create staging library dir: %v", err)
+	}
+	if err := os.MkdirAll("/data/shared/bookdrop", 0755); err != nil {
+		log.Printf("Warning: Failed to create bookdrop dir: %v", err)
 	}
 
 	// Get sub-filesystem for the frontend static files
@@ -178,56 +155,53 @@ func main() {
 	}
 	fileServer := http.FileServer(http.FS(subFS))
 
-	// Create ServeMux using Go 1.22+ routing rules
+	// Create ServeMux
 	mux := http.NewServeMux()
 
-	// API and Real-Time routes
+	// Public Routes
 	mux.HandleFunc("GET /api/v1/health", handleHealth)
-	mux.HandleFunc("GET /api/v1/chat/ws", handleWebSocket)
-	mux.HandleFunc("GET /api/v1/voice/token", handleLiveKitToken)
+	mux.HandleFunc("POST /api/v1/auth/bootstrap", handleBootstrap)
+	mux.HandleFunc("POST /api/v1/auth/login", handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/invites/accept", handleAcceptInvite)
 
-	// LiveKit WebSocket reverse proxy — allows the frontend to reach the
-	// LiveKit signaling server through the Go gateway at /livekit/*.
-	livekitTarget := os.Getenv("LIVEKIT_URL")
-	if livekitTarget == "" {
-		livekitTarget = "http://livekit:7880"
-	}
-	lkURL, err := url.Parse(livekitTarget)
-	if err != nil {
-		log.Fatalf("Invalid LIVEKIT_URL: %v", err)
-	}
-	livekitProxy := httputil.NewSingleHostReverseProxy(lkURL)
-	originalDirector := livekitProxy.Director
-	livekitProxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		// Strip the /livekit prefix so the LiveKit server sees /rtc, /ws, etc.
-		req.URL.Path = strings.TrimPrefix(req.URL.Path, "/livekit")
-		if req.URL.Path == "" {
-			req.URL.Path = "/"
-		}
-		req.URL.RawPath = strings.TrimPrefix(req.URL.RawPath, "/livekit")
-		req.Host = lkURL.Host
-		// Preserve WebSocket upgrade headers
-		if hdr := req.Header.Get("Upgrade"); hdr != "" {
-			req.Header.Set("Upgrade", hdr)
-			req.Header.Set("Connection", "Upgrade")
-		}
-	}
-	mux.Handle("/livekit/", livekitProxy)
+	// Authenticated Routes (Requires Session check)
+	mux.Handle("POST /api/v1/auth/logout", withAuth(http.HandlerFunc(handleLogout), ""))
+	mux.Handle("GET /api/v1/auth/me", withAuth(http.HandlerFunc(handleMe), ""))
+	mux.Handle("POST /api/v1/auth/invites", withAuth(http.HandlerFunc(handleCreateInvite), "manage_community"))
 
-	// Real Jellyfin endpoints
-	mux.HandleFunc("GET /api/v1/media", handleMedia)
-	mux.HandleFunc("GET /api/v1/media/items", handleMediaItems)
-	mux.HandleFunc("GET /api/v1/stream/audio/{id}", handleStreamAudio)
-	mux.HandleFunc("GET /api/v1/stream/video/{id}", handleStreamVideo)
-	mux.HandleFunc("GET /api/v1/stream/video/{id}/{path...}", handleStreamVideoSubpath)
+	// Chat WebSocket
+	mux.Handle("GET /api/v1/chat/ws", withAuth(http.HandlerFunc(handleWebSocket), "view_channel"))
+
+	// Channel list
+	mux.Handle("GET /api/v1/channels", withAuth(http.HandlerFunc(handleListChannels), "view_channel"))
+
+	// Jellyfin Proxy routes (Require view_media)
+	mux.Handle("GET /api/v1/media", withAuth(http.HandlerFunc(handleMedia), "view_media"))
+	mux.Handle("GET /api/v1/media/items", withAuth(http.HandlerFunc(handleMediaItems), "view_media"))
+	mux.Handle("GET /api/v1/stream/audio/{id}", withAuth(http.HandlerFunc(handleStreamAudio), "view_media"))
+	mux.Handle("GET /api/v1/stream/video/{id}", withAuth(http.HandlerFunc(handleStreamVideo), "view_media"))
+	mux.Handle("GET /api/v1/stream/video/{id}/{path...}", withAuth(http.HandlerFunc(handleStreamVideoSubpath), "view_media"))
+	mux.Handle("/jellyfin/", withAuth(http.HandlerFunc(handleJellyfinDirectProxy), "view_media"))
+
+	// Grimmory Proxy route (Requires view_library)
+	mux.Handle("/grimmory/", withAuth(http.HandlerFunc(handleGrimmoryProxy), "view_library"))
+
+	// Voice Token (Requires join_voice)
+	mux.Handle("POST /api/v1/voice/channels/{id}/token", withAuth(http.HandlerFunc(handleVoiceToken), "join_voice"))
+
+	// File Library (Require view_files, upload_files, upload_books, manage_files)
+	mux.Handle("GET /api/v1/files", withAuth(http.HandlerFunc(handleListFiles), "view_files"))
+	mux.Handle("POST /api/v1/files", withAuth(http.HandlerFunc(handleUploadFile), "upload_files"))
+	mux.Handle("POST /api/v1/files/books", withAuth(http.HandlerFunc(handleUploadBook), "upload_books"))
+	mux.Handle("GET /api/v1/files/{id}/download", withAuth(http.HandlerFunc(handleDownloadFile), "view_files"))
+	mux.Handle("DELETE /api/v1/files/{id}", withAuth(http.HandlerFunc(handleDeleteFile), "manage_files"))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
 
 	server := &http.Server{
 		Addr:         ":" + port,
-		Handler:      corsMiddleware(mux),
+		Handler:      csrfMiddleware(corsMiddleware(mux)),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 	}
@@ -238,12 +212,207 @@ func main() {
 	}
 }
 
+func validateSecrets() {
+	vars := []string{
+		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_BOOTSTRAP_TOKEN",
+		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_API_TOKEN",
+	}
+	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder"}
+	for _, v := range vars {
+		val := os.Getenv(v)
+		if val == "" {
+			log.Fatalf("Critical Configuration Error: Environment variable %s is not set.", v)
+		}
+		for _, ph := range placeholders {
+			if strings.Contains(strings.ToLower(val), ph) {
+				log.Fatalf("Critical Configuration Error: Environment variable %s contains insecure placeholder value %q.", v, val)
+			}
+		}
+	}
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Middleware & Helpers
+// Database Initialization & Migrations
 // ═══════════════════════════════════════════════════════════════════════════
 
-// isAllowedWSOrigin permits same-origin browsers, the configured public
-// domain, local development hosts, and non-browser clients (no Origin header).
+func initDatabase(ctx context.Context) error {
+	log.Println("Checking database schema migrations...")
+
+	_, err := dbPool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version INT PRIMARY KEY,
+			applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+		);
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to ensure schema_migrations table: %v", err)
+	}
+
+	entries, err := fs.ReadDir(migrationsFS, "db/migrations")
+	if err != nil {
+		return fmt.Errorf("failed to read migrations: %v", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+
+		parts := strings.SplitN(entry.Name(), "_", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		version, err := strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid migration name %q: %v", entry.Name(), err)
+		}
+
+		var exists bool
+		err = dbPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&exists)
+		if err != nil {
+			return fmt.Errorf("failed to check migration state: %v", err)
+		}
+
+		if exists {
+			continue
+		}
+
+		log.Printf("Applying database migration version %d (%s)...", version, entry.Name())
+		sqlBytes, err := fs.ReadFile(migrationsFS, "db/migrations/"+entry.Name())
+		if err != nil {
+			return fmt.Errorf("failed to read migration file: %v", err)
+		}
+
+		tx, err := dbPool.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to start migration transaction: %v", err)
+		}
+
+		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("migration run failed: %v", err)
+		}
+
+		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
+			tx.Rollback(ctx)
+			return fmt.Errorf("failed to insert migration version: %v", err)
+		}
+
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("failed to commit migration transaction: %v", err)
+		}
+		log.Printf("Migration version %d applied successfully", version)
+	}
+
+	return nil
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Authentication, Session and Cryptography Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+func hashPassword(password string) (string, error) {
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", err
+	}
+	hash := argon2.IDKey([]byte(password), salt, 2, 19456, 1, 32)
+	saltBase64 := base64.RawStdEncoding.EncodeToString(salt)
+	hashBase64 := base64.RawStdEncoding.EncodeToString(hash)
+	return fmt.Sprintf("$argon2id$v=19$m=19456,t=2,p=1$%s$%s", saltBase64, hashBase64), nil
+}
+
+func verifyPassword(password, encodedHash string) (bool, error) {
+	parts := strings.Split(encodedHash, "$")
+	if len(parts) != 6 {
+		return false, errors.New("invalid hash format")
+	}
+	if parts[1] != "argon2id" {
+		return false, errors.New("incompatible variant")
+	}
+	var version int
+	if _, err := fmt.Sscanf(parts[2], "v=%d", &version); err != nil {
+		return false, err
+	}
+	if version != 19 {
+		return false, errors.New("incompatible version")
+	}
+	var memory uint32
+	var time uint32
+	var threads uint8
+	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &memory, &time, &threads); err != nil {
+		return false, err
+	}
+	salt, err := base64.RawStdEncoding.DecodeString(parts[4])
+	if err != nil {
+		return false, err
+	}
+	decodedHash, err := base64.RawStdEncoding.DecodeString(parts[5])
+	if err != nil {
+		return false, err
+	}
+	hash := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(decodedHash)))
+	return subtle.ConstantTimeCompare(hash, decodedHash) == 1, nil
+}
+
+func generateToken() (string, string) {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	token := hex.EncodeToString(b)
+	h := sha256.Sum256([]byte(token))
+	return token, hex.EncodeToString(h[:])
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Rate Limiting
+// ═══════════════════════════════════════════════════════════════════════════
+
+func isThrottled(ctx context.Context, username, clientIP string) (bool, error) {
+	if redisClient == nil {
+		return false, nil
+	}
+	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
+	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
+
+	uVal, err := redisClient.Get(ctx, userKey).Int()
+	if err == nil && uVal >= 5 {
+		return true, nil
+	}
+	iVal, err := redisClient.Get(ctx, ipKey).Int()
+	if err == nil && iVal >= 10 {
+		return true, nil
+	}
+	return false, nil
+}
+
+func recordFailedLogin(ctx context.Context, username, clientIP string) {
+	if redisClient == nil {
+		return
+	}
+	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
+	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
+
+	pipe := redisClient.Pipeline()
+	pipe.Incr(ctx, userKey)
+	pipe.Expire(ctx, userKey, 15*time.Minute)
+	pipe.Incr(ctx, ipKey)
+	pipe.Expire(ctx, ipKey, 15*time.Minute)
+	_, _ = pipe.Exec(ctx)
+}
+
+func resetFailedLogins(ctx context.Context, username, clientIP string) {
+	if redisClient == nil {
+		return
+	}
+	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
+	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
+	redisClient.Del(ctx, userKey, ipKey)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Middlewares & Origin Policy
+// ═══════════════════════════════════════════════════════════════════════════
+
 func isAllowedWSOrigin(origin, requestHost, configuredDomain string) bool {
 	if origin == "" {
 		return true
@@ -262,13 +431,17 @@ func isAllowedWSOrigin(origin, requestHost, configuredDomain string) bool {
 	return hostname == "localhost" || hostname == "127.0.0.1"
 }
 
-// corsMiddleware wraps a handler to inject permissive CORS headers and
-// short-circuit OPTIONS pre-flight requests.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		} else {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Emby-Token")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -277,21 +450,565 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// initDatabase executes the embedded schema.sql DDL against the global
-// dbPool, creating tables and indexes if they do not already exist.
-func initDatabase(ctx context.Context) error {
-	log.Println("Executing database schema migration...")
-	_, err := dbPool.Exec(ctx, schemaSQL)
-	return err
+// isAllowedCSRFOrigin reports whether a request's Origin/Referer URL is
+// trusted. Same-origin requests (URL host == request Host) are always
+// allowed, so the check works regardless of how the node is reached
+// (LAN IP, Tailscale MagicDNS, reverse proxy) without enumerating hosts.
+// In development mode a hostname-only match is also accepted, covering the
+// dev split where the frontend on :3000 calls the gateway on :8080.
+func isAllowedCSRFOrigin(rawURL, requestHost, configuredDomain, envMode string) bool {
+	if rawURL == "" {
+		return false
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, requestHost) {
+		return true
+	}
+	hostname := u.Hostname()
+	if configuredDomain != "" && strings.EqualFold(hostname, configuredDomain) {
+		return true
+	}
+	if envMode == "development" {
+		if strings.EqualFold(hostname, "localhost") || hostname == "127.0.0.1" {
+			return true
+		}
+		if reqHostname, _, err := net.SplitHostPort(requestHost); err == nil && strings.EqualFold(hostname, reqHostname) {
+			return true
+		}
+	}
+	return false
+}
+
+func csrfMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		origin := r.Header.Get("Origin")
+		referer := r.Header.Get("Referer")
+		configuredDomain := os.Getenv("TELOS_DOMAIN")
+		envMode := os.Getenv("TELOS_ENV")
+
+		isValid := isAllowedCSRFOrigin(origin, r.Host, configuredDomain, envMode) ||
+			isAllowedCSRFOrigin(referer, r.Host, configuredDomain, envMode)
+
+		if !isValid {
+			http.Error(w, "Forbidden: CSRF Validation Failed", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
+	if dbPool == nil {
+		return nil, errors.New("db uninitialized")
+	}
+
+	var token string
+	// Check cookie
+	cookie, err := r.Cookie("telos_session")
+	if err == nil {
+		token = cookie.Value
+	} else {
+		// Fallback for WS connection upgrades that might supply ticket in query string
+		token = r.URL.Query().Get("token")
+	}
+
+	if token == "" {
+		return nil, errors.New("missing session token")
+	}
+
+	h := sha256.Sum256([]byte(token))
+	tokenHash := hex.EncodeToString(h[:])
+
+	var userID string
+	var username string
+	var active bool
+	var expiresAt time.Time
+
+	err = dbPool.QueryRow(r.Context(), `
+		SELECT s.user_id, u.username, u.active, s.expires_at 
+		FROM sessions s
+		JOIN users u ON s.user_id = u.id
+		WHERE s.token_hash = $1 AND s.revoked_at IS NULL
+	`, tokenHash).Scan(&userID, &username, &active, &expiresAt)
+	if err != nil {
+		return nil, err
+	}
+
+	if !active {
+		return nil, errors.New("account disabled")
+	}
+
+	if time.Now().After(expiresAt) {
+		return nil, errors.New("session expired")
+	}
+
+	rows, err := dbPool.Query(r.Context(), `
+		SELECT role_id FROM user_roles WHERE user_id = $1
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var roles []string
+	for rows.Next() {
+		var rID string
+		if err := rows.Scan(&rID); err == nil {
+			roles = append(roles, rID)
+		}
+	}
+
+	return &UserContext{
+		ID:       userID,
+		Username: username,
+		Roles:    roles,
+	}, nil
+}
+
+func hasPermission(ctx context.Context, user *UserContext, perm string, channelID *string) (bool, error) {
+	for _, r := range user.Roles {
+		if r == "Owner" {
+			return true, nil
+		}
+	}
+
+	var hasGlobal bool
+	err := dbPool.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM role_permissions
+			WHERE role_id = ANY($1) AND permission_id = $2
+		)
+	`, user.Roles, perm).Scan(&hasGlobal)
+	if err != nil {
+		return false, err
+	}
+
+	if channelID != nil {
+		isAdmin := false
+		for _, r := range user.Roles {
+			if r == "Administrator" {
+				isAdmin = true
+				break
+			}
+		}
+
+		if !isAdmin {
+			var flag int
+			switch perm {
+			case "view_channel":
+				flag = 1
+			case "send_messages":
+				flag = 2
+			case "join_voice":
+				flag = 4
+			default:
+				flag = 0
+			}
+
+			if flag > 0 {
+				var allowedCount int
+				var deniedCount int
+
+				err = dbPool.QueryRow(ctx, `
+					SELECT 
+						COUNT(CASE WHEN (deny_mask & $1) <> 0 THEN 1 END),
+						COUNT(CASE WHEN (allow_mask & $1) <> 0 THEN 1 END)
+					FROM channel_role_overrides
+					WHERE channel_id = $2 AND role_id = ANY($3)
+				`, flag, *channelID, user.Roles).Scan(&deniedCount, &allowedCount)
+				if err != nil {
+					return false, err
+				}
+
+				if deniedCount > 0 {
+					return false, nil
+				}
+				if allowedCount > 0 {
+					return true, nil
+				}
+			}
+		}
+	}
+
+	return hasGlobal, nil
+}
+
+func withAuth(next http.Handler, requiredPerm string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, err := getAuthenticatedUser(r)
+		if err != nil {
+			http.Error(w, "Unauthorized: "+err.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		// Inject user into context
+		r = r.WithContext(context.WithValue(r.Context(), userContextKey, user))
+
+		if requiredPerm != "" {
+			var channelID *string
+			cParam := r.URL.Query().Get("channel")
+			if cParam == "" {
+				cParam = r.PathValue("id")
+			}
+			if cParam != "" {
+				// verify if it is valid UUID
+				if len(cParam) == 36 {
+					channelID = &cParam
+				}
+			}
+
+			allowed, err := hasPermission(r.Context(), user, requiredPerm, channelID)
+			if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+			if !allowed {
+				http.Error(w, "Forbidden: Missing permission "+requiredPerm, http.StatusForbidden)
+				return
+			}
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Authentication Handlers
+// ═══════════════════════════════════════════════════════════════════════════
+
+func handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+		Token    string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	expectedToken := os.Getenv("TELOS_BOOTSTRAP_TOKEN")
+	if expectedToken == "" || body.Token != expectedToken {
+		http.Error(w, "Forbidden: Invalid bootstrap token", http.StatusForbidden)
+		return
+	}
+
+	// Validate username length & character limits
+	body.Username = strings.ToLower(strings.TrimSpace(body.Username))
+	if len(body.Username) < 3 || len(body.Username) > 32 {
+		http.Error(w, "Bad Request: Username must be 3-32 characters", http.StatusBadRequest)
+		return
+	}
+	if len(body.Password) < 15 || len(body.Password) > 128 {
+		http.Error(w, "Bad Request: Password must be 15-128 characters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	var count int
+	err := dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM user_roles WHERE role_id = 'Owner'").Scan(&count)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if count > 0 {
+		http.Error(w, "Forbidden: Owner already bootstrapped", http.StatusForbidden)
+		return
+	}
+
+	// Create user
+	hash, err := hashPassword(body.Password)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var userID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id
+	`, body.Username, hash).Scan(&userID)
+	if err != nil {
+		tx.Rollback(ctx)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Owner')
+	`, userID)
+	if err != nil {
+		tx.Rollback(ctx)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Consume token in memory/logs (it will fail future boots as Owner exists in DB)
+	log.Printf("Owner %q bootstrapped successfully. Bootstrap token consumed.", body.Username)
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
+}
+
+func handleLogin(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	ctx := r.Context()
+
+	throttled, err := isThrottled(ctx, body.Username, clientIP)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if throttled {
+		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		return
+	}
+
+	var userID string
+	var hash string
+	var active bool
+
+	err = dbPool.QueryRow(ctx, `
+		SELECT id, password_hash, active FROM users WHERE username = $1
+	`, strings.ToLower(body.Username)).Scan(&userID, &hash, &active)
+	if err != nil {
+		recordFailedLogin(ctx, body.Username, clientIP)
+		http.Error(w, "Unauthorized: Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	if !active {
+		http.Error(w, "Unauthorized: Account disabled", http.StatusUnauthorized)
+		return
+	}
+
+	ok, err := verifyPassword(body.Password, hash)
+	if err != nil || !ok {
+		recordFailedLogin(ctx, body.Username, clientIP)
+		http.Error(w, "Unauthorized: Invalid credentials", http.StatusUnauthorized)
+		return
+	}
+
+	// Successful login
+	resetFailedLogins(ctx, body.Username, clientIP)
+
+	token, tokenHash := generateToken()
+	expiry := time.Now().Add(12 * time.Hour)
+
+	_, err = dbPool.Exec(ctx, `
+		INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
+	`, tokenHash, userID, expiry)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Set session cookie. Secure is relaxed in development so plain-http
+	// access (LAN/Tailscale IPs) doesn't silently drop the cookie.
+	http.SetCookie(w, &http.Cookie{
+		Name:     "telos_session",
+		Value:    token,
+		Expires:  expiry,
+		HttpOnly: true,
+		Secure:   os.Getenv("TELOS_ENV") != "development",
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("telos_session")
+	if err != nil {
+		http.Error(w, "No active session", http.StatusBadRequest)
+		return
+	}
+
+	h := sha256.Sum256([]byte(cookie.Value))
+	tokenHash := hex.EncodeToString(h[:])
+
+	_, err = dbPool.Exec(r.Context(), `
+		UPDATE sessions SET revoked_at = NOW() WHERE token_hash = $1
+	`, tokenHash)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Delete cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "telos_session",
+		Value:    "",
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   os.Getenv("TELOS_ENV") != "development",
+		SameSite: http.SameSiteStrictMode,
+		Path:     "/",
+	})
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleMe(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(user)
+}
+
+func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	rawToken, tokenHash := generateToken()
+	expiry := time.Now().Add(7 * 24 * time.Hour) // Invite valid for 7 days
+
+	_, err := dbPool.Exec(r.Context(), `
+		INSERT INTO invites (token_hash, creator_id, expires_at) VALUES ($1, $2, $3)
+	`, tokenHash, user.ID, expiry)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"invite_token": rawToken,
+		"expires_at":   expiry.Format(time.RFC3339),
+	})
+}
+
+func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token    string `json:"token"`
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	body.Username = strings.ToLower(strings.TrimSpace(body.Username))
+	if len(body.Username) < 3 || len(body.Username) > 32 {
+		http.Error(w, "Bad Request: Username must be 3-32 characters", http.StatusBadRequest)
+		return
+	}
+	if len(body.Password) < 15 || len(body.Password) > 128 {
+		http.Error(w, "Bad Request: Password must be 15-128 characters", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	h := sha256.Sum256([]byte(body.Token))
+	tokenHash := hex.EncodeToString(h[:])
+
+	var expiresAt time.Time
+	var usedAt *time.Time
+
+	err := dbPool.QueryRow(ctx, `
+		SELECT expires_at, used_at FROM invites WHERE token_hash = $1
+	`, tokenHash).Scan(&expiresAt, &usedAt)
+	if err != nil {
+		http.Error(w, "Invalid or expired invite token", http.StatusBadRequest)
+		return
+	}
+
+	if usedAt != nil {
+		http.Error(w, "Invite token already used", http.StatusGone)
+		return
+	}
+
+	if time.Now().After(expiresAt) {
+		http.Error(w, "Invite token expired", http.StatusGone)
+		return
+	}
+
+	hash, err := hashPassword(body.Password)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	var userID string
+	err = tx.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id
+	`, body.Username, hash).Scan(&userID)
+	if err != nil {
+		tx.Rollback(ctx)
+		http.Error(w, "Internal Server Error or Username Taken", http.StatusInternalServerError)
+		return
+	}
+
+	// Assign default role Member
+	_, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Member')
+	`, userID)
+	if err != nil {
+		tx.Rollback(ctx)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Mark invite as used
+	_, err = tx.Exec(ctx, `
+		UPDATE invites SET used_at = NOW(), used_by = $1 WHERE token_hash = $2
+	`, userID, tokenHash)
+	if err != nil {
+		tx.Rollback(ctx)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Handler — Health
 // ═══════════════════════════════════════════════════════════════════════════
 
-// handleHealth reports the health of the gateway and its backing services.
-// It pings PostgreSQL and Redis with a 2-second timeout and returns 200 OK
-// when both are reachable, or 503 Service Unavailable otherwise.
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	services := make(map[string]string)
 	overallStatus := "healthy"
@@ -341,58 +1058,31 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 // Handler — Chat / WebSocket
 // ═══════════════════════════════════════════════════════════════════════════
 
-// wsClient serialises writes to a single WebSocket connection.
-// gorilla/websocket does not support concurrent writers on one connection,
-// so all sends must be serialised through the embedded mutex.
 type wsClient struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
 }
 
-// writeJSON marshals v and sends it as a single WebSocket text frame,
-// holding the client mutex for the duration of the write.
 func (c *wsClient) writeJSON(v interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn.WriteJSON(v)
 }
 
-// writeMessage sends a raw WebSocket frame of the given type, holding the
-// client mutex for the duration of the write.
 func (c *wsClient) writeMessage(messageType int, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn.WriteMessage(messageType, data)
 }
 
-// handleWebSocket upgrades a GET request to a WebSocket connection, delivers
-// the last 50 messages of the requested channel as a "history" notification,
-// and then enters a read loop that persists incoming messages to PostgreSQL
-// and broadcasts them via Redis pub/sub (or local loopback when Redis is
-// unavailable).
-//
-// Query parameters:
-//   - channel — chat channel ID (default "general")
-//   - user    — sender user ID (required)
-//   - token   — optional auth token checked against WS_AUTH_TOKEN env var
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	channelID := r.URL.Query().Get("channel")
-	if channelID == "" {
-		channelID = "general"
+	channelIDStr := r.URL.Query().Get("channel")
+	if channelIDStr == "" {
+		channelIDStr = "00000000-0000-0000-0000-000000000001" // Default general
 	}
 
-	token := r.URL.Query().Get("token")
-	expectedToken := os.Getenv("WS_AUTH_TOKEN")
-	if expectedToken != "" && token != expectedToken {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	userID := r.URL.Query().Get("user")
-	if userID == "" {
-		http.Error(w, "Missing user ID", http.StatusBadRequest)
-		return
-	}
+	user := r.Context().Value(userContextKey).(*UserContext)
+	userID := user.ID
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -402,46 +1092,43 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	client := &wsClient{conn: conn}
 
+	// Set connection limits
+	conn.SetReadLimit(8192) // 8 KiB message frame limit
+
 	ctx := r.Context()
 
 	// Fetch & Send past 50 messages of the channel
-	if dbPool != nil {
-		msgs, err := getMessagesForChannel(ctx, channelID)
-		if err != nil {
-			log.Printf("Failed to fetch message history: %v", err)
-		} else {
-			historyNotification := WSNotification{
-				Type:     "history",
-				Messages: msgs,
-			}
-			if err := client.writeJSON(historyNotification); err != nil {
-				log.Printf("Failed to send history: %v", err)
-				return
-			}
+	msgs, err := getMessagesForChannel(ctx, channelIDStr)
+	if err != nil {
+		log.Printf("Failed to fetch message history: %v", err)
+	} else {
+		historyNotification := WSNotification{
+			Type:     "history",
+			Messages: msgs,
+		}
+		if err := client.writeJSON(historyNotification); err != nil {
+			log.Printf("Failed to send history: %v", err)
+			return
 		}
 	}
 
 	// Subscribe to Redis pub/sub channel for this chat room
-	var pubsub *redis.PubSub
-	if redisClient != nil {
-		redisChanName := fmt.Sprintf("telos:chat:%s", channelID)
-		pubsub = redisClient.Subscribe(ctx, redisChanName)
-		defer pubsub.Close()
+	redisChanName := fmt.Sprintf("telos:chat:%s", channelIDStr)
+	pubsub := redisClient.Subscribe(ctx, redisChanName)
+	defer pubsub.Close()
 
-		// Read messages from Redis and send them to the client WebSocket
-		go func() {
-			ch := pubsub.Channel()
-			for redisMsg := range ch {
-				err := client.writeMessage(websocket.TextMessage, []byte(redisMsg.Payload))
-				if err != nil {
-					log.Printf("Failed to send Redis broadcast to WS: %v", err)
-					return
-				}
+	// Read messages from Redis and send them to the client WebSocket
+	go func() {
+		ch := pubsub.Channel()
+		for redisMsg := range ch {
+			err := client.writeMessage(websocket.TextMessage, []byte(redisMsg.Payload))
+			if err != nil {
+				return
 			}
-		}()
-	}
+		}
+	}()
 
-	log.Printf("Client '%s' connected to channel '%s' via WebSocket", userID, channelID)
+	log.Printf("Client '%s' connected to channel '%s' via WebSocket", userID, channelIDStr)
 
 	// Read loop: receive messages from this user, persist, and broadcast
 	for {
@@ -451,11 +1138,15 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 
+		if len(p) > 4000 {
+			log.Printf("WebSocket message from %s rejected: length exceeds 4,000 characters", userID)
+			continue
+		}
+
 		var incoming struct {
 			Content string `json:"content"`
 		}
 		if err := json.Unmarshal(p, &incoming); err != nil {
-			log.Printf("Failed to unmarshal WS message: %v", err)
 			continue
 		}
 
@@ -465,38 +1156,50 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		var msgID string
 		var timestamp time.Time
-		var username, avatar, role string
+		var username string
+		var role string
 
-		if dbPool != nil {
-			// Persist to PostgreSQL
-			err = dbPool.QueryRow(ctx, `
-				INSERT INTO messages (channel_id, user_id, content) 
-				VALUES ($1, $2, $3) 
-				RETURNING id, timestamp
-			`, channelID, userID, incoming.Content).Scan(&msgID, &timestamp)
-			if err != nil {
-				log.Printf("Failed to persist message: %v", err)
-				continue
-			}
+		err = dbPool.QueryRow(ctx, `
+			INSERT INTO messages (channel_id, user_id, content) 
+			VALUES ($1, $2, $3) 
+			RETURNING id, created_at
+		`, channelIDStr, userID, incoming.Content).Scan(&msgID, &timestamp)
+		if err != nil {
+			log.Printf("Failed to persist message: %v", err)
+			continue
+		}
 
-			// Get sender profile details
-			err = dbPool.QueryRow(ctx, `
-				SELECT username, avatar, role FROM users WHERE id = $1
-			`, userID).Scan(&username, &avatar, &role)
-			if err != nil {
-				log.Printf("Failed to fetch sender profile: %v", err)
-				continue
+		// Get sender details
+		var roles []string
+		err = dbPool.QueryRow(ctx, `
+			SELECT username FROM users WHERE id = $1
+		`, userID).Scan(&username)
+		if err != nil {
+			continue
+		}
+		roleRows, err := dbPool.Query(ctx, `
+			SELECT role_id FROM user_roles WHERE user_id = $1
+		`, userID)
+		if err == nil {
+			for roleRows.Next() {
+				var rID string
+				if err := roleRows.Scan(&rID); err == nil {
+					roles = append(roles, rID)
+				}
 			}
+			roleRows.Close()
+		}
+		if len(roles) > 0 {
+			role = roles[0]
 		} else {
-			// Fallback mock values if DB is uninitialized
-			msgID = fmt.Sprintf("mock-%d", time.Now().UnixNano())
-			timestamp = time.Now()
-			username = userID
-			avatar = "US"
 			role = "Member"
 		}
 
-		// Create broadcast notification payload
+		avatar := "MB"
+		if len(username) >= 2 {
+			avatar = strings.ToUpper(username[:2])
+		}
+
 		broadcastMsg := WSNotification{
 			Type: "message",
 			Message: &WSMessage{
@@ -511,35 +1214,53 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		payload, err := json.Marshal(broadcastMsg)
 		if err != nil {
-			log.Printf("Failed to serialize broadcast message: %v", err)
 			continue
 		}
 
-		if redisClient != nil {
-			// Publish message to Redis, propagating to all active gateways/clients
-			redisChanName := fmt.Sprintf("telos:chat:%s", channelID)
-			err = redisClient.Publish(ctx, redisChanName, payload).Err()
-			if err != nil {
-				log.Printf("Failed to publish to Redis: %v", err)
-			}
-		} else {
-			// Local connection loopback fallback if Redis is uninitialized
-			_ = client.writeMessage(websocket.TextMessage, payload)
+		err = redisClient.Publish(ctx, redisChanName, payload).Err()
+		if err != nil {
+			log.Printf("Failed to publish to Redis: %v", err)
 		}
 	}
 }
 
-// getMessagesForChannel returns the 50 most recent messages for channelID,
-// ordered oldest-first, by querying PostgreSQL and joining the users table
-// for sender profile details.
+type ChannelResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"` // "text" or "voice"
+}
+
+func handleListChannels(w http.ResponseWriter, r *http.Request) {
+	rows, err := dbPool.Query(r.Context(), `
+		SELECT id::text, name, type FROM channels ORDER BY type, name
+	`)
+	if err != nil {
+		http.Error(w, "Failed to list channels", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	channels := []ChannelResponse{}
+	for rows.Next() {
+		var c ChannelResponse
+		if err := rows.Scan(&c.ID, &c.Name, &c.Type); err != nil {
+			http.Error(w, "Failed to scan channel entry", http.StatusInternalServerError)
+			return
+		}
+		channels = append(channels, c)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(channels)
+}
+
 func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, error) {
-	// Fetch the latest 50, then reverse so the client renders oldest-first.
 	rows, err := dbPool.Query(ctx, `
-		SELECT m.id::text, u.username, u.avatar, u.role, m.content, m.timestamp
+		SELECT m.id::text, u.username, m.content, m.created_at
 		FROM messages m
 		JOIN users u ON m.user_id = u.id
 		WHERE m.channel_id = $1
-		ORDER BY m.timestamp DESC
+		ORDER BY m.created_at DESC
 		LIMIT 50
 	`, channelID)
 	if err != nil {
@@ -551,10 +1272,26 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 	for rows.Next() {
 		var msg WSMessage
 		var t time.Time
-		if err := rows.Scan(&msg.ID, &msg.Sender, &msg.Avatar, &msg.Role, &msg.Content, &t); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.Sender, &msg.Content, &t); err != nil {
 			return nil, err
 		}
 		msg.Timestamp = t.Format("03:04 pm")
+		if len(msg.Sender) >= 2 {
+			msg.Avatar = strings.ToUpper(msg.Sender[:2])
+		} else {
+			msg.Avatar = "MB"
+		}
+
+		// Resolve role
+		var role string
+		dbPool.QueryRow(ctx, `
+			SELECT role_id FROM user_roles WHERE user_id = (SELECT id FROM users WHERE username = $1) LIMIT 1
+		`, msg.Sender).Scan(&role)
+		if role == "" {
+			role = "Member"
+		}
+		msg.Role = role
+
 		msgs = append(msgs, msg)
 	}
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
@@ -568,23 +1305,13 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 // ═══════════════════════════════════════════════════════════════════════════
 
 var (
-	// jellyfinBaseURL is the Jellyfin server base URL used by all media
-	// proxy handlers. It defaults to the Docker-internal address and can
-	// be overridden for testing.
 	jellyfinBaseURL = "http://jellyfin:8096/jellyfin"
 )
 
-// getJellyfinAdminToken returns the Jellyfin API token from the
-// JELLYFIN_ADMIN_TOKEN environment variable.
 func getJellyfinAdminToken() string {
 	return os.Getenv("JELLYFIN_ADMIN_TOKEN")
 }
 
-// getJellyfinUserID resolves the Jellyfin user ID to use for API calls.
-// It first checks a Redis cache (telos:jellyfin:userId), then falls back to
-// the Jellyfin /Users endpoint, preferring the user named in
-// JELLYFIN_USER_NAME and otherwise using the first returned user. The result
-// is cached in Redis for one hour.
 func getJellyfinUserID(ctx context.Context) (string, error) {
 	if redisClient != nil {
 		val, err := redisClient.Get(ctx, "telos:jellyfin:userId").Result()
@@ -620,7 +1347,6 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if err := json.Unmarshal(bodyBytes, &users); err != nil {
-		log.Printf("Jellyfin Users API unmarshal error: %v. Raw Body: %s", err, string(bodyBytes))
 		return "", err
 	}
 
@@ -648,18 +1374,12 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 	return userID, nil
 }
 
-// LibraryItem represents a top-level Jellyfin media library (e.g. Movies,
-// Music) as exposed by the /api/v1/media endpoint.
 type LibraryItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"` // "video" or "audio"
 }
 
-// handleMedia returns the list of Jellyfin media libraries visible to the
-// configured user. Results are cached in Redis for 5 minutes. When Jellyfin
-// is unreachable the handler serves hard-coded mock libraries so the UI
-// remains functional during development.
 func handleMedia(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -672,81 +1392,67 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var libs []LibraryItem
-	var fetchFailed bool
-
 	userID, err := getJellyfinUserID(ctx)
 	if err != nil {
-		log.Printf("Jellyfin User ID error: %v. Falling back to mock libraries.", err)
-		fetchFailed = true
-	} else {
-		token := getJellyfinAdminToken()
-		reqURL := fmt.Sprintf("%s/Users/%s/Views", jellyfinBaseURL, userID)
-		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-		if err != nil {
-			log.Printf("Failed to create request: %v", err)
-			fetchFailed = true
-		} else {
-			req.Header.Set("X-Emby-Token", token)
-			req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				log.Printf("Jellyfin Views request failed: %v", err)
-				fetchFailed = true
-			} else {
-				defer resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					log.Printf("Jellyfin Views API returned status %s", resp.Status)
-					fetchFailed = true
-				} else {
-					var jResp struct {
-						Items []struct {
-							ID             string `json:"Id"`
-							Name           string `json:"Name"`
-							CollectionType string `json:"CollectionType"`
-						} `json:"Items"`
-					}
-					if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
-						log.Printf("Failed to decode Jellyfin Views response: %v", err)
-						fetchFailed = true
-					} else {
-						for _, item := range jResp.Items {
-							mediaType := "video"
-							cType := strings.ToLower(item.CollectionType)
-							if cType == "music" || cType == "audiobooks" || cType == "audio" || cType == "podcasts" {
-								mediaType = "audio"
-							}
-							libs = append(libs, LibraryItem{
-								ID:   item.ID,
-								Name: item.Name,
-								Type: mediaType,
-							})
-						}
-					}
-				}
-			}
-		}
+		http.Error(w, "Jellyfin unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
 	}
 
-	if fetchFailed || len(libs) == 0 {
-		log.Println("Serving fallback mock libraries")
-		libs = []LibraryItem{
-			{ID: "movies", Name: "Movies (Mock)", Type: "video"},
-			{ID: "music", Name: "Music (Mock)", Type: "audio"},
-			{ID: "books", Name: "Audiobooks (Mock)", Type: "audio"},
+	token := getJellyfinAdminToken()
+	reqURL := fmt.Sprintf("%s/Users/%s/Views", jellyfinBaseURL, userID)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "Jellyfin Views request failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Jellyfin Views returned error: "+resp.Status, http.StatusServiceUnavailable)
+		return
+	}
+
+	var jResp struct {
+		Items []struct {
+			ID             string `json:"Id"`
+			Name           string `json:"Name"`
+			CollectionType string `json:"CollectionType"`
+		} `json:"Items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
+		http.Error(w, "Failed to decode Jellyfin Views response", http.StatusInternalServerError)
+		return
+	}
+
+	var libs []LibraryItem
+	for _, item := range jResp.Items {
+		mediaType := "video"
+		cType := strings.ToLower(item.CollectionType)
+		if cType == "music" || cType == "audiobooks" || cType == "audio" || cType == "podcasts" {
+			mediaType = "audio"
 		}
-		fetchFailed = false
+		libs = append(libs, LibraryItem{
+			ID:   item.ID,
+			Name: item.Name,
+			Type: mediaType,
+		})
 	}
 
 	respJSON, err := json.Marshal(libs)
 	if err != nil {
-		log.Printf("Failed to marshal response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if redisClient != nil && !fetchFailed {
+	if redisClient != nil {
 		_ = redisClient.Set(ctx, "telos:jellyfin:libraries", string(respJSON), 5*time.Minute).Err()
 	}
 
@@ -754,19 +1460,13 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	w.Write(respJSON)
 }
 
-// MediaPlayableItem represents a single playable Jellyfin item (movie,
-// episode, audio track) as returned by the /api/v1/media/items endpoint.
 type MediaPlayableItem struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Duration string `json:"duration"`
-	Type     string `json:"type"` // e.g. "Movie", "Episode", "Audio"
+	Type     string `json:"type"`
 }
 
-// handleMediaItems returns the playable items within a Jellyfin library.
-// The library is identified by the parentId (or libraryId) query parameter.
-// Results are cached in Redis for 5 minutes. Mock data is served when
-// Jellyfin is unreachable.
 func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	parentId := r.URL.Query().Get("parentId")
@@ -788,102 +1488,78 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var items []MediaPlayableItem
-	var fetchFailed bool
-
 	userID, err := getJellyfinUserID(ctx)
 	if err != nil {
-		log.Printf("Jellyfin User ID error: %v. Falling back to mock items.", err)
-		fetchFailed = true
-	} else {
-		token := getJellyfinAdminToken()
-		reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&Recursive=true&IncludeItemTypes=Movie,Episode,Audio,Audiobook", jellyfinBaseURL, userID, parentId)
-		req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-		if err != nil {
-			log.Printf("Failed to create request: %v", err)
-			fetchFailed = true
-		} else {
-			req.Header.Set("X-Emby-Token", token)
-			req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
-
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				log.Printf("Jellyfin Items request failed: %v", err)
-				fetchFailed = true
-			} else {
-				defer resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					log.Printf("Jellyfin Items API returned status %s", resp.Status)
-					fetchFailed = true
-				} else {
-					var jResp struct {
-						Items []struct {
-							ID           string `json:"Id"`
-							Name         string `json:"Name"`
-							RunTimeTicks int64  `json:"RunTimeTicks"`
-							Type         string `json:"Type"`
-						} `json:"Items"`
-					}
-					if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
-						log.Printf("Failed to decode Jellyfin Items response: %v", err)
-						fetchFailed = true
-					} else {
-						for _, item := range jResp.Items {
-							durationStr := ""
-							if item.RunTimeTicks > 0 {
-								seconds := item.RunTimeTicks / 10000000
-								h := seconds / 3600
-								m := (seconds % 3600) / 60
-								if h > 0 {
-									durationStr = fmt.Sprintf("%dh %dm", h, m)
-								} else {
-									durationStr = fmt.Sprintf("%dm", m)
-								}
-							} else {
-								durationStr = "0m"
-							}
-
-							items = append(items, MediaPlayableItem{
-								ID:       item.ID,
-								Title:    item.Name,
-								Duration: durationStr,
-								Type:     item.Type,
-							})
-						}
-					}
-				}
-			}
-		}
+		http.Error(w, "Jellyfin unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
 	}
 
-	if fetchFailed || len(items) == 0 {
-		log.Printf("Serving fallback mock items for parentId: %s", parentId)
-		if parentId == "movies" || parentId == "Movies (Mock)" {
-			items = []MediaPlayableItem{
-				{ID: "raising-helen", Title: "Raising Helen (2004)", Duration: "1h 59m", Type: "Movie"},
-				{ID: "code-sovereignty", Title: "Sovereignty of Code", Duration: "1h 45m", Type: "Movie"},
-			}
-		} else if parentId == "music" || parentId == "Music (Mock)" {
-			items = []MediaPlayableItem{
-				{ID: "ambient-rain", Title: "Ambient Rain", Duration: "4m 12s", Type: "Audio"},
-				{ID: "vaporwave-chill", Title: "Vaporwave Chill", Duration: "3m 45s", Type: "Audio"},
+	token := getJellyfinAdminToken()
+	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&Recursive=true&IncludeItemTypes=Movie,Episode,Audio,Audiobook", jellyfinBaseURL, userID, parentId)
+	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, "Jellyfin Items request failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Jellyfin Items returned error: "+resp.Status, http.StatusServiceUnavailable)
+		return
+	}
+
+	var jResp struct {
+		Items []struct {
+			ID           string `json:"Id"`
+			Name         string `json:"Name"`
+			RunTimeTicks int64  `json:"RunTimeTicks"`
+			Type         string `json:"Type"`
+		} `json:"Items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
+		http.Error(w, "Failed to decode items response", http.StatusInternalServerError)
+		return
+	}
+
+	var items []MediaPlayableItem
+	for _, item := range jResp.Items {
+		durationStr := ""
+		if item.RunTimeTicks > 0 {
+			seconds := item.RunTimeTicks / 10000000
+			h := seconds / 3600
+			m := (seconds % 3600) / 60
+			if h > 0 {
+				durationStr = fmt.Sprintf("%dh %dm", h, m)
+			} else {
+				durationStr = fmt.Sprintf("%dm", m)
 			}
 		} else {
-			items = []MediaPlayableItem{
-				{ID: "sample-audio", Title: "Sample Audiobook Track", Duration: "12m 30s", Type: "Audiobook"},
-			}
+			durationStr = "0m"
 		}
-		fetchFailed = false
+
+		items = append(items, MediaPlayableItem{
+			ID:       item.ID,
+			Title:    item.Name,
+			Duration: durationStr,
+			Type:     item.Type,
+		})
 	}
 
 	respJSON, err := json.Marshal(items)
 	if err != nil {
-		log.Printf("Failed to marshal response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if redisClient != nil && !fetchFailed {
+	if redisClient != nil {
 		_ = redisClient.Set(ctx, cacheKey, string(respJSON), 5*time.Minute).Err()
 	}
 
@@ -891,14 +1567,6 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	w.Write(respJSON)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Streaming Proxy Helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
-// proxyRequest creates a single-host reverse proxy to targetURLStr, injecting
-// the Jellyfin authentication token as both X-Emby-Token and Authorization
-// headers. It merges query parameters from the original request and the
-// target URL.
 func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, token string) {
 	targetURL, err := url.Parse(targetURLStr)
 	if err != nil {
@@ -918,35 +1586,28 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, t
 				req.URL.RawQuery = targetURL.RawQuery
 			}
 			req.Host = targetURL.Host
-			req.Header.Set("X-Emby-Token", token)
-			req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+			if token != "" {
+				req.Header.Set("X-Emby-Token", token)
+				req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+			}
 		},
 	}
 	proxy.ServeHTTP(w, r)
 }
 
-// handleStreamAudio proxies a static audio stream for the given item ID
-// through to Jellyfin's /Audio/{id}/stream endpoint.
 func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
-
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
-
 	proxyRequest(w, r, targetURL, token)
 }
 
-// handleStreamVideo bootstraps an HLS video session for the given item ID.
-// It calls Jellyfin's PlaybackInfo endpoint to obtain a PlaySessionId, then
-// redirects the client to the HLS master playlist at
-// /api/v1/stream/video/{id}/main.m3u8.
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	log.Printf("[STREAM] handleStreamVideo called for ID: %s", id)
 	if id == "" {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
@@ -955,8 +1616,7 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID, err := getJellyfinUserID(ctx)
 	if err != nil {
-		log.Printf("Jellyfin User ID error: %v", err)
-		http.Error(w, "Failed to resolve Jellyfin user ID", http.StatusInternalServerError)
+		http.Error(w, "Failed to resolve Jellyfin user ID: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 
@@ -965,8 +1625,7 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 
 	req, err := http.NewRequestWithContext(ctx, "POST", playbackInfoURL, strings.NewReader("{}"))
 	if err != nil {
-		log.Printf("Failed to create request for PlaybackInfo: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -975,15 +1634,13 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("Jellyfin PlaybackInfo request failed: %v", err)
-		http.Error(w, "Failed to get playback info", http.StatusInternalServerError)
+		http.Error(w, "PlaybackInfo request failed: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("Jellyfin PlaybackInfo API returned status %s", resp.Status)
-		http.Error(w, "Failed to get playback info from Jellyfin", resp.StatusCode)
+		http.Error(w, "Jellyfin PlaybackInfo error: "+resp.Status, http.StatusServiceUnavailable)
 		return
 	}
 
@@ -991,8 +1648,7 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 		PlaySessionId string `json:"PlaySessionId"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
-		log.Printf("Failed to decode PlaybackInfo response: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, "Failed to decode playback info", http.StatusInternalServerError)
 		return
 	}
 
@@ -1001,32 +1657,46 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	redirectURL := fmt.Sprintf("/api/v1/stream/video/%s/main.m3u8?PlaySessionId=%s", id, jResp.PlaySessionId)
-	log.Printf("[STREAM] Redirecting ID %s to HLS playlist: %s", id, redirectURL)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
-// handleStreamVideoSubpath proxies HLS sub-requests (playlist variants,
-// segment files) to Jellyfin's /Videos/{id}/{subpath} endpoint.
 func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	subpath := r.PathValue("path")
-	log.Printf("[STREAM] handleStreamVideoSubpath called for ID: %s, subpath: %s, query: %s", id, subpath, r.URL.RawQuery)
 	if id == "" || subpath == "" {
 		http.Error(w, "Missing item ID or subpath", http.StatusBadRequest)
 		return
 	}
-
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, id, subpath)
+	proxyRequest(w, r, targetURL, token)
+}
 
+func handleJellyfinDirectProxy(w http.ResponseWriter, r *http.Request) {
+	token := getJellyfinAdminToken()
+	targetURL := fmt.Sprintf("http://jellyfin:8096%s", r.URL.Path)
 	proxyRequest(w, r, targetURL, token)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LiveKit Voice Token (HS256 JWT)
+// Grimmory Proxy
 // ═══════════════════════════════════════════════════════════════════════════
 
-// VideoGrant encodes the LiveKit room permissions embedded inside a JWT.
+func handleGrimmoryProxy(w http.ResponseWriter, r *http.Request) {
+	grimmoryURL, _ := url.Parse("http://grimmory:6060")
+	proxy := httputil.NewSingleHostReverseProxy(grimmoryURL)
+	originalDirector := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		originalDirector(req)
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("GRIMMORY_API_TOKEN")))
+	}
+	proxy.ServeHTTP(w, r)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LiveKit Voice Token (Hardened SDK)
+// ═══════════════════════════════════════════════════════════════════════════
+
 type VideoGrant struct {
 	Room           string `json:"room,omitempty"`
 	RoomJoin       bool   `json:"roomJoin,omitempty"`
@@ -1035,9 +1705,6 @@ type VideoGrant struct {
 	CanPublishData bool   `json:"canPublishData,omitempty"`
 }
 
-// LiveKitClaims is the JWT claims payload used by LiveKit to authorise a
-// participant. It carries standard registered claims (exp, iss, sub, nbf)
-// plus a nested VideoGrant with room-level permissions.
 type LiveKitClaims struct {
 	Exp   int64      `json:"exp"`
 	Iss   string     `json:"iss"`
@@ -1046,70 +1713,41 @@ type LiveKitClaims struct {
 	Video VideoGrant `json:"video"`
 }
 
-// base64URLEncode returns the unpadded base64url encoding of b, suitable
-// for use in JWT header and payload segments.
-func base64URLEncode(b []byte) string {
-	return strings.TrimRight(base64.URLEncoding.EncodeToString(b), "=")
-}
-
-// GenerateLiveKitToken creates a hand-rolled HS256 JWT granting the given
-// identity full publish/subscribe access to roomName. The token is valid for
-// one hour. This avoids pulling in a full JWT library as a dependency.
 func GenerateLiveKitToken(apiKey, apiSecret, roomName, identity string) (string, error) {
-	header := map[string]string{
-		"alg": "HS256",
-		"typ": "JWT",
-	}
-	headerBytes, err := json.Marshal(header)
-	if err != nil {
-		return "", err
-	}
-	headerEncoded := base64URLEncode(headerBytes)
+	at := auth.NewAccessToken(apiKey, apiSecret)
+	at.SetIdentity(identity)
+	at.SetValidFor(5 * time.Minute) // 5 minutes room access bootstrap token
 
-	now := time.Now().Unix()
-	claims := LiveKitClaims{
-		Exp: now + 3600, // 1 hour expiry
-		Iss: apiKey,
-		Sub: identity,
-		Nbf: now - 5, // slightly in past to account for clock drift
-		Video: VideoGrant{
-			Room:           roomName,
-			RoomJoin:       true,
-			CanPublish:     true,
-			CanSubscribe:   true,
-			CanPublishData: true,
-		},
+	grant := &auth.VideoGrant{
+		Room:     roomName,
+		RoomJoin: true,
 	}
-	claimsBytes, err := json.Marshal(claims)
-	if err != nil {
-		return "", err
-	}
-	payloadEncoded := base64URLEncode(claimsBytes)
+	grant.SetCanPublish(true)
+	grant.SetCanSubscribe(true)
+	grant.SetCanPublishData(false)
 
-	signingInput := headerEncoded + "." + payloadEncoded
-	key := []byte(apiSecret)
-	h := hmac.New(sha256.New, key)
-	h.Write([]byte(signingInput))
-	signature := h.Sum(nil)
-	signatureEncoded := base64URLEncode(signature)
-
-	return signingInput + "." + signatureEncoded, nil
+	at.AddGrant(grant)
+	return at.ToJWT()
 }
 
-// handleLiveKitToken is the HTTP handler for GET /api/v1/voice/token.
-// It reads the room and user query parameters, loads LiveKit credentials from
-// the environment, generates an HS256 JWT via GenerateLiveKitToken, and
-// returns it as {"token": "…"}.
-func handleLiveKitToken(w http.ResponseWriter, r *http.Request) {
-	room := r.URL.Query().Get("room")
-	if room == "" {
-		http.Error(w, "Missing room parameter", http.StatusBadRequest)
+func handleVoiceToken(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	if channelID == "" {
+		http.Error(w, "Missing channel ID", http.StatusBadRequest)
 		return
 	}
 
-	user := r.URL.Query().Get("user")
-	if user == "" {
-		http.Error(w, "Missing user parameter", http.StatusBadRequest)
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	// Validate channel type is voice
+	var cType string
+	err := dbPool.QueryRow(r.Context(), "SELECT type FROM channels WHERE id = $1", channelID).Scan(&cType)
+	if err != nil {
+		http.Error(w, "Voice channel not found", http.StatusNotFound)
+		return
+	}
+	if cType != "voice" {
+		http.Error(w, "Channel is not a voice channel", http.StatusBadRequest)
 		return
 	}
 
@@ -1120,9 +1758,10 @@ func handleLiveKitToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := GenerateLiveKitToken(apiKey, apiSecret, room, user)
+	// Fetch token (room name matches channel ID UUID)
+	token, err := GenerateLiveKitToken(apiKey, apiSecret, channelID, user.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to generate token: %v", err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to generate voice token: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -1130,4 +1769,347 @@ func handleLiveKitToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"token": token,
 	})
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Shared File Library & ClamAV Integration
+// ═══════════════════════════════════════════════════════════════════════════
+
+func scanFileWithClamAV(r io.Reader) (bool, string, error) {
+	conn, err := net.DialTimeout("tcp", "telos-clamav:3310", 5*time.Second)
+	if err != nil {
+		return false, "unreachable", fmt.Errorf("failed to connect to ClamAV: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.Write([]byte("zINSTREAM\000")); err != nil {
+		return false, "error", fmt.Errorf("failed to initiate scan: %v", err)
+	}
+
+	buf := make([]byte, 8192)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			lengthBytes := []byte{
+				byte(n >> 24),
+				byte(n >> 16),
+				byte(n >> 8),
+				byte(n),
+			}
+			if _, err := conn.Write(lengthBytes); err != nil {
+				return false, "error", fmt.Errorf("failed to write chunk size: %v", err)
+			}
+			if _, err := conn.Write(buf[:n]); err != nil {
+				return false, "error", fmt.Errorf("failed to write chunk: %v", err)
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return false, "error", fmt.Errorf("failed to read upload stream: %v", err)
+		}
+	}
+
+	if _, err := conn.Write([]byte{0, 0, 0, 0}); err != nil {
+		return false, "error", fmt.Errorf("failed to terminate scan stream: %v", err)
+	}
+
+	resp, err := io.ReadAll(conn)
+	if err != nil {
+		return false, "error", fmt.Errorf("failed to read Scan response: %v", err)
+	}
+
+	respStr := string(resp)
+	log.Printf("ClamAV response: %s", respStr)
+	if strings.Contains(respStr, "OK") {
+		return true, "clean", nil
+	}
+	if strings.Contains(respStr, "FOUND") {
+		return false, "infected", nil
+	}
+	return false, "failed", fmt.Errorf("unexpected scan response: %s", respStr)
+}
+
+func handleListFiles(w http.ResponseWriter, r *http.Request) {
+	pageStr := r.URL.Query().Get("page")
+	page, err := strconv.Atoi(pageStr)
+	if err != nil || page < 1 {
+		page = 1
+	}
+	limit := 20
+	offset := (page - 1) * limit
+
+	rows, err := dbPool.Query(r.Context(), `
+		SELECT id, filename, sha256, uploader_id, scan_status, size_bytes, mime_type, created_at 
+		FROM files 
+		ORDER BY created_at DESC 
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
+	if err != nil {
+		http.Error(w, "Failed to list files", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type FileResponse struct {
+		ID         string    `json:"id"`
+		Filename   string    `json:"filename"`
+		SHA256     string    `json:"sha256"`
+		UploaderID string    `json:"uploader_id"`
+		ScanStatus string    `json:"scan_status"`
+		SizeBytes  int64     `json:"size_bytes"`
+		MimeType   string    `json:"mime_type"`
+		CreatedAt  time.Time `json:"created_at"`
+	}
+
+	var files []FileResponse
+	for rows.Next() {
+		var f FileResponse
+		var uploader sql.NullString
+		if err := rows.Scan(&f.ID, &f.Filename, &f.SHA256, &uploader, &f.ScanStatus, &f.SizeBytes, &f.MimeType, &f.CreatedAt); err != nil {
+			http.Error(w, "Failed to scan file entry", http.StatusInternalServerError)
+			return
+		}
+		if uploader.Valid {
+			f.UploaderID = uploader.String
+		}
+		files = append(files, f)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(files)
+}
+
+func handleUploadFile(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	processUpload(w, r, user.ID, false)
+}
+
+func handleUploadBook(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	processUpload(w, r, user.ID, true)
+}
+
+func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, isBook bool) {
+	// 100 MiB limit
+	r.Body = http.MaxBytesReader(w, r.Body, 104857600)
+	err := r.ParseMultipartForm(104857600)
+	if err != nil {
+		http.Error(w, "File size exceeds 100 MiB limit", http.StatusBadRequest)
+		return
+	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "Missing file in multipart form (key 'file')", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if len(header.Filename) > 255 {
+		http.Error(w, "Filename too long", http.StatusBadRequest)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowedExts := map[string]bool{
+		".pdf": true, ".epub": true, ".jpg": true, ".jpeg": true,
+		".png": true, ".webp": true, ".mp3": true, ".m4a": true,
+		".ogg": true, ".wav": true, ".mp4": true, ".webm": true,
+	}
+	if !allowedExts[ext] {
+		http.Error(w, "File extension not allowed", http.StatusBadRequest)
+		return
+	}
+
+	if isBook && ext != ".pdf" && ext != ".epub" {
+		http.Error(w, "Only PDF and EPUB are allowed for book uploads", http.StatusBadRequest)
+		return
+	}
+
+	// Staging path
+	tempID := fmt.Sprintf("temp-%d-%s", time.Now().UnixNano(), header.Filename)
+	tempPath := filepath.Join("/data/shared/staging", tempID)
+	outFS, err := os.Create(tempPath)
+	if err != nil {
+		http.Error(w, "Failed to stage upload file", http.StatusInternalServerError)
+		return
+	}
+	defer outFS.Close()
+
+	// Compute SHA-256 hash and detect MIME type on the fly
+	hasher := sha256.New()
+	teaser := make([]byte, 512)
+	n, _ := file.Read(teaser)
+	detectedMime := http.DetectContentType(teaser[:n])
+
+	// Validate magic bytes/extension matches
+	allowedMimes := map[string]bool{
+		"application/pdf": true, "application/epub+zip": true, "image/jpeg": true,
+		"image/png": true, "image/webp": true, "audio/mpeg": true, "audio/mp4": true,
+		"audio/ogg": true, "audio/wav": true, "video/mp4": true, "video/webm": true,
+		"application/octet-stream": true, // fallback for some epubs
+	}
+	if !allowedMimes[detectedMime] && !strings.HasPrefix(detectedMime, "audio/") && !strings.HasPrefix(detectedMime, "video/") {
+		os.Remove(tempPath)
+		http.Error(w, "MIME type verification failed", http.StatusBadRequest)
+		return
+	}
+
+	// Write teaser to hash/file
+	_, _ = hasher.Write(teaser[:n])
+	_, _ = outFS.Write(teaser[:n])
+
+	// Stream rest
+	written, err := io.Copy(io.MultiWriter(outFS, hasher), file)
+	if err != nil {
+		os.Remove(tempPath)
+		http.Error(w, "Failed to save file", http.StatusInternalServerError)
+		return
+	}
+	totalSize := int64(n) + written
+
+	fileHash := hex.EncodeToString(hasher.Sum(nil))
+
+	// Close temporary file so it can be read for scanning
+	outFS.Close()
+
+	// Scan with ClamAV
+	scanFile, err := os.Open(tempPath)
+	if err != nil {
+		os.Remove(tempPath)
+		http.Error(w, "Failed to scan file: local staging open error", http.StatusInternalServerError)
+		return
+	}
+	clean, scanStatus, scanErr := scanFileWithClamAV(scanFile)
+	scanFile.Close()
+
+	if scanErr != nil {
+		os.Remove(tempPath)
+		http.Error(w, "Security Scan failed: "+scanErr.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	if !clean {
+		os.Remove(tempPath)
+		// Record infected state in database for audit
+		dbPool.Exec(r.Context(), `
+			INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type)
+			VALUES ($1, $2, $3, $4, '', $5, $6)
+		`, header.Filename, fileHash, uploaderID, scanStatus, totalSize, detectedMime)
+
+		http.Error(w, "Upload Rejected: Security Scan detected malicious code.", http.StatusUnprocessableEntity)
+		return
+	}
+
+	// File is clean, promote atomically
+	var destDir string
+	var destKey string
+	if isBook {
+		destDir = "/data/shared/bookdrop"
+		destKey = fileHash + ext
+	} else {
+		destDir = "/data/shared/staging/library"
+		destKey = fileHash + ext
+	}
+
+	destPath := filepath.Join(destDir, destKey)
+	if err := os.Rename(tempPath, destPath); err != nil {
+		// Try copy if rename fails (across devices)
+		input, err := os.Open(tempPath)
+		if err != nil {
+			os.Remove(tempPath)
+			http.Error(w, "Atomic move failed", http.StatusInternalServerError)
+			return
+		}
+		defer input.Close()
+		output, err := os.Create(destPath)
+		if err != nil {
+			os.Remove(tempPath)
+			http.Error(w, "Atomic move failed", http.StatusInternalServerError)
+			return
+		}
+		defer output.Close()
+		_, _ = io.Copy(output, input)
+		os.Remove(tempPath)
+	}
+
+	// Insert into DB
+	var fileID string
+	err = dbPool.QueryRow(r.Context(), `
+		INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type)
+		VALUES ($1, $2, $3, 'clean', $4, $5, $6)
+		RETURNING id
+	`, header.Filename, fileHash, uploaderID, destKey, totalSize, detectedMime).Scan(&fileID)
+	if err != nil {
+		http.Error(w, "Database record failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{
+		"id":          fileID,
+		"filename":    header.Filename,
+		"sha256":      fileHash,
+		"scan_status": "clean",
+	})
+}
+
+func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	var storageKey string
+	var filename string
+	var mimeType string
+	err := dbPool.QueryRow(r.Context(), `
+		SELECT storage_key, filename, mime_type FROM files WHERE id = $1 AND scan_status = 'clean'
+	`, id).Scan(&storageKey, &filename, &mimeType)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join("/data/shared/staging/library", storageKey)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		http.Error(w, "File asset missing from disk", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeFile(w, r, filePath)
+}
+
+func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		http.Error(w, "Missing file ID", http.StatusBadRequest)
+		return
+	}
+
+	var storageKey string
+	err := dbPool.QueryRow(r.Context(), `
+		SELECT storage_key FROM files WHERE id = $1
+	`, id).Scan(&storageKey)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join("/data/shared/staging/library", storageKey)
+	_ = os.Remove(filePath) // delete if exists
+
+	_, err = dbPool.Exec(r.Context(), "DELETE FROM files WHERE id = $1", id)
+	if err != nil {
+		http.Error(w, "Database delete failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }

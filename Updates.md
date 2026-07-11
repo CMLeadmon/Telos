@@ -101,3 +101,68 @@ This plan replaces the current spoofable query-parameter identities, optional to
 - The shared library is server-wide, not private or channel-scoped.
 - The current database contents are prototype data and may be discarded after an operator backup.
 - One gateway and one LiveKit node are sufficient for 10–15 active users; the design retains Redis-backed foundations for later scaling.
+
+## Gemini-Specific Implementation Specifications
+
+This section provides strict, step-by-step technical blueprints for Gemini 3.5 Flash (or other implementing agents) to ensure robust, bug-free, and secure implementation of the security plan.
+
+### 1. Database Schema & Migration System
+- **Database driver**: The backend uses `github.com/jackc/pgx/v5`. Do not use `database/sql`. Use `pgxpool.Pool`.
+- **Migration Storage**: Create a directory `backend/db/migrations/` and place sequential SQL files there:
+  - `0001_auth_tables.sql` (Creates `users`, `sessions`, `invites`, `roles`, `role_permissions`, `user_roles`)
+  - `0002_channel_and_messages.sql` (Creates `channels`, `channel_role_overrides`, `messages` with UUIDs)
+  - `0003_files_tables.sql` (Creates `files`)
+- **Migration Runner**:
+  - In `backend/main.go`, embed the migrations: `//go:embed db/migrations/*.sql`
+  - In `initDatabase`, read from embed, create a `schema_migrations` table if not exists.
+  - Run each migration in an explicit transaction block, tracking the version. If a migration fails, roll back the transaction and fail startup.
+- **Argon2id implementation**:
+  - Use `golang.org/x/crypto/argon2`.
+  - Passwords MUST be hashed with `argon2.IDKey(password, salt, time=2, memory=19456, threads=1, keyLen=32)`.
+  - Salt length: 16 bytes generated from `crypto/rand`.
+  - Format hash as: `$argon2id$v=19$m=19456,t=2,p=1$<base64_salt>$<base64_hash>` to match standard structures.
+
+### 2. Session Management & CSRF Checks
+- **Opaque Token Generation**:
+  - Session tokens and invitation tokens MUST be generated using `crypto/rand` reading 32 bytes and encoded to hexadecimal or url-safe base64.
+  - Store only `sha256.Sum256(token)` in the database `sessions` / `invites` table.
+- **Session Cookie**:
+  - Name: `telos_session`
+  - Attributes: `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, and a `MaxAge` of 12 hours (`43200` seconds).
+- **Same-Origin & CSRF validation**:
+  - Implement a middleware checking `POST`, `PUT`, `DELETE` requests.
+  - Compare the `Origin` and `Referer` headers with `TELOS_DOMAIN` (parsed from environment).
+  - In development mode (where `Origin` is localhost/127.0.0.1 on ports 3000/8080), permit localhost development origins but reject everything else.
+
+### 3. Middleware and Router Setup
+- Define a middleware structure:
+  ```go
+  func AuthMiddleware(db *pgxpool.Pool, requiredPermission string) func(http.Handler) http.Handler
+  ```
+- The middleware extracts the cookie, SHA-256 hashes the token, queries the DB for session valid state, resolves permissions, and injects the user ID/roles context into the request context.
+- Check both standard HTTP requests and WebSocket connections (`GET /api/v1/chat/ws`). WebSockets MUST use the cookie to validate user authentication before connection upgrade.
+
+### 4. Shared File Library & ClamAV Integration
+- **ClamAV Service addition**:
+  - Add `telos-clamav` using the `clamav/clamav:latest` image to `docker-compose.yml` on the `telos-backend` network.
+- **Clamd TCP client in Go**:
+  - Connect to `telos-clamav:3310` using `net.DialTimeout`.
+  - Stream files using the clamd protocol:
+    1. Send `zINSTREAM\0`.
+    2. For each chunk of the file (up to 2048 or 4096 bytes), send chunk size as a 4-byte big-endian unsigned integer, followed by the chunk data.
+    3. End stream by sending a 4-byte 0 integer.
+    4. Read response: if it contains `OK\n`, file is clean. If it contains `FOUND\n` or `VIRUS\n`, reject.
+  - Limit maximum read to 100 MiB to prevent denial-of-service before scanning.
+
+### 5. LiveKit JWT token generation
+- Run `go get github.com/livekit/protocol/auth` in `backend` to import the SDK.
+- Use `auth.NewAccessToken(apiKey, apiSecret)` to mint voice tokens.
+- Restrict room capabilities: set `roomCap = 15`, set `audio-only = true` (disable video and data publishing in the token claims).
+
+### 6. Minimal Status Page Setup
+- Keep `backend/out/index.html` as the only file in the static directory.
+- Verify `//go:embed all:out` compiles successfully.
+
+### 7. Secret Injection Verification
+- Validate at startup that mandatory variables (`DATABASE_URL`, `REDIS_URL`, `TELOS_DOMAIN`, `TELOS_BOOTSTRAP_TOKEN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `JELLYFIN_ADMIN_TOKEN`, `GRIMMORY_API_TOKEN`) do not match placeholders (e.g. `your-secret-here`, `change-me`, `temp-token`). Fail fast if any are missing or placeholder-like.
+

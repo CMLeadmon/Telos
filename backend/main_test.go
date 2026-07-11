@@ -13,17 +13,46 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Argon2id Password Hashing Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestPasswordHashing(t *testing.T) {
+	password := "super-secure-password-12345"
+
+	hash, err := hashPassword(password)
+	if err != nil {
+		t.Fatalf("Failed to hash password: %v", err)
+	}
+
+	if !strings.HasPrefix(hash, "$argon2id$") {
+		t.Errorf("Expected Argon2id format prefix, got %s", hash)
+	}
+
+	ok, err := verifyPassword(password, hash)
+	if err != nil {
+		t.Fatalf("Failed to verify password: %v", err)
+	}
+	if !ok {
+		t.Errorf("Password verification failed for correct password")
+	}
+
+	ok, err = verifyPassword("wrong-password", hash)
+	if err != nil {
+		t.Fatalf("Failed to verify password: %v", err)
+	}
+	if ok {
+		t.Errorf("Password verification succeeded for incorrect password")
+	}
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // LiveKit Token Generation Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// TestGenerateLiveKitToken verifies that GenerateLiveKitToken successfully
-// generates a valid, standard-compliant HS256 JWT containing the correct
-// LiveKit grants, claims, and signature.
 func TestGenerateLiveKitToken(t *testing.T) {
 	apiKey := "test-key"
 	apiSecret := "test-secret-at-least-thirty-two-chars"
@@ -94,40 +123,43 @@ func TestGenerateLiveKitToken(t *testing.T) {
 // Health Endpoint Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// TestHandleHealth tests the health status handler, verifying it returns a
-// valid JSON response indicating service availability.
 func TestHandleHealth(t *testing.T) {
-	req, err := http.NewRequest("GET", "/api/v1/health", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	oldPool, oldRedis := dbPool, redisClient
+	dbPool, redisClient = nil, nil
+	defer func() {
+		dbPool = oldPool
+		redisClient = oldRedis
+	}()
 
+	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(handleHealth)
-	handler.ServeHTTP(rr, req)
 
-	if status := rr.Code; status != http.StatusServiceUnavailable && status != http.StatusOK {
-		t.Errorf("handler returned unexpected status code: got %v", status)
+	handleHealth(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected 503 Service Unavailable when DB and Redis are nil, got %d", rr.Code)
 	}
 
 	var resp HealthResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to decode response body: %v", err)
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode health response: %v", err)
 	}
 
-	if resp.Status == "" {
-		t.Errorf("expected health status to be populated")
+	if resp.Status != "unhealthy" {
+		t.Errorf("Expected overall status to be unhealthy, got %q", resp.Status)
+	}
+	if resp.Services["database"] != "uninitialized" {
+		t.Errorf("Expected database service to be uninitialized, got %q", resp.Services["database"])
+	}
+	if resp.Services["redis"] != "uninitialized" {
+		t.Errorf("Expected redis service to be uninitialized, got %q", resp.Services["redis"])
 	}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Chat Database History Tests
+// Database Query Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// TestGetMessagesForChannelReturnsLatest runs integration testing against a live
-// PostgreSQL database if DATABASE_URL is provided. It populates a test channel
-// with 60 messages and asserts that getMessagesForChannel correctly retrieves
-// exactly the latest 50 messages, ordered chronologically (oldest first).
 func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -146,28 +178,36 @@ func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 		pool.Close()
 	}()
 
-	channel := "tdd-history-test"
+	channelID := "00000000-0000-0000-0000-000000000099"
+	userID := "00000000-0000-0000-0000-000000000088"
+
 	cleanup := func() {
-		pool.Exec(ctx, `DELETE FROM messages WHERE channel_id = $1`, channel)
-		pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, channel)
+		pool.Exec(ctx, `DELETE FROM messages WHERE channel_id = $1`, channelID)
+		pool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, channelID)
+		pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, userID)
 	}
 	cleanup()
 	defer cleanup()
 
-	if _, err := pool.Exec(ctx, `INSERT INTO channels (id, name, type) VALUES ($1, $1, 'text')`, channel); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash) VALUES ($1, 'test-bot-user', 'hash')`, userID); err != nil {
+		t.Fatalf("Failed to insert test user: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `INSERT INTO channels (id, name, type) VALUES ($1, 'tdd-history-test', 'text')`, channelID); err != nil {
 		t.Fatalf("Failed to insert test channel: %v", err)
 	}
+
 	for i := 1; i <= 60; i++ {
 		_, err := pool.Exec(ctx, `
-			INSERT INTO messages (channel_id, user_id, content, timestamp)
-			VALUES ($1, 'telos-bot', $2, now() - make_interval(secs => $3))
-		`, channel, fmt.Sprintf("msg-%d", i), 60-i)
+			INSERT INTO messages (channel_id, user_id, content, created_at)
+			VALUES ($1, $2, $3, now() - make_interval(secs => $4))
+		`, channelID, userID, fmt.Sprintf("msg-%d", i), 60-i)
 		if err != nil {
 			t.Fatalf("Failed to insert test message %d: %v", i, err)
 		}
 	}
 
-	msgs, err := getMessagesForChannel(ctx, channel)
+	msgs, err := getMessagesForChannel(ctx, channelID)
 	if err != nil {
 		t.Fatalf("getMessagesForChannel failed: %v", err)
 	}
@@ -183,38 +223,50 @@ func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 	}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// LiveKit Token API Routing Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-// TestVoiceTokenRejectsMissingUser asserts that the voice token endpoint returns
-// a HTTP 400 Bad Request status code if the required user parameter is omitted.
-func TestVoiceTokenRejectsMissingUser(t *testing.T) {
-	t.Setenv("LIVEKIT_API_KEY", "test-key")
-	t.Setenv("LIVEKIT_API_SECRET", "test-secret")
-
-	req := httptest.NewRequest("GET", "/api/v1/voice/token?room=test-room", nil)
-	rr := httptest.NewRecorder()
-	handleLiveKitToken(rr, req)
-
-	if rr.Code != http.StatusBadRequest {
-		t.Errorf("Expected 400 for missing user param, got %d", rr.Code)
+func TestHandleListChannelsIncludesSeeds(t *testing.T) {
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("DATABASE_URL not set; requires live Postgres")
 	}
-}
 
-// TestVoiceTokenRejectsUnconfiguredCredentials asserts that the voice token endpoint
-// returns a HTTP 500 Internal Server Error when LiveKit credentials are not
-// set in the environment.
-func TestVoiceTokenRejectsUnconfiguredCredentials(t *testing.T) {
-	t.Setenv("LIVEKIT_API_KEY", "")
-	t.Setenv("LIVEKIT_API_SECRET", "")
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("Failed to connect to database: %v", err)
+	}
+	oldPool := dbPool
+	dbPool = pool
+	defer func() {
+		dbPool = oldPool
+		pool.Close()
+	}()
 
-	req := httptest.NewRequest("GET", "/api/v1/voice/token?room=test-room&user=alice", nil)
-	rr := httptest.NewRecorder()
-	handleLiveKitToken(rr, req)
+	req := httptest.NewRequest("GET", "/api/v1/channels", nil)
+	rec := httptest.NewRecorder()
+	handleListChannels(rec, req)
 
-	if rr.Code != http.StatusInternalServerError {
-		t.Errorf("Expected 500 for unconfigured LiveKit credentials, got %d", rr.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+
+	var channels []ChannelResponse
+	if err := json.NewDecoder(rec.Body).Decode(&channels); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	byName := map[string]ChannelResponse{}
+	for _, c := range channels {
+		byName[c.Name] = c
+	}
+	general, ok := byName["general"]
+	if !ok {
+		t.Fatal("Expected seeded channel 'general' in response")
+	}
+	if general.Type != "text" {
+		t.Errorf("Expected 'general' to be a text channel, got %q", general.Type)
+	}
+	if lounge, ok := byName["voice-lounge"]; ok && lounge.Type != "voice" {
+		t.Errorf("Expected 'voice-lounge' to be a voice channel, got %q", lounge.Type)
 	}
 }
 
@@ -222,9 +274,6 @@ func TestVoiceTokenRejectsUnconfiguredCredentials(t *testing.T) {
 // Jellyfin API Client Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// TestGetJellyfinUserIDPrefersConfiguredUser verifies that getJellyfinUserID
-// will prefer the user specified in the JELLYFIN_USER_NAME environment variable,
-// or fall back to the first available user returned by Jellyfin.
 func TestGetJellyfinUserIDPrefersConfiguredUser(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Users" {
@@ -269,9 +318,36 @@ func TestGetJellyfinUserIDPrefersConfiguredUser(t *testing.T) {
 // WebSocket Origin Policy Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// TestIsAllowedWSOrigin verifies the WebSocket origin access control logic.
-// It covers same-origin requests, configured domains, local/loopback
-// development environments, non-browser clients, and foreign/malformed domains.
+func TestIsAllowedCSRFOrigin(t *testing.T) {
+	cases := []struct {
+		name             string
+		rawURL           string
+		requestHost      string
+		configuredDomain string
+		envMode          string
+		want             bool
+	}{
+		{"same origin exact", "http://100.64.1.5:8080", "100.64.1.5:8080", "telos.local", "", true},
+		{"tailscale magicdns same host", "https://node.tailnet.ts.net", "node.tailnet.ts.net", "telos.local", "", true},
+		{"configured domain", "https://telos.local", "10.0.0.2:8080", "telos.local", "", true},
+		{"foreign origin rejected", "https://evil.example", "100.64.1.5:8080", "telos.local", "", false},
+		{"dev localhost cross-port", "http://localhost:3000", "localhost:8080", "telos.local", "development", true},
+		{"dev same hostname cross-port", "http://100.64.1.5:3000", "100.64.1.5:8080", "telos.local", "development", true},
+		{"prod same hostname cross-port rejected", "http://100.64.1.5:3000", "100.64.1.5:8080", "telos.local", "", false},
+		{"empty origin rejected", "", "localhost:8080", "telos.local", "development", false},
+		{"garbage origin rejected", "::not-a-url::", "localhost:8080", "telos.local", "development", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isAllowedCSRFOrigin(tc.rawURL, tc.requestHost, tc.configuredDomain, tc.envMode)
+			if got != tc.want {
+				t.Errorf("isAllowedCSRFOrigin(%q, %q, %q, %q) = %v, want %v",
+					tc.rawURL, tc.requestHost, tc.configuredDomain, tc.envMode, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsAllowedWSOrigin(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -294,46 +370,5 @@ func TestIsAllowedWSOrigin(t *testing.T) {
 				t.Errorf("isAllowedWSOrigin(%q, %q, %q) = %v, want %v", c.origin, c.host, c.domain, got, c.allowed)
 			}
 		})
-	}
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// WebSocket Core Integration Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-// TestWebSocketLoopbackBroadcast tests the WebSocket gateway handler end-to-end in
-// loopback fallback mode (when PostgreSQL and Redis are absent). It sends a single
-// JSON payload and verifies that the client receives the broadcast echo successfully.
-func TestWebSocketLoopbackBroadcast(t *testing.T) {
-	oldPool, oldRedis := dbPool, redisClient
-	dbPool, redisClient = nil, nil
-	defer func() { dbPool, redisClient = oldPool, oldRedis }()
-
-	srv := httptest.NewServer(http.HandlerFunc(handleWebSocket))
-	defer srv.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "?channel=test&user=alice"
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
-	if err != nil {
-		t.Fatalf("Failed to dial WebSocket: %v", err)
-	}
-	defer conn.Close()
-
-	if err := conn.WriteJSON(map[string]string{"content": "hello loopback"}); err != nil {
-		t.Fatalf("Failed to send message: %v", err)
-	}
-
-	var notif WSNotification
-	if err := conn.ReadJSON(&notif); err != nil {
-		t.Fatalf("Failed to read broadcast: %v", err)
-	}
-	if notif.Type != "message" || notif.Message == nil {
-		t.Fatalf("Expected a message notification, got %+v", notif)
-	}
-	if notif.Message.Content != "hello loopback" {
-		t.Errorf("Expected echoed content, got %q", notif.Message.Content)
-	}
-	if notif.Message.Sender != "alice" {
-		t.Errorf("Expected sender alice, got %q", notif.Message.Sender)
 	}
 }

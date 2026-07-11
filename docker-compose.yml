@@ -48,12 +48,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - "8080:8080"
     networks:
       - telos-ingress
       - telos-backend
       - telos-db
+    ports:
+      # Direct gateway access for local dev (frontend dev server targets :8080)
+      - "8080:8080"
     environment:
       - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -63,8 +64,11 @@ services:
       - JELLYFIN_USER_NAME=${JELLYFIN_USER_NAME:-}
       - GRIMMORY_API_TOKEN=${GRIMMORY_API_TOKEN}
       - TELOS_DOMAIN=${TELOS_DOMAIN}
+      - TELOS_ENV=${TELOS_ENV:-}
+      - TELOS_BOOTSTRAP_TOKEN=${TELOS_BOOTSTRAP_TOKEN}
     volumes:
-      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/staging:/data/shared/staging:z
+      - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/data/shared/bookdrop:z
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=telos-ingress"
@@ -114,13 +118,26 @@ services:
       timeout: 5s
       retries: 5
 
+  clamav:
+    image: clamav/clamav:latest
+    container_name: telos-clamav
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - telos-backend
+    healthcheck:
+      test: ["CMD-SHELL", "echo PING | nc -w 2 localhost 3310 | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   jellyfin:
     image: jellyfin/jellyfin:latest
     container_name: telos-jellyfin
     restart: unless-stopped
     user: "${APP_UID}:${APP_GID}"
     networks:
-      - telos-ingress
       - telos-backend
     environment:
       - TZ=${TZ}
@@ -128,13 +145,6 @@ services:
     volumes:
       - jellyfin_config:/config
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.jellyfin.rule=PathPrefix(`/jellyfin`)"
-      - "traefik.http.routers.jellyfin.entrypoints=websecure"
-      - "traefik.http.routers.jellyfin.tls=true"
-      - "traefik.http.services.jellyfin.loadbalancer.server.port=8096"
 
   grimmory-db:
     image: mariadb:10.11
@@ -163,7 +173,6 @@ services:
       grimmory-db:
         condition: service_healthy
     networks:
-      - telos-ingress
       - telos-backend
       - telos-db
     environment:
@@ -185,13 +194,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-    labels:
-      - "traefik.enable=true"
-      - "traefik.docker.network=telos-ingress"
-      - "traefik.http.routers.grimmory.rule=PathPrefix(`/grimmory`)"
-      - "traefik.http.routers.grimmory.entrypoints=websecure"
-      - "traefik.http.routers.grimmory.tls=true"
-      - "traefik.http.services.grimmory.loadbalancer.server.port=6060"
 
   livekit:
     image: livekit/livekit-server:v1.10
