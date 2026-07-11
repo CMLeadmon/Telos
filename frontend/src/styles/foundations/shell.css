@@ -1,0 +1,57 @@
+/* ---------------- app shell (themed by tokens) ---------------- */
+.app{width:1440px;height:900px;flex:none;display:flex;flex-direction:column;overflow:hidden;position:relative;
+  background:var(--canvas);color:var(--ink);border-radius:var(--r-lg);border:1px solid var(--line)}
+.topbar{height:74px;flex:none;display:flex;align-items:center;gap:18px;padding:0 22px;
+  background:var(--surface);border-bottom:1px solid var(--line);position:relative;z-index:5}
+.brand{display:flex;align-items:center;gap:12px;width:220px;flex:none}
+.brand img{height:46px;width:46px;object-fit:contain}
+.brand .word{font-family:var(--f-display);font-weight:700;font-size:20px;letter-spacing:.03em}
+.searchbar{flex:1;max-width:540px;position:relative;display:flex;align-items:center}
+.searchbar i{position:absolute;left:14px;color:var(--faint);width:16px;height:16px}
+.searchbar input{width:100%;background:var(--input);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--r);padding:11px 16px 11px 40px;outline:none;font-size:13.5px}
+.searchbar input::placeholder{color:var(--faint)}
+.topacts{margin-left:auto;display:flex;align-items:center;gap:6px}
+.iconbtn{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border-radius:var(--r);
+  color:var(--muted);transition:background .12s,color .12s}
+.iconbtn:hover{background:var(--surface-2);color:var(--ink)}
+
+.shellbody{flex:1;display:flex;min-height:0;position:relative;z-index:4}
+
+.rail{width:262px;flex:none;display:flex;flex-direction:column;background:var(--surface);border-right:1px solid var(--line)}
+.rail .scroll{flex:1;overflow:hidden;padding:18px 14px;display:flex;flex-direction:column;gap:24px}
+.modnav{display:flex;flex-direction:column;gap:3px}
+.navbtn{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:var(--r);
+  color:var(--muted);font-weight:500;font-size:14px;text-align:left;transition:background .12s,color .12s}
+.navbtn i{width:18px;height:18px;flex:none}
+.navbtn:hover{color:var(--ink)}
+.navbtn.on{background:var(--primary);color:var(--on-primary);font-weight:600}
+.grouplabel{font-family:var(--f-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);margin:0 0 8px 14px}
+.chanlist{display:flex;flex-direction:column;gap:2px}
+.chan{display:flex;align-items:center;gap:10px;padding:8px 14px;border-radius:var(--r-xs);
+  color:var(--muted);font-size:13.5px;text-align:left;transition:background .12s,color .12s;justify-content:space-between}
+.chan .l{display:flex;align-items:center;gap:10px}
+.chan i{width:15px;height:15px;flex:none}
+.chan:hover{color:var(--ink)}
+.chan.on{background:var(--surface-2);color:var(--ink);font-weight:600}
+[data-theme="synthwave"] .chan.on{background:var(--surface-2);color:var(--cyan)}
+.joinlbl{font-family:var(--f-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+.railfoot{border-top:1px solid var(--line);padding:14px 20px;font-family:var(--f-mono);font-size:10.5px;
+  color:var(--faint);display:flex;flex-direction:column;gap:5px}
+.railfoot .row{display:flex;align-items:center;gap:7px}
+
+.arena{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+.arenahead{height:60px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 26px;
+  background:var(--surface);border-bottom:1px solid var(--line);position:relative;z-index:2}
+.arenahead .name{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px}
+.arenahead .name i{width:17px;height:17px;color:var(--faint)}
+.banner{padding:9px 26px;text-align:center;font-family:var(--f-mono);font-size:11.5px;letter-spacing:.08em;
+  color:var(--faint);border-bottom:1px solid var(--line);background:var(--surface-2);position:relative;z-index:2}
+[data-theme="synthwave"] .banner{color:var(--cyan);background:rgba(2,181,255,.06)}
+
+.aside{width:284px;flex:none;border-left:1px solid var(--line);background:var(--surface);padding:22px 20px;
+  display:flex;flex-direction:column;gap:22px;position:relative;z-index:2}
+.aside h3{margin:0 0 12px;font-size:13px;font-weight:600;font-family:var(--f-display)}
+.specrow{display:flex;justify-content:space-between;font-family:var(--f-mono);font-size:11px;color:var(--muted);padding:3px 0}
+.specrow b{color:var(--ink);font-weight:700}

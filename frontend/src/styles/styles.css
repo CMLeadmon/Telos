@@ -1,0 +1,25 @@
+/* ============================================================
+   TELOS DESIGN SYSTEM — Flat Design
+   Single entry point. Consuming projects link THIS file only.
+   Everything it @imports ships to consumers; tokens + fonts are
+   discovered from this closure.
+
+   Two themes, both sampled from the Telos logos:
+     [data-theme="synthwave"]  Synthwave — dark, full neon spectrum + vaporwave scene
+     [data-theme="ink"]        Standard  — light "boring": logo navy, white, warm tan
+   ============================================================ */
+
+/* Webfonts (must be first) */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&family=Outfit:wght@300;400;500;600;700&family=Instrument+Serif:ital@0;1&display=swap');
+
+/* Foundations */
+@import url("foundations/base.css");
+
+/* Tokens */
+@import url("tokens/scale.css");
+@import url("tokens/themes.css");
+
+/* Component + shell + motif CSS */
+@import url("foundations/components.css");
+@import url("foundations/shell.css");
+@import url("foundations/scene.css");

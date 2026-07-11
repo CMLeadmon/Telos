@@ -1,0 +1,66 @@
+/* Telos DS — theme tokens. [data-theme="synthwave"] (dark) and [data-theme="ink"] (Standard / "boring"). */
+/* ================= SYNTHWAVE (dark) ================= */
+[data-theme="synthwave"]{
+  --canvas:#000000;
+  --surface:#0E0A16;
+  --surface-2:#160C22;
+  --input:#160C22;
+  --ink:#FFFFFF;
+  --muted:#B9B4C7;
+  --faint:#7C7690;
+  --line:#271A3B;
+  --line-2:#3A2857;
+
+  --rose:#FF0880;
+  --crimson:#F40869;
+  --magenta:#FF35B3;
+  --violet:#C03CFE;
+  --indigo:#8163FD;
+  --azure:#3D93FD;
+  --cyan:#02B5FF;
+
+  --primary:#FF0880; --on-primary:#000000;
+  --accent:#02B5FF; --accent-hover:#7ad4ff;
+  --live:#02B5FF;
+
+  --f-display:'Space Grotesk',sans-serif; /* @kind font */
+  --f-sans:'Space Grotesk',sans-serif; /* @kind font */
+  --f-serif:'Space Grotesk',sans-serif; /* @kind font */
+
+  color-scheme:dark;
+  background:var(--canvas); color:var(--ink);
+  font-family:var(--f-sans);
+}
+
+/* ================= INK & TAN (light, "boring") ================= */
+[data-theme="ink"]{
+  --canvas:#EFE7D6;   /* warm light tan */
+  --surface:#F6F1E7;
+  --surface-2:#FFFFFF;
+  --input:#FFFFFF;
+  --ink:#1B2433;      /* exact logo navy */
+  --muted:#565E6E;
+  --faint:#8C8676;
+  --line:#E1D7C3;
+  --line-2:#CFC4AC;
+
+  --rose:#C4326E;
+  --crimson:#B02A5E;
+  --magenta:#C4326E;
+  --violet:#6B5AA6;
+  --indigo:#4A5A8A;
+  --azure:#3E6E96;
+  --cyan:#2F7E9A;
+
+  --primary:#1B2433; --on-primary:#F6F1E7;
+  --accent:#B02A5E; --accent-hover:#8f2049;
+  --live:#B02A5E;
+
+  --f-display:'Outfit',sans-serif; /* @kind font */
+  --f-sans:'Outfit',sans-serif; /* @kind font */
+  --f-serif:'Instrument Serif',Georgia,serif; /* @kind font */
+
+  color-scheme:light;
+  background:var(--canvas); color:var(--ink);
+  font-family:var(--f-sans);
+}

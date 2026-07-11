@@ -1,0 +1,6 @@
+/* ---------------- shared scale ---------------- */
+:root{
+  --r-xs:6px; --r:10px; --r-lg:14px; --r-pill:999px;
+  --f-mono:'Space Mono',ui-monospace,monospace; /* @kind font */
+  --sp:8px;
+}

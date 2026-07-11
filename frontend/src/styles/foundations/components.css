@@ -1,0 +1,34 @@
+/* ---------------- flat primitives ---------------- */
+.mono{font-family:var(--f-mono)}
+.kicker{font-family:var(--f-mono);font-size:12px;letter-spacing:.24em;text-transform:uppercase;color:var(--faint)}
+
+.btn{display:inline-flex;align-items:center;gap:9px;font-family:var(--f-sans);font-weight:600;
+  font-size:14px;padding:12px 20px;border-radius:var(--r);transition:background .12s,color .12s,transform .08s;
+  background:var(--primary);color:var(--on-primary);line-height:1;white-space:nowrap}
+.btn:hover{transform:translateY(-1px)}
+[data-theme="synthwave"] .btn:hover{background:#ff3b9c}
+[data-theme="ink"] .btn:hover{background:#2a3446}
+.btn.rose{background:var(--rose);color:#000}
+.btn.cyan{background:var(--cyan);color:#001018}
+.btn.violet{background:var(--violet);color:#12002a}
+.btn-ghost{display:inline-flex;align-items:center;gap:9px;font-family:var(--f-sans);font-weight:600;font-size:14px;
+  padding:12px 20px;border-radius:var(--r);background:transparent;color:var(--ink);white-space:nowrap;
+  box-shadow:inset 0 0 0 1.5px var(--line-2);transition:box-shadow .12s,color .12s}
+.btn-ghost:hover{box-shadow:inset 0 0 0 1.5px var(--accent);color:var(--accent)}
+.btn-sm{padding:8px 14px;font-size:12.5px}
+.btn-lg{padding:15px 26px;font-size:15px}
+
+.chip{display:inline-flex;align-items:center;gap:7px;font-family:var(--f-mono);font-size:11.5px;
+  letter-spacing:.06em;text-transform:uppercase;padding:6px 12px;border-radius:var(--r-pill);
+  background:transparent;box-shadow:inset 0 0 0 1.5px var(--line-2);color:var(--muted)}
+.chip.on{background:var(--primary);color:var(--on-primary);box-shadow:none}
+.chip.solid{background:var(--surface-2);box-shadow:none}
+
+.card{background:var(--surface-2);border-radius:var(--r-lg);border:1px solid var(--line);padding:22px}
+[data-theme="synthwave"] .card{border-color:var(--line)}
+
+.tag{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  padding:4px 9px;border-radius:var(--r-xs)}
+
+.hr{height:1px;background:var(--line);border:0;margin:0}
+.dot{width:7px;height:7px;border-radius:var(--r-pill);background:var(--live);flex:none}

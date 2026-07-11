@@ -1,0 +1,31 @@
+/* ---------------- VAPORWAVE SCENE (decoration only) ---------------- */
+/* --horizon = distance from container bottom to the horizon line where the
+   sun's flat base rests AND the grid's far edge sits. Tune per scene. */
+.scene{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:0;--horizon:150px}
+.scene .sun{position:absolute;left:50%;bottom:var(--horizon);transform:translateX(-50%) translateY(50%);
+  width:340px;height:340px;border-radius:var(--r-pill);
+  background:linear-gradient(#FFB3E2 0%,#FF35B3 34%,#FF0880 60%,#C03CFE 100%);
+  -webkit-mask:linear-gradient(#000 0 52%,transparent 52.5% 56%,#000 56% 63%,transparent 63.5% 67%,#000 67% 74%,transparent 74.5% 79%,#000 79% 100%);
+  mask:linear-gradient(#000 0 52%,transparent 52.5% 56%,#000 56% 63%,transparent 63.5% 67%,#000 67% 74%,transparent 74.5% 79%,#000 79% 100%);
+  clip-path:inset(0 0 50% 0);opacity:.9}
+.scene .grid{position:absolute;left:-60%;right:-60%;bottom:0;height:calc(var(--horizon) * 2.9);opacity:.85;
+  background:repeating-linear-gradient(to top,rgba(2,181,255,.65) 0 2px,transparent 2px 34px),
+    linear-gradient(to top,rgba(2,181,255,.22),rgba(192,60,254,.10) 60%,transparent 92%);
+  -webkit-mask-image:linear-gradient(to top,#000 0%,#000 46%,transparent 96%);
+  mask-image:linear-gradient(to top,#000 0%,#000 46%,transparent 96%);
+  transform:perspective(520px) rotateX(60deg);transform-origin:bottom}
+.scene .grid::after{content:'';position:absolute;inset:0;
+  background:repeating-linear-gradient(to right,rgba(2,181,255,.6) 0 2px,transparent 2px 74px)}
+.scene .glowline{position:absolute;left:0;right:0;bottom:var(--horizon);height:2px;background:var(--cyan);opacity:.9}
+.scene .palm{position:absolute;bottom:-8px;color:#2C1A55;width:190px;height:238px}
+.scene .palm.l{left:18px;transform:scaleX(-1)}
+.scene .palm.r{right:18px}
+
+/* Ink & Tan: flat, calm version of the scene — solid rose sun, faint navy grid, no glow */
+[data-theme="ink"] .scene .sun{background:var(--accent);opacity:.5;filter:none}
+[data-theme="ink"] .scene .grid{opacity:.22;
+  background:repeating-linear-gradient(to top,rgba(27,36,51,.55) 0 2px,transparent 2px 34px),
+    linear-gradient(to top,rgba(27,36,51,.18),transparent 80%)}
+[data-theme="ink"] .scene .grid::after{background:repeating-linear-gradient(to right,rgba(27,36,51,.5) 0 2px,transparent 2px 74px)}
+[data-theme="ink"] .scene .glowline{background:var(--ink);opacity:.45}
+[data-theme="ink"] .scene .palm{color:var(--ink);opacity:.18}

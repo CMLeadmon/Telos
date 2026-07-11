@@ -1,0 +1,45 @@
+/* App-layer overrides on top of the DS (which is authored as 1440x900 artboards).
+   The real app fills the viewport; everything else stays verbatim DS. */
+
+html,body{height:100%}
+body{background:var(--canvas);color:var(--ink);font-family:var(--f-sans)}
+
+.app.app--viewport{width:100%;height:100dvh;border:0;border-radius:0}
+
+/* Desktop-first responsive collapse: rail/aside give way below tablet width. */
+@media (max-width:1100px){
+  .aside{display:none}
+}
+@media (max-width:860px){
+  .rail{display:none}
+  .app.app--viewport .topbar{padding:0 14px}
+  .tabbar{display:flex}
+}
+
+/* Mobile tabbar (from the mobile mockups' status bar + 4-item tabbar pattern) */
+.tabbar{display:none;flex:none;height:64px;border-top:1px solid var(--line);background:var(--surface);
+  align-items:stretch;justify-content:space-around;position:relative;z-index:5}
+.tabbar .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  color:var(--muted);font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+.tabbar .tab.on{color:var(--accent)}
+
+/* Auth card (login/bootstrap) — DS card + inputs over the scene */
+.authwrap{min-height:100dvh;display:flex;align-items:center;justify-content:center;position:relative;
+  background:var(--canvas);color:var(--ink);padding:24px}
+.authcard{position:relative;z-index:3;width:400px;max-width:100%;display:flex;flex-direction:column;gap:18px}
+.authcard .lockup{display:flex;align-items:center;gap:12px;justify-content:center;margin-bottom:6px}
+.authcard .lockup img{height:56px;width:56px;object-fit:contain}
+.authcard .lockup .word{font-family:var(--f-display);font-weight:700;font-size:26px;letter-spacing:.03em}
+.field{display:flex;flex-direction:column;gap:7px}
+.field label{font-family:var(--f-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.field input{background:var(--input);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--r);padding:12px 16px;outline:none;font-size:13.5px}
+.field input::placeholder{color:var(--faint)}
+.field input:focus{border-color:var(--accent)}
+.formerr{font-family:var(--f-mono);font-size:11.5px;color:var(--rose);letter-spacing:.04em}
+
+/* Placeholder panel for not-yet-built module content */
+.placeholder{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+  position:relative;z-index:2;text-align:center;padding:40px}
+.placeholder h2{font-family:var(--f-display);font-weight:700;font-size:34px;letter-spacing:-.02em;margin:0}
+.placeholder p{color:var(--muted);font-size:14.5px;max-width:420px;margin:0;line-height:1.6}
