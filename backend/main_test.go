@@ -17,6 +17,13 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LiveKit Token Generation Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestGenerateLiveKitToken verifies that GenerateLiveKitToken successfully
+// generates a valid, standard-compliant HS256 JWT containing the correct
+// LiveKit grants, claims, and signature.
 func TestGenerateLiveKitToken(t *testing.T) {
 	apiKey := "test-key"
 	apiSecret := "test-secret-at-least-thirty-two-chars"
@@ -83,7 +90,12 @@ func TestGenerateLiveKitToken(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Health Endpoint Tests
+// ═══════════════════════════════════════════════════════════════════════════
 
+// TestHandleHealth tests the health status handler, verifying it returns a
+// valid JSON response indicating service availability.
 func TestHandleHealth(t *testing.T) {
 	req, err := http.NewRequest("GET", "/api/v1/health", nil)
 	if err != nil {
@@ -108,7 +120,14 @@ func TestHandleHealth(t *testing.T) {
 	}
 }
 
-// Requires a live Postgres with the Telos schema applied; skipped otherwise.
+// ═══════════════════════════════════════════════════════════════════════════
+// Chat Database History Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestGetMessagesForChannelReturnsLatest runs integration testing against a live
+// PostgreSQL database if DATABASE_URL is provided. It populates a test channel
+// with 60 messages and asserts that getMessagesForChannel correctly retrieves
+// exactly the latest 50 messages, ordered chronologically (oldest first).
 func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 	dbURL := os.Getenv("DATABASE_URL")
 	if dbURL == "" {
@@ -164,6 +183,12 @@ func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LiveKit Token API Routing Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestVoiceTokenRejectsMissingUser asserts that the voice token endpoint returns
+// a HTTP 400 Bad Request status code if the required user parameter is omitted.
 func TestVoiceTokenRejectsMissingUser(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "test-key")
 	t.Setenv("LIVEKIT_API_SECRET", "test-secret")
@@ -177,6 +202,9 @@ func TestVoiceTokenRejectsMissingUser(t *testing.T) {
 	}
 }
 
+// TestVoiceTokenRejectsUnconfiguredCredentials asserts that the voice token endpoint
+// returns a HTTP 500 Internal Server Error when LiveKit credentials are not
+// set in the environment.
 func TestVoiceTokenRejectsUnconfiguredCredentials(t *testing.T) {
 	t.Setenv("LIVEKIT_API_KEY", "")
 	t.Setenv("LIVEKIT_API_SECRET", "")
@@ -190,6 +218,13 @@ func TestVoiceTokenRejectsUnconfiguredCredentials(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Jellyfin API Client Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestGetJellyfinUserIDPrefersConfiguredUser verifies that getJellyfinUserID
+// will prefer the user specified in the JELLYFIN_USER_NAME environment variable,
+// or fall back to the first available user returned by Jellyfin.
 func TestGetJellyfinUserIDPrefersConfiguredUser(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Users" {
@@ -230,6 +265,13 @@ func TestGetJellyfinUserIDPrefersConfiguredUser(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// WebSocket Origin Policy Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestIsAllowedWSOrigin verifies the WebSocket origin access control logic.
+// It covers same-origin requests, configured domains, local/loopback
+// development environments, non-browser clients, and foreign/malformed domains.
 func TestIsAllowedWSOrigin(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -255,7 +297,13 @@ func TestIsAllowedWSOrigin(t *testing.T) {
 	}
 }
 
-// Exercises the WS handler end-to-end in loopback mode (no DB, no Redis).
+// ═══════════════════════════════════════════════════════════════════════════
+// WebSocket Core Integration Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// TestWebSocketLoopbackBroadcast tests the WebSocket gateway handler end-to-end in
+// loopback fallback mode (when PostgreSQL and Redis are absent). It sends a single
+// JSON payload and verifies that the client receives the broadcast echo successfully.
 func TestWebSocketLoopbackBroadcast(t *testing.T) {
 	oldPool, oldRedis := dbPool, redisClient
 	dbPool, redisClient = nil, nil
@@ -289,5 +337,3 @@ func TestWebSocketLoopbackBroadcast(t *testing.T) {
 		t.Errorf("Expected sender alice, got %q", notif.Message.Sender)
 	}
 }
-
-

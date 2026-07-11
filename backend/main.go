@@ -1,3 +1,39 @@
+// Package main implements the telos-core API gateway — the single entry point
+// for all client traffic in a self-hosted Telos community server.
+//
+// The gateway provides:
+//   - WebSocket chat with Redis pub/sub fanout and PostgreSQL persistence
+//   - LiveKit voice-channel token generation (hand-rolled HS256 JWT)
+//   - Jellyfin media proxy (libraries, items, audio/video streaming via HLS)
+//   - LiveKit signaling reverse proxy
+//   - Embedded static frontend served from the out/ directory
+//   - Health-check endpoint with per-service status
+//   - CORS middleware for cross-origin requests
+//
+// # API Endpoints
+//
+//	GET  /api/v1/health                  → Service health check
+//	GET  /api/v1/chat/ws                 → WebSocket chat (query: channel, user, token)
+//	GET  /api/v1/voice/token             → LiveKit JWT token (query: room, user)
+//	GET  /api/v1/media                   → Jellyfin library listing
+//	GET  /api/v1/media/items             → Jellyfin playable items (query: parentId)
+//	GET  /api/v1/stream/audio/{id}       → Jellyfin audio stream proxy
+//	GET  /api/v1/stream/video/{id}       → Jellyfin HLS video session bootstrap
+//	GET  /api/v1/stream/video/{id}/{p…}  → Jellyfin HLS segment proxy
+//	ANY  /livekit/*                      → LiveKit signaling reverse proxy
+//	GET  /*                              → Embedded static frontend file server
+//
+// # External Dependencies
+//
+//   - PostgreSQL (DATABASE_URL) — message persistence and user profiles
+//   - Redis      (REDIS_URL)    — pub/sub chat fanout and response caching
+//   - Jellyfin   (JELLYFIN_ADMIN_TOKEN, JELLYFIN_USER_NAME) — media backend
+//   - LiveKit    (LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET) — voice
+//
+// # Planned
+//
+// Grimmory e-book integration (library, facets, progress tracking) is on the
+// Phase 3 roadmap and will add additional /api/v1/library/* routes.
 package main
 
 import (
@@ -24,27 +60,59 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Global State
+// ═══════════════════════════════════════════════════════════════════════════
+
 var (
-	dbPool      *pgxpool.Pool
+	// dbPool is the PostgreSQL connection pool, initialised at startup.
+	dbPool *pgxpool.Pool
+
+	// redisClient is the Redis connection used for pub/sub and caching.
 	redisClient *redis.Client
-	upgrader    = websocket.Upgrader{
+
+	// upgrader negotiates WebSocket upgrades; origin is validated by
+	// isAllowedWSOrigin against the TELOS_DOMAIN env var.
+	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return isAllowedWSOrigin(r.Header.Get("Origin"), r.Host, os.Getenv("TELOS_DOMAIN"))
 		},
 	}
 )
 
+// schemaSQL holds the DDL executed at startup to ensure the messages and
+// channels tables exist.
+//
 //go:embed db/schema.sql
 var schemaSQL string
 
+// frontendFS embeds the Next.js static export from the out/ directory.
+// NOTE: The out/ directory must exist at build time for the embed directive to
+// succeed. Run the frontend build (e.g. `npm run build && npm run export`)
+// before compiling the Go binary, or create an empty out/ directory for
+// development builds.
+//
 //go:embed all:out
 var frontendFS embed.FS
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Types — Health
+// ═══════════════════════════════════════════════════════════════════════════
+
+// HealthResponse is the JSON payload returned by the /api/v1/health endpoint.
+// It reports the overall gateway status and the individual status of each
+// backing service (database, redis).
 type HealthResponse struct {
 	Status   string            `json:"status"`
 	Services map[string]string `json:"services"`
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Types — Chat / WebSocket
+// ═══════════════════════════════════════════════════════════════════════════
+
+// WSMessage represents a single chat message as seen by clients, carrying
+// sender profile details alongside the content.
 type WSMessage struct {
 	ID        string `json:"id"`
 	Sender    string `json:"sender"`
@@ -54,11 +122,18 @@ type WSMessage struct {
 	Timestamp string `json:"timestamp"`
 }
 
+// WSNotification is the envelope sent over a WebSocket connection. Its Type
+// field is either "history" (initial batch of past messages) or "message"
+// (a single new message broadcast).
 type WSNotification struct {
 	Type     string      `json:"type"`               // "history" or "message"
 	Messages []WSMessage `json:"messages,omitempty"` // For history
 	Message  *WSMessage  `json:"message,omitempty"`  // For individual message
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Entrypoint
+// ═══════════════════════════════════════════════════════════════════════════
 
 func main() {
 	port := os.Getenv("PORT")
@@ -163,6 +238,10 @@ func main() {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Middleware & Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
 // isAllowedWSOrigin permits same-origin browsers, the configured public
 // domain, local development hosts, and non-browser clients (no Origin header).
 func isAllowedWSOrigin(origin, requestHost, configuredDomain string) bool {
@@ -183,6 +262,8 @@ func isAllowedWSOrigin(origin, requestHost, configuredDomain string) bool {
 	return hostname == "localhost" || hostname == "127.0.0.1"
 }
 
+// corsMiddleware wraps a handler to inject permissive CORS headers and
+// short-circuit OPTIONS pre-flight requests.
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -196,12 +277,21 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// initDatabase executes the embedded schema.sql DDL against the global
+// dbPool, creating tables and indexes if they do not already exist.
 func initDatabase(ctx context.Context) error {
 	log.Println("Executing database schema migration...")
 	_, err := dbPool.Exec(ctx, schemaSQL)
 	return err
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Handler — Health
+// ═══════════════════════════════════════════════════════════════════════════
+
+// handleHealth reports the health of the gateway and its backing services.
+// It pings PostgreSQL and Redis with a 2-second timeout and returns 200 OK
+// when both are reachable, or 503 Service Unavailable otherwise.
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	services := make(map[string]string)
 	overallStatus := "healthy"
@@ -247,25 +337,44 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// wsClient serializes writes to a single WebSocket connection; gorilla/websocket
-// does not support concurrent writers on one connection.
+// ═══════════════════════════════════════════════════════════════════════════
+// Handler — Chat / WebSocket
+// ═══════════════════════════════════════════════════════════════════════════
+
+// wsClient serialises writes to a single WebSocket connection.
+// gorilla/websocket does not support concurrent writers on one connection,
+// so all sends must be serialised through the embedded mutex.
 type wsClient struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
 }
 
+// writeJSON marshals v and sends it as a single WebSocket text frame,
+// holding the client mutex for the duration of the write.
 func (c *wsClient) writeJSON(v interface{}) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn.WriteJSON(v)
 }
 
+// writeMessage sends a raw WebSocket frame of the given type, holding the
+// client mutex for the duration of the write.
 func (c *wsClient) writeMessage(messageType int, data []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.conn.WriteMessage(messageType, data)
 }
 
+// handleWebSocket upgrades a GET request to a WebSocket connection, delivers
+// the last 50 messages of the requested channel as a "history" notification,
+// and then enters a read loop that persists incoming messages to PostgreSQL
+// and broadcasts them via Redis pub/sub (or local loopback when Redis is
+// unavailable).
+//
+// Query parameters:
+//   - channel — chat channel ID (default "general")
+//   - user    — sender user ID (required)
+//   - token   — optional auth token checked against WS_AUTH_TOKEN env var
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	channelID := r.URL.Query().Get("channel")
 	if channelID == "" {
@@ -420,6 +529,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// getMessagesForChannel returns the 50 most recent messages for channelID,
+// ordered oldest-first, by querying PostgreSQL and joining the users table
+// for sender profile details.
 func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, error) {
 	// Fetch the latest 50, then reverse so the client renders oldest-first.
 	rows, err := dbPool.Query(ctx, `
@@ -451,14 +563,28 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 	return msgs, nil
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Jellyfin Media Proxy
+// ═══════════════════════════════════════════════════════════════════════════
+
 var (
+	// jellyfinBaseURL is the Jellyfin server base URL used by all media
+	// proxy handlers. It defaults to the Docker-internal address and can
+	// be overridden for testing.
 	jellyfinBaseURL = "http://jellyfin:8096/jellyfin"
 )
 
+// getJellyfinAdminToken returns the Jellyfin API token from the
+// JELLYFIN_ADMIN_TOKEN environment variable.
 func getJellyfinAdminToken() string {
 	return os.Getenv("JELLYFIN_ADMIN_TOKEN")
 }
 
+// getJellyfinUserID resolves the Jellyfin user ID to use for API calls.
+// It first checks a Redis cache (telos:jellyfin:userId), then falls back to
+// the Jellyfin /Users endpoint, preferring the user named in
+// JELLYFIN_USER_NAME and otherwise using the first returned user. The result
+// is cached in Redis for one hour.
 func getJellyfinUserID(ctx context.Context) (string, error) {
 	if redisClient != nil {
 		val, err := redisClient.Get(ctx, "telos:jellyfin:userId").Result()
@@ -522,12 +648,18 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 	return userID, nil
 }
 
+// LibraryItem represents a top-level Jellyfin media library (e.g. Movies,
+// Music) as exposed by the /api/v1/media endpoint.
 type LibraryItem struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 	Type string `json:"type"` // "video" or "audio"
 }
 
+// handleMedia returns the list of Jellyfin media libraries visible to the
+// configured user. Results are cached in Redis for 5 minutes. When Jellyfin
+// is unreachable the handler serves hard-coded mock libraries so the UI
+// remains functional during development.
 func handleMedia(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -622,6 +754,8 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	w.Write(respJSON)
 }
 
+// MediaPlayableItem represents a single playable Jellyfin item (movie,
+// episode, audio track) as returned by the /api/v1/media/items endpoint.
 type MediaPlayableItem struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
@@ -629,6 +763,10 @@ type MediaPlayableItem struct {
 	Type     string `json:"type"` // e.g. "Movie", "Episode", "Audio"
 }
 
+// handleMediaItems returns the playable items within a Jellyfin library.
+// The library is identified by the parentId (or libraryId) query parameter.
+// Results are cached in Redis for 5 minutes. Mock data is served when
+// Jellyfin is unreachable.
 func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	parentId := r.URL.Query().Get("parentId")
@@ -639,8 +777,6 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing parentId or libraryId parameter", http.StatusBadRequest)
 		return
 	}
-
-
 
 	cacheKey := fmt.Sprintf("telos:jellyfin:library-items:%s", parentId)
 	if redisClient != nil {
@@ -755,6 +891,14 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	w.Write(respJSON)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Streaming Proxy Helpers
+// ═══════════════════════════════════════════════════════════════════════════
+
+// proxyRequest creates a single-host reverse proxy to targetURLStr, injecting
+// the Jellyfin authentication token as both X-Emby-Token and Authorization
+// headers. It merges query parameters from the original request and the
+// target URL.
 func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, token string) {
 	targetURL, err := url.Parse(targetURLStr)
 	if err != nil {
@@ -781,6 +925,8 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, t
 	proxy.ServeHTTP(w, r)
 }
 
+// handleStreamAudio proxies a static audio stream for the given item ID
+// through to Jellyfin's /Audio/{id}/stream endpoint.
 func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -788,14 +934,16 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
-
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
 
 	proxyRequest(w, r, targetURL, token)
 }
 
+// handleStreamVideo bootstraps an HLS video session for the given item ID.
+// It calls Jellyfin's PlaybackInfo endpoint to obtain a PlaySessionId, then
+// redirects the client to the HLS master playlist at
+// /api/v1/stream/video/{id}/main.m3u8.
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	log.Printf("[STREAM] handleStreamVideo called for ID: %s", id)
@@ -857,6 +1005,8 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
+// handleStreamVideoSubpath proxies HLS sub-requests (playlist variants,
+// segment files) to Jellyfin's /Videos/{id}/{subpath} endpoint.
 func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	subpath := r.PathValue("path")
@@ -872,8 +1022,11 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	proxyRequest(w, r, targetURL, token)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LiveKit Voice Token (HS256 JWT)
+// ═══════════════════════════════════════════════════════════════════════════
 
-
+// VideoGrant encodes the LiveKit room permissions embedded inside a JWT.
 type VideoGrant struct {
 	Room           string `json:"room,omitempty"`
 	RoomJoin       bool   `json:"roomJoin,omitempty"`
@@ -882,6 +1035,9 @@ type VideoGrant struct {
 	CanPublishData bool   `json:"canPublishData,omitempty"`
 }
 
+// LiveKitClaims is the JWT claims payload used by LiveKit to authorise a
+// participant. It carries standard registered claims (exp, iss, sub, nbf)
+// plus a nested VideoGrant with room-level permissions.
 type LiveKitClaims struct {
 	Exp   int64      `json:"exp"`
 	Iss   string     `json:"iss"`
@@ -890,10 +1046,15 @@ type LiveKitClaims struct {
 	Video VideoGrant `json:"video"`
 }
 
+// base64URLEncode returns the unpadded base64url encoding of b, suitable
+// for use in JWT header and payload segments.
 func base64URLEncode(b []byte) string {
 	return strings.TrimRight(base64.URLEncoding.EncodeToString(b), "=")
 }
 
+// GenerateLiveKitToken creates a hand-rolled HS256 JWT granting the given
+// identity full publish/subscribe access to roomName. The token is valid for
+// one hour. This avoids pulling in a full JWT library as a dependency.
 func GenerateLiveKitToken(apiKey, apiSecret, roomName, identity string) (string, error) {
 	header := map[string]string{
 		"alg": "HS256",
@@ -935,6 +1096,10 @@ func GenerateLiveKitToken(apiKey, apiSecret, roomName, identity string) (string,
 	return signingInput + "." + signatureEncoded, nil
 }
 
+// handleLiveKitToken is the HTTP handler for GET /api/v1/voice/token.
+// It reads the room and user query parameters, loads LiveKit credentials from
+// the environment, generates an HS256 JWT via GenerateLiveKitToken, and
+// returns it as {"token": "…"}.
 func handleLiveKitToken(w http.ResponseWriter, r *http.Request) {
 	room := r.URL.Query().Get("room")
 	if room == "" {
