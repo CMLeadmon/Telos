@@ -224,6 +224,12 @@ func main() {
 	// Grimmory Proxy route (Requires view_library)
 	mux.Handle("/grimmory/", withAuth(http.HandlerFunc(handleGrimmoryProxy), "view_library"))
 
+	// Library module routes (Grimmory-backed catalog)
+	mux.Handle("GET /api/v1/library/books", withAuth(http.HandlerFunc(handleLibraryBooks), "view_library"))
+	mux.Handle("GET /api/v1/library/facets", withAuth(http.HandlerFunc(handleLibraryFacets), "view_library"))
+	mux.Handle("GET /api/v1/library/books/{id}/cover", withAuth(http.HandlerFunc(handleLibraryBookCover), "view_library"))
+	mux.Handle("GET /api/v1/library/books/{id}/content", withAuth(http.HandlerFunc(handleLibraryBookContent), "view_library"))
+
 	// Voice Token (Requires join_voice)
 	mux.Handle("POST /api/v1/voice/channels/{id}/token", withAuth(http.HandlerFunc(handleVoiceToken), "join_voice"))
 

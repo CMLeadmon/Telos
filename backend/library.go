@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -100,4 +104,203 @@ func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
 		return do(tok)
 	}
 	return resp, err
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Library — books catalog (translated from Grimmory)
+// ═══════════════════════════════════════════════════════════════════════════
+
+type LibraryBook struct {
+	ID         int64    `json:"id"`
+	Title      string   `json:"title"`
+	Authors    []string `json:"authors"`
+	Categories []string `json:"categories"`
+	Language   string   `json:"language"`
+	Format     string   `json:"format"` // primaryFile.bookType: "EPUB" | "PDF"
+	FileSizeKB int64    `json:"fileSizeKb"`
+	AddedOn    string   `json:"addedOn"`
+	Library    string   `json:"library"`
+}
+
+type FacetValue struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+type LibraryFacets struct {
+	Authors    []FacetValue `json:"authors"`
+	Categories []FacetValue `json:"categories"`
+	Languages  []FacetValue `json:"languages"`
+	Formats    []FacetValue `json:"formats"`
+}
+
+// grimmoryBook is the verified upstream shape (BookLore GET /api/v1/books).
+type grimmoryBook struct {
+	ID          int64  `json:"id"`
+	AddedOn     string `json:"addedOn"`
+	LibraryName string `json:"libraryName"`
+	Metadata    struct {
+		Title      string   `json:"title"`
+		Language   string   `json:"language"`
+		Authors    []string `json:"authors"`
+		Categories []string `json:"categories"`
+	} `json:"metadata"`
+	PrimaryFile struct {
+		BookType   string `json:"bookType"`
+		FileSizeKB int64  `json:"fileSizeKb"`
+	} `json:"primaryFile"`
+}
+
+func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
+	resp, err := grimmoryGET(ctx, "/api/v1/books")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("grimmory books returned %s", resp.Status)
+	}
+	var raw []grimmoryBook
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	books := make([]LibraryBook, 0, len(raw))
+	for _, b := range raw {
+		books = append(books, LibraryBook{
+			ID: b.ID, Title: b.Metadata.Title, Authors: b.Metadata.Authors,
+			Categories: b.Metadata.Categories, Language: b.Metadata.Language,
+			Format: b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
+			AddedOn: b.AddedOn, Library: b.LibraryName,
+		})
+	}
+	return books, nil
+}
+
+var mockLibraryBooks = []LibraryBook{
+	{ID: 1, Title: "The Sovereign Stack (Mock)", Authors: []string{"Telos Docs Team (Mock)"},
+		Categories: []string{"Technology"}, Language: "en", Format: "EPUB", FileSizeKB: 1024,
+		AddedOn: "2026-01-01T00:00:00Z", Library: "Books (Mock)"},
+	{ID: 2, Title: "Single Origin (Mock)", Authors: []string{"Gateway Author (Mock)"},
+		Categories: []string{"Fiction"}, Language: "en", Format: "PDF", FileSizeKB: 2048,
+		AddedOn: "2026-01-02T00:00:00Z", Library: "Books (Mock)"},
+}
+
+// getLibraryBooks serves from Redis (60s), then Grimmory, then mocks.
+func getLibraryBooks(ctx context.Context) []LibraryBook {
+	const cacheKey = "telos:grimmory:books"
+	if redisClient != nil {
+		if val, err := redisClient.Get(ctx, cacheKey).Result(); err == nil && val != "" {
+			var books []LibraryBook
+			if json.Unmarshal([]byte(val), &books) == nil {
+				return books
+			}
+		}
+	}
+	books, err := fetchGrimmoryBooks(ctx)
+	if err != nil {
+		log.Printf("WARN: grimmory books unavailable, serving mock data: %v", err)
+		return mockLibraryBooks
+	}
+	if redisClient != nil {
+		if raw, err := json.Marshal(books); err == nil {
+			_ = redisClient.Set(ctx, cacheKey, string(raw), 60*time.Second).Err()
+		}
+	}
+	return books
+}
+
+func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
+	books := getLibraryBooks(r.Context())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(books)
+}
+
+// Grimmory's /api/v1/books/facets endpoint does not exist in the deployed
+// build (500s); facets are derived here from the book list instead.
+func handleLibraryFacets(w http.ResponseWriter, r *http.Request) {
+	books := getLibraryBooks(r.Context())
+	count := func(pick func(LibraryBook) []string) []FacetValue {
+		m := map[string]int{}
+		for _, b := range books {
+			for _, v := range pick(b) {
+				if v != "" {
+					m[v]++
+				}
+			}
+		}
+		out := make([]FacetValue, 0, len(m))
+		for v, c := range m {
+			out = append(out, FacetValue{Value: v, Count: c})
+		}
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Count != out[j].Count {
+				return out[i].Count > out[j].Count
+			}
+			return out[i].Value < out[j].Value
+		})
+		return out
+	}
+	facets := LibraryFacets{
+		Authors:    count(func(b LibraryBook) []string { return b.Authors }),
+		Categories: count(func(b LibraryBook) []string { return b.Categories }),
+		Languages:  count(func(b LibraryBook) []string { return []string{b.Language} }),
+		Formats:    count(func(b LibraryBook) []string { return []string{b.Format} }),
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(facets)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Library — cover & content proxies
+// ═══════════════════════════════════════════════════════════════════════════
+
+func proxyGrimmoryBinary(w http.ResponseWriter, r *http.Request, path, forceContentType string) {
+	resp, err := grimmoryGET(r.Context(), path)
+	if err != nil {
+		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		http.Error(w, "Grimmory returned "+resp.Status, http.StatusBadGateway)
+		return
+	}
+	ct := resp.Header.Get("Content-Type")
+	if forceContentType != "" {
+		ct = forceContentType
+	}
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	io.Copy(w, resp.Body)
+}
+
+func libraryBookID(r *http.Request) (string, bool) {
+	id := r.PathValue("id")
+	if id == "" {
+		return "", false
+	}
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		return "", false
+	}
+	return id, true
+}
+
+func handleLibraryBookCover(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	// Upstream serves JPEG bytes with a JSON content-type — force the real one.
+	proxyGrimmoryBinary(w, r, "/api/v1/media/book/"+id+"/thumbnail", "image/jpeg")
+}
+
+func handleLibraryBookContent(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	proxyGrimmoryBinary(w, r, "/api/v1/books/"+id+"/content", "")
 }
