@@ -199,3 +199,23 @@ func TestGrimmoryGETAttachesBearer(t *testing.T) {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
 	}
 }
+
+func TestValidateProgress(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		ok   bool
+	}{
+		{"valid", `{"locator":{"cfi":"epubcfi(/6/4!/4)","fraction":0.42},"percent":0.42}`, true},
+		{"percent out of range", `{"locator":{},"percent":1.5}`, false},
+		{"negative percent", `{"locator":{},"percent":-0.1}`, false},
+		{"not json", `nope`, false},
+		{"oversized locator", `{"locator":{"pad":"` + strings.Repeat("x", 5000) + `"},"percent":0}`, false},
+	}
+	for _, c := range cases {
+		_, _, err := validateProgress([]byte(c.in))
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want ok=%v", c.name, err, c.ok)
+		}
+	}
+}

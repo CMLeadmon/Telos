@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -303,4 +304,92 @@ func handleLibraryBookContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	proxyGrimmoryBinary(w, r, "/api/v1/books/"+id+"/content", "")
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Library — per-user reading progress (Telos Postgres, not Grimmory: the
+// gateway is a single admin account upstream, so progress must be local)
+// ═══════════════════════════════════════════════════════════════════════════
+
+func validateProgress(raw []byte) ([]byte, float64, error) {
+	if len(raw) > 4096 {
+		return nil, 0, errors.New("progress payload too large")
+	}
+	var body struct {
+		Locator json.RawMessage `json:"locator"`
+		Percent float64         `json:"percent"`
+	}
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, 0, errors.New("invalid JSON")
+	}
+	if body.Percent < 0 || body.Percent > 1 {
+		return nil, 0, errors.New("percent must be between 0 and 1")
+	}
+	locator := []byte("{}")
+	if len(body.Locator) > 0 {
+		var probe map[string]any
+		if err := json.Unmarshal(body.Locator, &probe); err != nil {
+			return nil, 0, errors.New("locator must be a JSON object")
+		}
+		if len(body.Locator) > 2048 {
+			return nil, 0, errors.New("locator too large")
+		}
+		locator = body.Locator
+	}
+	return locator, body.Percent, nil
+}
+
+func handleGetBookProgress(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	id, ok := libraryBookID(r)
+	if !ok {
+		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	var locator []byte
+	var percent float64
+	var updated time.Time
+	err := dbPool.QueryRow(r.Context(), `
+		SELECT locator, percent, updated_at FROM book_progress
+		WHERE user_id = $1 AND book_id = $2
+	`, user.ID, id).Scan(&locator, &percent, &updated)
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil { // no row yet — zero progress
+		w.Write([]byte(`{"locator":{},"percent":0,"updatedAt":null}`))
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]any{
+		"locator": json.RawMessage(locator), "percent": percent,
+		"updatedAt": updated.Format(time.RFC3339),
+	})
+}
+
+func handlePutBookProgress(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	id, ok := libraryBookID(r)
+	if !ok {
+		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
+	if err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
+		return
+	}
+	locator, percent, err := validateProgress(raw)
+	if err != nil {
+		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if _, err := dbPool.Exec(r.Context(), `
+		INSERT INTO book_progress (user_id, book_id, locator, percent, updated_at)
+		VALUES ($1, $2, $3, $4, NOW())
+		ON CONFLICT (user_id, book_id)
+		DO UPDATE SET locator = EXCLUDED.locator, percent = EXCLUDED.percent, updated_at = NOW()
+	`, user.ID, id, locator, percent); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
