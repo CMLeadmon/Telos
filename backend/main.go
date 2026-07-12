@@ -1591,6 +1591,20 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, t
 				req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 			}
 		},
+		ModifyResponse: func(resp *http.Response) error {
+			// corsMiddleware is the single CORS authority; upstream CORS
+			// headers would merge into illegal duplicates (browsers reject
+			// "origin, *" on credentialed cross-origin dev requests).
+			for _, h := range []string{
+				"Access-Control-Allow-Origin",
+				"Access-Control-Allow-Credentials",
+				"Access-Control-Allow-Methods",
+				"Access-Control-Allow-Headers",
+			} {
+				resp.Header.Del(h)
+			}
+			return nil
+		},
 	}
 	proxy.ServeHTTP(w, r)
 }

@@ -372,3 +372,45 @@ func TestIsAllowedWSOrigin(t *testing.T) {
 		})
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Reverse-Proxy CORS Header Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+// The gateway's corsMiddleware is the single CORS authority. Upstream services
+// (Jellyfin) send their own Access-Control-Allow-Origin, and ReverseProxy
+// appends response headers — without stripping, browsers see the illegal
+// duplicate "http://localhost:3000, *" and block every proxied stream
+// response in the cross-origin dev split (:3000 → :8080).
+func TestProxyRequestStripsUpstreamCORSHeaders(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, "#EXTM3U")
+	}))
+	defer upstream.Close()
+
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		proxyRequest(w, r, upstream.URL+"/Videos/x/main.m3u8", "test-token")
+	}))
+
+	req := httptest.NewRequest("GET", "/api/v1/stream/video/x/main.m3u8", nil)
+	req.Header.Set("Origin", "http://localhost:3000")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	acao := rr.Result().Header.Values("Access-Control-Allow-Origin")
+	if len(acao) != 1 {
+		t.Fatalf("Access-Control-Allow-Origin has %d values %v, want exactly 1", len(acao), acao)
+	}
+	if acao[0] != "http://localhost:3000" {
+		t.Errorf("Access-Control-Allow-Origin = %q, want the echoed request origin", acao[0])
+	}
+	if creds := rr.Result().Header.Values("Access-Control-Allow-Credentials"); len(creds) != 1 {
+		t.Errorf("Access-Control-Allow-Credentials has %d values %v, want exactly 1", len(creds), creds)
+	}
+	if rr.Body.String() != "#EXTM3U" {
+		t.Errorf("proxied body = %q, want upstream body", rr.Body.String())
+	}
+}
