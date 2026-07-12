@@ -71,12 +71,15 @@ type HealthResponse struct {
 }
 
 type WSMessage struct {
-	ID        string `json:"id"`
-	Sender    string `json:"sender"`
-	Avatar    string `json:"avatar"`
-	Role      string `json:"role"`
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp"`
+	ID          string `json:"id"`
+	Sender      string `json:"sender"`
+	SenderID    string `json:"senderId"`
+	DisplayName string `json:"displayName"`
+	Avatar      string `json:"avatar"`
+	AvatarUrl   string `json:"avatarUrl"`
+	Role        string `json:"role"`
+	Content     string `json:"content"`
+	Timestamp   string `json:"timestamp"`
 }
 
 type WSNotification struct {
@@ -86,9 +89,11 @@ type WSNotification struct {
 }
 
 type UserContext struct {
-	ID       string
-	Username string
-	Roles    []string
+	ID          string
+	Username    string
+	Roles       []string
+	DisplayName string
+	HasAvatar   bool
 }
 
 type contextKey string
@@ -169,6 +174,39 @@ func main() {
 	mux.Handle("GET /api/v1/auth/me", withAuth(http.HandlerFunc(handleMe), ""))
 	mux.Handle("POST /api/v1/auth/invites", withAuth(http.HandlerFunc(handleCreateInvite), "manage_community"))
 
+	// Settings — profile & preferences
+	mux.Handle("PATCH /api/v1/users/me", withAuth(http.HandlerFunc(handleUpdateProfile), ""))
+	mux.Handle("GET /api/v1/users/me/preferences", withAuth(http.HandlerFunc(handleGetPreferences), ""))
+	mux.Handle("PUT /api/v1/users/me/preferences", withAuth(http.HandlerFunc(handlePutPreferences), ""))
+
+	// Settings — password & sessions
+	mux.Handle("POST /api/v1/users/me/password", withAuth(http.HandlerFunc(handleChangePassword), ""))
+	mux.Handle("GET /api/v1/users/me/sessions", withAuth(http.HandlerFunc(handleListMySessions), ""))
+	mux.Handle("DELETE /api/v1/users/me/sessions/{id}", withAuth(http.HandlerFunc(handleRevokeSession), ""))
+	mux.Handle("POST /api/v1/users/me/sessions/revoke-others", withAuth(http.HandlerFunc(handleRevokeOtherSessions), ""))
+
+	// Settings — avatars
+	mux.Handle("POST /api/v1/users/me/avatar", withAuth(http.HandlerFunc(handleUploadAvatar), ""))
+	mux.Handle("DELETE /api/v1/users/me/avatar", withAuth(http.HandlerFunc(handleDeleteAvatar), ""))
+	mux.Handle("GET /api/v1/users/{id}/avatar", withAuth(http.HandlerFunc(handleGetAvatar), ""))
+
+	// Settings — admin: members
+	mux.Handle("GET /api/v1/admin/users", withAuth(http.HandlerFunc(handleAdminListUsers), "manage_members"))
+	mux.Handle("PUT /api/v1/admin/users/{id}/roles", withAuth(http.HandlerFunc(handleAdminSetUserRoles), "manage_roles"))
+	mux.Handle("POST /api/v1/admin/users/{id}/active", withAuth(http.HandlerFunc(handleAdminSetUserActive), "manage_members"))
+	mux.Handle("DELETE /api/v1/admin/users/{id}", withAuth(http.HandlerFunc(handleAdminDeleteUser), "manage_members"))
+
+	// Settings — admin: invites
+	mux.Handle("GET /api/v1/admin/invites", withAuth(http.HandlerFunc(handleAdminListInvites), "manage_community"))
+	mux.Handle("DELETE /api/v1/admin/invites/{id}", withAuth(http.HandlerFunc(handleAdminRevokeInvite), "manage_community"))
+
+	// Settings — admin: roles & permissions
+	mux.Handle("GET /api/v1/admin/roles", withAuth(http.HandlerFunc(handleAdminListRoles), "manage_roles"))
+	mux.Handle("GET /api/v1/admin/permissions", withAuth(http.HandlerFunc(handleAdminListPermissions), "manage_roles"))
+	mux.Handle("POST /api/v1/admin/roles", withAuth(http.HandlerFunc(handleAdminCreateRole), "manage_roles"))
+	mux.Handle("PUT /api/v1/admin/roles/{id}/permissions", withAuth(http.HandlerFunc(handleAdminSetRolePermissions), "manage_roles"))
+	mux.Handle("DELETE /api/v1/admin/roles/{id}", withAuth(http.HandlerFunc(handleAdminDeleteRole), "manage_roles"))
+
 	// Chat WebSocket
 	mux.Handle("GET /api/v1/chat/ws", withAuth(http.HandlerFunc(handleWebSocket), "view_channel"))
 
@@ -215,7 +253,7 @@ func main() {
 func validateSecrets() {
 	vars := []string{
 		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_BOOTSTRAP_TOKEN",
-		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_API_TOKEN",
+		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_ADMIN_USER", "GRIMMORY_ADMIN_PASSWORD",
 	}
 	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder"}
 	for _, v := range vars {
@@ -439,7 +477,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 		} else {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS, HEAD")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		if r.Method == "OPTIONS" {
@@ -532,13 +570,15 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	var username string
 	var active bool
 	var expiresAt time.Time
+	var displayName *string
+	var avatarFileID *string
 
 	err = dbPool.QueryRow(r.Context(), `
-		SELECT s.user_id, u.username, u.active, s.expires_at 
+		SELECT s.user_id, u.username, u.active, s.expires_at, u.display_name, u.avatar_file_id
 		FROM sessions s
 		JOIN users u ON s.user_id = u.id
 		WHERE s.token_hash = $1 AND s.revoked_at IS NULL
-	`, tokenHash).Scan(&userID, &username, &active, &expiresAt)
+	`, tokenHash).Scan(&userID, &username, &active, &expiresAt, &displayName, &avatarFileID)
 	if err != nil {
 		return nil, err
 	}
@@ -567,11 +607,26 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 		}
 	}
 
-	return &UserContext{
+	// Best-effort, throttled last-seen stamp; never blocks the request.
+	go func(hash string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		dbPool.Exec(ctx, `
+			UPDATE sessions SET last_seen_at = NOW()
+			WHERE token_hash = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '60 seconds')
+		`, hash)
+	}(tokenHash)
+
+	uc := &UserContext{
 		ID:       userID,
 		Username: username,
 		Roles:    roles,
-	}, nil
+	}
+	if displayName != nil {
+		uc.DisplayName = *displayName
+	}
+	uc.HasAvatar = avatarFileID != nil
+	return uc, nil
 }
 
 func hasPermission(ctx context.Context, user *UserContext, perm string, channelID *string) (bool, error) {
@@ -824,9 +879,14 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	token, tokenHash := generateToken()
 	expiry := time.Now().Add(12 * time.Hour)
 
+	ua := r.Header.Get("User-Agent")
+	if len(ua) > 255 {
+		ua = ua[:255]
+	}
 	_, err = dbPool.Exec(ctx, `
-		INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)
-	`, tokenHash, userID, expiry)
+		INSERT INTO sessions (token_hash, user_id, expires_at, user_agent, client_ip)
+		VALUES ($1, $2, $3, $4, $5)
+	`, tokenHash, userID, expiry, ua, clientIP)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -890,12 +950,30 @@ func handleMe(w http.ResponseWriter, r *http.Request) {
 
 func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
+	roleID := "Member"
+	var body struct {
+		RoleID string `json:"roleId"`
+	}
+	// Decode error ignored on purpose — older clients send no body.
+	if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.RoleID != "" {
+		roleID = body.RoleID
+	}
+	if roleID == "Owner" && !containsRole(user.Roles, "Owner") {
+		http.Error(w, "Forbidden: only an Owner can create Owner invites", http.StatusForbidden)
+		return
+	}
+	var exists bool
+	if err := dbPool.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)`, roleID).Scan(&exists); err != nil || !exists {
+		http.Error(w, "Bad Request: unknown role", http.StatusBadRequest)
+		return
+	}
 	rawToken, tokenHash := generateToken()
 	expiry := time.Now().Add(7 * 24 * time.Hour) // Invite valid for 7 days
 
 	_, err := dbPool.Exec(r.Context(), `
-		INSERT INTO invites (token_hash, creator_id, expires_at) VALUES ($1, $2, $3)
-	`, tokenHash, user.ID, expiry)
+		INSERT INTO invites (token_hash, creator_id, expires_at, role_id) VALUES ($1, $2, $3, $4)
+	`, tokenHash, user.ID, expiry, roleID)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -905,6 +983,7 @@ func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"invite_token": rawToken,
 		"expires_at":   expiry.Format(time.RFC3339),
+		"role_id":      roleID,
 	})
 }
 
@@ -935,10 +1014,11 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 
 	var expiresAt time.Time
 	var usedAt *time.Time
+	var inviteRole *string
 
 	err := dbPool.QueryRow(ctx, `
-		SELECT expires_at, used_at FROM invites WHERE token_hash = $1
-	`, tokenHash).Scan(&expiresAt, &usedAt)
+		SELECT expires_at, used_at, role_id FROM invites WHERE token_hash = $1
+	`, tokenHash).Scan(&expiresAt, &usedAt, &inviteRole)
 	if err != nil {
 		http.Error(w, "Invalid or expired invite token", http.StatusBadRequest)
 		return
@@ -976,10 +1056,14 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Assign default role Member
+	// Assign the invite's role, defaulting to Member
+	assignRole := "Member"
+	if inviteRole != nil && *inviteRole != "" {
+		assignRole = *inviteRole
+	}
 	_, err = tx.Exec(ctx, `
-		INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Member')
-	`, userID)
+		INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)
+	`, userID, assignRole)
 	if err != nil {
 		tx.Rollback(ctx)
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -1171,9 +1255,12 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		// Get sender details
 		var roles []string
+		var displayName string
+		var hasAvatar bool
 		err = dbPool.QueryRow(ctx, `
-			SELECT username FROM users WHERE id = $1
-		`, userID).Scan(&username)
+			SELECT username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
+			FROM users WHERE id = $1
+		`, userID).Scan(&username, &displayName, &hasAvatar)
 		if err != nil {
 			continue
 		}
@@ -1200,15 +1287,23 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			avatar = strings.ToUpper(username[:2])
 		}
 
+		avatarURL := ""
+		if hasAvatar {
+			avatarURL = "/api/v1/users/" + userID + "/avatar"
+		}
+
 		broadcastMsg := WSNotification{
 			Type: "message",
 			Message: &WSMessage{
-				ID:        msgID,
-				Sender:    username,
-				Avatar:    avatar,
-				Role:      role,
-				Content:   incoming.Content,
-				Timestamp: timestamp.Format("03:04 pm"),
+				ID:          msgID,
+				Sender:      username,
+				SenderID:    userID,
+				DisplayName: displayName,
+				Avatar:      avatar,
+				AvatarUrl:   avatarURL,
+				Role:        role,
+				Content:     incoming.Content,
+				Timestamp:   timestamp.Format("03:04 pm"),
 			},
 		}
 
@@ -1256,7 +1351,8 @@ func handleListChannels(w http.ResponseWriter, r *http.Request) {
 
 func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, error) {
 	rows, err := dbPool.Query(ctx, `
-		SELECT m.id::text, u.username, m.content, m.created_at
+		SELECT m.id::text, u.id::text, u.username, COALESCE(u.display_name, ''),
+			u.avatar_file_id IS NOT NULL, m.content, m.created_at
 		FROM messages m
 		JOIN users u ON m.user_id = u.id
 		WHERE m.channel_id = $1
@@ -1272,7 +1368,8 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 	for rows.Next() {
 		var msg WSMessage
 		var t time.Time
-		if err := rows.Scan(&msg.ID, &msg.Sender, &msg.Content, &t); err != nil {
+		var hasAvatar bool
+		if err := rows.Scan(&msg.ID, &msg.SenderID, &msg.Sender, &msg.DisplayName, &hasAvatar, &msg.Content, &t); err != nil {
 			return nil, err
 		}
 		msg.Timestamp = t.Format("03:04 pm")
@@ -1280,6 +1377,9 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 			msg.Avatar = strings.ToUpper(msg.Sender[:2])
 		} else {
 			msg.Avatar = "MB"
+		}
+		if hasAvatar {
+			msg.AvatarUrl = "/api/v1/users/" + msg.SenderID + "/avatar"
 		}
 
 		// Resolve role
@@ -1697,12 +1797,18 @@ func handleJellyfinDirectProxy(w http.ResponseWriter, r *http.Request) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func handleGrimmoryProxy(w http.ResponseWriter, r *http.Request) {
-	grimmoryURL, _ := url.Parse("http://grimmory:6060")
+	grimmoryURL, _ := url.Parse(grimmoryBaseURL)
 	proxy := httputil.NewSingleHostReverseProxy(grimmoryURL)
+	// Grimmory rejects static tokens; inject a JWT minted via admin login.
+	tok, err := getGrimmoryToken(r.Context())
+	if err != nil {
+		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	originalDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", os.Getenv("GRIMMORY_API_TOKEN")))
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	proxy.ServeHTTP(w, r)
 }
@@ -1905,41 +2011,49 @@ func handleUploadBook(w http.ResponseWriter, r *http.Request) {
 	processUpload(w, r, user.ID, true)
 }
 
+var defaultUploadExts = map[string]bool{
+	".pdf": true, ".epub": true, ".jpg": true, ".jpeg": true,
+	".png": true, ".webp": true, ".mp3": true, ".m4a": true,
+	".ogg": true, ".wav": true, ".mp4": true, ".webm": true,
+}
+
 func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, isBook bool) {
-	// 100 MiB limit
-	r.Body = http.MaxBytesReader(w, r.Body, 104857600)
-	err := r.ParseMultipartForm(104857600)
+	processUploadWithLimits(w, r, uploaderID, isBook, 104857600, defaultUploadExts, true)
+}
+
+// processUploadWithLimits stages, scans, and stores a multipart upload. On
+// failure it writes the error response and returns ok=false. On success it
+// returns the new files row ID; when writeResponse is true it also writes the
+// original 201 upload JSON.
+func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID string, isBook bool, maxBytes int64, extWhitelist map[string]bool, writeResponse bool) (string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	err := r.ParseMultipartForm(maxBytes)
 	if err != nil {
-		http.Error(w, "File size exceeds 100 MiB limit", http.StatusBadRequest)
-		return
+		http.Error(w, fmt.Sprintf("File size exceeds %d MiB limit", maxBytes/(1024*1024)), http.StatusBadRequest)
+		return "", false
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "Missing file in multipart form (key 'file')", http.StatusBadRequest)
-		return
+		return "", false
 	}
 	defer file.Close()
 
 	if len(header.Filename) > 255 {
 		http.Error(w, "Filename too long", http.StatusBadRequest)
-		return
+		return "", false
 	}
 
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowedExts := map[string]bool{
-		".pdf": true, ".epub": true, ".jpg": true, ".jpeg": true,
-		".png": true, ".webp": true, ".mp3": true, ".m4a": true,
-		".ogg": true, ".wav": true, ".mp4": true, ".webm": true,
-	}
-	if !allowedExts[ext] {
+	if !extWhitelist[ext] {
 		http.Error(w, "File extension not allowed", http.StatusBadRequest)
-		return
+		return "", false
 	}
 
 	if isBook && ext != ".pdf" && ext != ".epub" {
 		http.Error(w, "Only PDF and EPUB are allowed for book uploads", http.StatusBadRequest)
-		return
+		return "", false
 	}
 
 	// Staging path
@@ -1948,7 +2062,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	outFS, err := os.Create(tempPath)
 	if err != nil {
 		http.Error(w, "Failed to stage upload file", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 	defer outFS.Close()
 
@@ -1968,7 +2082,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	if !allowedMimes[detectedMime] && !strings.HasPrefix(detectedMime, "audio/") && !strings.HasPrefix(detectedMime, "video/") {
 		os.Remove(tempPath)
 		http.Error(w, "MIME type verification failed", http.StatusBadRequest)
-		return
+		return "", false
 	}
 
 	// Write teaser to hash/file
@@ -1980,7 +2094,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	if err != nil {
 		os.Remove(tempPath)
 		http.Error(w, "Failed to save file", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 	totalSize := int64(n) + written
 
@@ -1994,7 +2108,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	if err != nil {
 		os.Remove(tempPath)
 		http.Error(w, "Failed to scan file: local staging open error", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 	clean, scanStatus, scanErr := scanFileWithClamAV(scanFile)
 	scanFile.Close()
@@ -2002,7 +2116,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	if scanErr != nil {
 		os.Remove(tempPath)
 		http.Error(w, "Security Scan failed: "+scanErr.Error(), http.StatusServiceUnavailable)
-		return
+		return "", false
 	}
 
 	if !clean {
@@ -2014,7 +2128,7 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 		`, header.Filename, fileHash, uploaderID, scanStatus, totalSize, detectedMime)
 
 		http.Error(w, "Upload Rejected: Security Scan detected malicious code.", http.StatusUnprocessableEntity)
-		return
+		return "", false
 	}
 
 	// File is clean, promote atomically
@@ -2035,14 +2149,14 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 		if err != nil {
 			os.Remove(tempPath)
 			http.Error(w, "Atomic move failed", http.StatusInternalServerError)
-			return
+			return "", false
 		}
 		defer input.Close()
 		output, err := os.Create(destPath)
 		if err != nil {
 			os.Remove(tempPath)
 			http.Error(w, "Atomic move failed", http.StatusInternalServerError)
-			return
+			return "", false
 		}
 		defer output.Close()
 		_, _ = io.Copy(output, input)
@@ -2058,16 +2172,19 @@ func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, is
 	`, header.Filename, fileHash, uploaderID, destKey, totalSize, detectedMime).Scan(&fileID)
 	if err != nil {
 		http.Error(w, "Database record failed", http.StatusInternalServerError)
-		return
+		return "", false
 	}
 
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
-		"id":          fileID,
-		"filename":    header.Filename,
-		"sha256":      fileHash,
-		"scan_status": "clean",
-	})
+	if writeResponse {
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]string{
+			"id":          fileID,
+			"filename":    header.Filename,
+			"sha256":      fileHash,
+			"scan_status": "clean",
+		})
+	}
+	return fileID, true
 }
 
 func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
