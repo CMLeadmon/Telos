@@ -3,6 +3,7 @@ import "@/styles/styles.css";
 import "@/styles/app.css";
 import "@/styles/chat.css";
 import "@/styles/landing.css";
+import "@/styles/files.css";
 import { ThemeSync } from "@/components/ThemeSync";
 
 export const metadata: Metadata = {

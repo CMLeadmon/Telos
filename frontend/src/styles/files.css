@@ -1,0 +1,52 @@
+/* Files module — drop zone, upload rows, file table (DS tokens throughout) */
+.fwrap{flex:1;min-height:0;display:flex;flex-direction:column;gap:14px;padding:22px 26px;
+  overflow-y:auto;position:relative;z-index:2}
+
+.dropzone{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;
+  padding:26px;border:1.5px dashed var(--line-2);border-radius:var(--r-lg);color:var(--muted);
+  cursor:pointer;transition:border-color .12s,background .12s;text-align:center}
+.dropzone:hover,.dropzone.drag{border-color:var(--accent);background:rgba(2,181,255,.05);color:var(--ink)}
+.dropzone .dz-hint{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;color:var(--faint)}
+
+.destrow{display:flex;align-items:center;gap:8px}
+
+.fnotice{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 14px;
+  border:1px solid var(--line-2);border-left:3px solid var(--rose);border-radius:var(--r);
+  font-family:var(--f-mono);font-size:11.5px;color:var(--muted);background:var(--surface-2)}
+
+.uprow{display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--line-2);
+  border-radius:var(--r);background:var(--surface-2);font-size:13px}
+.uprow .upname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.uprow .upstate{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);flex:none}
+.uprow.err{border-left:3px solid var(--rose)}
+.uprow.err .upstate{color:var(--rose);text-transform:none;letter-spacing:.04em}
+.upbar{flex:2;max-width:280px;height:6px;border-radius:var(--r-pill);background:var(--input);overflow:hidden}
+.upbar b{display:block;height:100%;background:var(--accent);transition:width .15s}
+.upbar.scan b{width:40%;animation:fscan 1.1s ease-in-out infinite alternate}
+@keyframes fscan{from{margin-left:0}to{margin-left:60%}}
+
+.ftable{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:var(--r-lg);
+  overflow:hidden;background:var(--surface)}
+.frow{display:grid;grid-template-columns:40px minmax(0,1fr) 96px 112px 120px 92px;align-items:center;
+  gap:8px;padding:10px 16px;border-bottom:1px solid var(--line);font-size:13.5px}
+.frow:last-child{border-bottom:0}
+.frow.head{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);background:var(--surface-2)}
+.frow .ficon{color:var(--faint);display:flex}
+.frow .fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.frow .fmeta{font-family:var(--f-mono);font-size:11.5px;color:var(--muted)}
+.frow.infected .ficon,.frow.infected .fname,.frow.infected .fmeta{opacity:.45}
+
+.scanpill{font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+  padding:2px 8px;border-radius:var(--r-pill);box-shadow:inset 0 0 0 1px var(--line-2);
+  color:var(--muted);justify-self:start}
+.scanpill.clean{color:var(--cyan);box-shadow:inset 0 0 0 1px var(--cyan)}
+.scanpill.infected{color:var(--rose);box-shadow:inset 0 0 0 1px var(--rose)}
+
+.facts{display:flex;gap:4px;justify-content:flex-end}
+.facts .iconbtn{width:32px;height:32px}
+.facts .iconbtn.danger:hover{color:var(--rose)}
+
+.fpager{display:flex;align-items:center;justify-content:center;gap:14px;padding:4px 0}
+.fpager .pageno{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.1em;color:var(--faint)}
