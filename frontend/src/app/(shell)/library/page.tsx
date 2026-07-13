@@ -1,16 +1,75 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpen, ExternalLink, ImageOff } from "lucide-react";
-import { libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { BookOpen, ExternalLink, ImageOff, Music } from "lucide-react";
+import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
   type FacetValue,
   type LibraryBook,
   useLibraryStore,
 } from "@/stores/useLibraryStore";
+import { useMediaStore } from "@/stores/useMediaStore";
 import { BookReader } from "@/components/library/BookReader";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
+
+function AudiobookShelf() {
+  const { libraries, libraryStatus, itemsByLibrary, fetchLibraries } =
+    useMediaStore();
+  const [playingId, setPlayingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (libraryStatus === "idle") void fetchLibraries();
+  }, [libraryStatus, fetchLibraries]);
+
+  // Jellyfin (verified live on 10.11.11) reports no CollectionType at all
+  // for "books"-typed libraries via /Users/{id}/Views, and a plain "music"
+  // collectionType is indistinguishable from a real music library — so name
+  // is the only reliable signal here. Admins name the Jellyfin library with
+  // "audiobook" in it (e.g. "Audiobooks").
+  const shelves = libraries.filter(
+    (lib) => lib.type === "audio" && lib.name.toLowerCase().includes("audiobook"),
+  );
+  if (shelves.length === 0) return null;
+
+  return (
+    <div className="audioshelf">
+      {shelves.map((lib) => {
+        const items = itemsByLibrary[lib.id] ?? [];
+        if (items.length === 0) return null;
+        return (
+          <div key={lib.id}>
+            <span className="railhead">{`// ${lib.name}`}</span>
+            {items.map((item) => (
+              <div key={item.id} className="audiorow">
+                <Music size={15} />
+                <span className="aname">{item.title}</span>
+                <span className="ameta">{item.duration}</span>
+                <button
+                  className="btn-ghost btn-sm"
+                  aria-label={`play ${item.title}`}
+                  onClick={() =>
+                    setPlayingId(playingId === item.id ? null : item.id)
+                  }
+                >
+                  {playingId === item.id ? "playing" : "play"}
+                </button>
+                {playingId === item.id && (
+                  <audio
+                    controls
+                    autoPlay
+                    data-testid="audiobook-player"
+                    src={`${apiBase()}/api/v1/stream/audio/${encodeURIComponent(item.id)}`}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 function FacetGroup({
   title,
@@ -210,6 +269,8 @@ export default function LibraryPage() {
               ))}
             </div>
           )}
+
+          <AudiobookShelf />
         </div>
       </div>
 

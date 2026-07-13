@@ -219,3 +219,50 @@ func TestValidateProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/Users", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]string{{"Id": "id-alice", "Name": "alice"}})
+	})
+	mux.HandleFunc("/Users/id-alice/Views", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"Items": []map[string]string{
+				{"Id": "lib-1", "Name": "Movies", "CollectionType": "movies"},
+				// Verified live against Jellyfin 10.11.11: it has no distinct
+				// "audiobooks" collection type — audiobook libraries are
+				// created with CollectionType "books".
+				{"Id": "lib-2", "Name": "Audiobooks", "CollectionType": "books"},
+			},
+		})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = srv.URL
+	defer func() { jellyfinBaseURL = oldBase }()
+	oldRedis := redisClient
+	redisClient = nil
+	defer func() { redisClient = oldRedis }()
+
+	req := httptest.NewRequest("GET", "/api/v1/media", nil)
+	rec := httptest.NewRecorder()
+	handleMedia(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	var libs []LibraryItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &libs); err != nil {
+		t.Fatal(err)
+	}
+	if len(libs) != 2 {
+		t.Fatalf("expected 2 libraries, got %+v", libs)
+	}
+	if libs[1].Type != "audio" || libs[1].CollectionType != "books" {
+		t.Fatalf("expected audio/books mapping, got %+v", libs[1])
+	}
+	if libs[0].Type != "video" || libs[0].CollectionType != "movies" {
+		t.Fatalf("expected video/movies mapping, got %+v", libs[0])
+	}
+}

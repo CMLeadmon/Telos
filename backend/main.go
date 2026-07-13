@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -23,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,6 +148,9 @@ func main() {
 	}
 	if err := os.MkdirAll("/data/shared/staging/library", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging library dir: %v", err)
+	}
+	if err := os.MkdirAll("/data/shared/media", 0755); err != nil {
+		log.Printf("Warning: Failed to create media dir: %v", err)
 	}
 	if err := os.MkdirAll("/data/shared/bookdrop", 0755); err != nil {
 		log.Printf("Warning: Failed to create bookdrop dir: %v", err)
@@ -1483,9 +1486,10 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 }
 
 type LibraryItem struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Type string `json:"type"` // "video" or "audio"
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Type           string `json:"type"`           // "video" or "audio"
+	CollectionType string `json:"collectionType"` // Jellyfin's raw, lowercased collection type
 }
 
 func handleMedia(w http.ResponseWriter, r *http.Request) {
@@ -1544,13 +1548,17 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	for _, item := range jResp.Items {
 		mediaType := "video"
 		cType := strings.ToLower(item.CollectionType)
-		if cType == "music" || cType == "audiobooks" || cType == "audio" || cType == "podcasts" {
+		// Jellyfin 10.9+ has no distinct "audiobooks" collection type; audiobook
+		// libraries are created as CollectionType "books". Telos gets text
+		// e-books from Grimmory, so any Jellyfin "books" library is audio here.
+		if cType == "music" || cType == "audiobooks" || cType == "audio" || cType == "podcasts" || cType == "books" {
 			mediaType = "audio"
 		}
 		libs = append(libs, LibraryItem{
-			ID:   item.ID,
-			Name: item.Name,
-			Type: mediaType,
+			ID:             item.ID,
+			Name:           item.Name,
+			Type:           mediaType,
+			CollectionType: cType,
 		})
 	}
 
@@ -1959,6 +1967,24 @@ func scanFileWithClamAV(r io.Reader) (bool, string, error) {
 	return false, "failed", fmt.Errorf("unexpected scan response: %s", respStr)
 }
 
+func getUniqueFilename(dir, filename string) string {
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+
+	destPath := filepath.Join(dir, filename)
+	if _, err := os.Stat(destPath); os.IsNotExist(err) {
+		return filename
+	}
+
+	for i := 1; ; i++ {
+		newName := fmt.Sprintf("%s_%d%s", base, i, ext)
+		destPath = filepath.Join(dir, newName)
+		if _, err := os.Stat(destPath); os.IsNotExist(err) {
+			return newName
+		}
+	}
+}
+
 func handleListFiles(w http.ResponseWriter, r *http.Request) {
 	pageStr := r.URL.Query().Get("page")
 	page, err := strconv.Atoi(pageStr)
@@ -1967,18 +1993,6 @@ func handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 	limit := 20
 	offset := (page - 1) * limit
-
-	rows, err := dbPool.Query(r.Context(), `
-		SELECT id, filename, sha256, uploader_id, scan_status, size_bytes, mime_type, created_at 
-		FROM files 
-		ORDER BY created_at DESC 
-		LIMIT $1 OFFSET $2
-	`, limit, offset)
-	if err != nil {
-		http.Error(w, "Failed to list files", http.StatusInternalServerError)
-		return
-	}
-	defer rows.Close()
 
 	type FileResponse struct {
 		ID         string    `json:"id"`
@@ -1992,21 +2006,102 @@ func handleListFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var files []FileResponse
-	for rows.Next() {
-		var f FileResponse
-		var uploader sql.NullString
-		if err := rows.Scan(&f.ID, &f.Filename, &f.SHA256, &uploader, &f.ScanStatus, &f.SizeBytes, &f.MimeType, &f.CreatedAt); err != nil {
-			http.Error(w, "Failed to scan file entry", http.StatusInternalServerError)
-			return
+	rootDir := "/data/shared/media"
+
+	err = filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // ignore individual file errors
 		}
-		if uploader.Valid {
-			f.UploaderID = uploader.String
+		if d.IsDir() {
+			if strings.HasPrefix(d.Name(), ".") && path != rootDir {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		files = append(files, f)
+		if strings.HasPrefix(d.Name(), ".") {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(rootDir, path)
+		if err != nil {
+			return nil
+		}
+
+		id := base64.RawURLEncoding.EncodeToString([]byte(relPath))
+		h := sha256.Sum256([]byte(relPath))
+		sha256Hex := hex.EncodeToString(h[:])
+
+		mimeType := ""
+		ext := strings.ToLower(filepath.Ext(relPath))
+		switch ext {
+		case ".mp4":
+			mimeType = "video/mp4"
+		case ".mkv":
+			mimeType = "video/x-matroska"
+		case ".mp3":
+			mimeType = "audio/mpeg"
+		case ".m4a":
+			mimeType = "audio/mp4"
+		case ".wav":
+			mimeType = "audio/wav"
+		case ".ogg":
+			mimeType = "audio/ogg"
+		case ".webm":
+			mimeType = "video/webm"
+		case ".pdf":
+			mimeType = "application/pdf"
+		case ".epub":
+			mimeType = "application/epub+zip"
+		case ".jpg", ".jpeg":
+			mimeType = "image/jpeg"
+		case ".png":
+			mimeType = "image/png"
+		case ".webp":
+			mimeType = "image/webp"
+		default:
+			mimeType = "application/octet-stream"
+		}
+
+		files = append(files, FileResponse{
+			ID:         id,
+			Filename:   relPath,
+			SHA256:     sha256Hex,
+			UploaderID: "",
+			ScanStatus: "clean",
+			SizeBytes:  info.Size(),
+			MimeType:   mimeType,
+			CreatedAt:  info.ModTime(),
+		})
+		return nil
+	})
+
+	if err != nil {
+		http.Error(w, "Failed to scan media directory", http.StatusInternalServerError)
+		return
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].CreatedAt.After(files[j].CreatedAt)
+	})
+
+	var paginatedFiles []FileResponse
+	if offset < len(files) {
+		end := offset + limit
+		if end > len(files) {
+			end = len(files)
+		}
+		paginatedFiles = files[offset:end]
+	} else {
+		paginatedFiles = []FileResponse{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(files)
+	json.NewEncoder(w).Encode(paginatedFiles)
 }
 
 func handleUploadFile(w http.ResponseWriter, r *http.Request) {
@@ -2145,9 +2240,12 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 	if isBook {
 		destDir = "/data/shared/bookdrop"
 		destKey = fileHash + ext
-	} else {
+	} else if !writeResponse {
 		destDir = "/data/shared/staging/library"
 		destKey = fileHash + ext
+	} else {
+		destDir = "/data/shared/media"
+		destKey = getUniqueFilename(destDir, header.Filename)
 	}
 
 	destPath := filepath.Join(destDir, destKey)
@@ -2171,16 +2269,20 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 		os.Remove(tempPath)
 	}
 
-	// Insert into DB
+	// Insert into DB (skip for standard media library files)
 	var fileID string
-	err = dbPool.QueryRow(r.Context(), `
-		INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type)
-		VALUES ($1, $2, $3, 'clean', $4, $5, $6)
-		RETURNING id
-	`, header.Filename, fileHash, uploaderID, destKey, totalSize, detectedMime).Scan(&fileID)
-	if err != nil {
-		http.Error(w, "Database record failed", http.StatusInternalServerError)
-		return "", false
+	if !isBook && writeResponse {
+		fileID = base64.RawURLEncoding.EncodeToString([]byte(destKey))
+	} else {
+		err = dbPool.QueryRow(r.Context(), `
+			INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type)
+			VALUES ($1, $2, $3, 'clean', $4, $5, $6)
+			RETURNING id
+		`, header.Filename, fileHash, uploaderID, destKey, totalSize, detectedMime).Scan(&fileID)
+		if err != nil {
+			http.Error(w, "Database record failed", http.StatusInternalServerError)
+			return "", false
+		}
 	}
 
 	if writeResponse {
@@ -2202,6 +2304,22 @@ func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try base64 decoding first (filesystem paths)
+	if relPathBytes, err := base64.RawURLEncoding.DecodeString(id); err == nil {
+		relPath := string(relPathBytes)
+		filePath := filepath.Join("/data/shared/media", relPath)
+		cleanPath := filepath.Clean(filePath)
+		if strings.HasPrefix(cleanPath, "/data/shared/media") && cleanPath != "/data/shared/media" {
+			if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
+				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(cleanPath)))
+				w.Header().Set("X-Content-Type-Options", "nosniff")
+				http.ServeFile(w, r, cleanPath)
+				return
+			}
+		}
+	}
+
+	// Fallback to database lookup
 	var storageKey string
 	var filename string
 	var mimeType string
@@ -2231,6 +2349,25 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try base64 decoding first
+	if relPathBytes, err := base64.RawURLEncoding.DecodeString(id); err == nil {
+		relPath := string(relPathBytes)
+		filePath := filepath.Join("/data/shared/media", relPath)
+		cleanPath := filepath.Clean(filePath)
+		if strings.HasPrefix(cleanPath, "/data/shared/media") && cleanPath != "/data/shared/media" {
+			if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
+				if err := os.Remove(cleanPath); err != nil {
+					http.Error(w, "Failed to delete file from disk", http.StatusInternalServerError)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+				return
+			}
+		}
+	}
+
+	// Fallback to database deletion
 	var storageKey string
 	err := dbPool.QueryRow(r.Context(), `
 		SELECT storage_key FROM files WHERE id = $1
