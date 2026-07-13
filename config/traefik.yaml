@@ -8,6 +8,8 @@ entryPoints:
           scheme: https
   websecure:
     address: ":443"
+  turn:
+    address: ":5349"
 
 providers:
   docker:

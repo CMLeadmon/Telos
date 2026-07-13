@@ -31,6 +31,7 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "5349:5349" # TURN/TLS — terminated by Traefik, forwarded to livekit:5349
     volumes:
       - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock:ro,z
       - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
