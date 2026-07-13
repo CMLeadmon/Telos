@@ -211,6 +211,7 @@ services:
     environment:
       - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
       - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - "LIVEKIT_TURN_DOMAIN=${TELOS_DOMAIN}"
     ports:
       - "7880:7880" # LiveKit websocket — dev fallback URL (frontend livekitUrl())
       - "7881:7881"

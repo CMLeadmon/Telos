@@ -4,5 +4,10 @@ rtc:
   port_range_start: 50000
   port_range_end: 50100
   use_external_ip: true
+turn:
+  enabled: true
+  tls_port: 5349
+  udp_port: 3478
+  external_tls: true
 redis:
   address: redis:6379
