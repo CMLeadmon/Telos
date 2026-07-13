@@ -68,6 +68,7 @@ services:
       - TELOS_ENV=${TELOS_ENV:-}
       - TELOS_BOOTSTRAP_TOKEN=${TELOS_BOOTSTRAP_TOKEN}
     volumes:
+      - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/shared/media:z
       - ${STORAGE_PATH:-/mnt/storage/shared}/staging:/data/shared/staging:z
       - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/data/shared/bookdrop:z
     labels:
@@ -211,6 +212,7 @@ services:
       - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
       - REDIS_PASSWORD=${REDIS_PASSWORD}
     ports:
+      - "7880:7880" # LiveKit websocket — dev fallback URL (frontend livekitUrl())
       - "7881:7881"
       - "3478:3478/udp"
       - "50000-50100:50000-50100/udp"
