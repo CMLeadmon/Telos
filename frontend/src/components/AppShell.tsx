@@ -22,7 +22,10 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useVoiceSessionStore } from "@/stores/useVoiceSessionStore";
 import { useThemeStore } from "@/stores/useThemeStore";
+import { usePreferencesStore } from "@/stores/usePreferencesStore";
+import { avatarUrl } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
+import { VoiceDock } from "@/components/VoiceDock";
 
 const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare },
@@ -36,7 +39,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { user, status, fetchMe, logout } = useAuthStore();
   const theme = useThemeStore((s) => s.theme);
-  const toggleTheme = useThemeStore((s) => s.toggle);
+  // Theme toggling routes through usePreferencesStore so it persists server-side.
+  const prefsLoaded = usePreferencesStore((s) => s.loaded);
+  const loadPrefs = usePreferencesStore((s) => s.load);
   const { channels, activeChannelId, fetchChannels, connect } =
     useChatSessionStore();
   const voice = useVoiceSessionStore();
@@ -44,6 +49,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (status === "unknown") void fetchMe();
   }, [status, fetchMe]);
+
+  useEffect(() => {
+    if (status === "authenticated" && !prefsLoaded) void loadPrefs();
+  }, [status, prefsLoaded, loadPrefs]);
 
   useEffect(() => {
     if (status === "anonymous") router.replace("/login/");
@@ -71,7 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="app app--viewport" data-testid="app-shell">
       <div className="topbar">
         <div className="brand">
-          <BrandLogo />
+          <BrandLogo size={69} />
           <span className="word">TELOS</span>
         </div>
         <div className="searchbar">
@@ -80,7 +89,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
         <div className="topacts">
           <span className="chip">
-            <span className="dot" /> {user?.Username}
+            {user?.HasAvatar ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img className="chipav" src={avatarUrl(user.ID)} alt="" />
+            ) : (
+              <span className="dot" />
+            )}{" "}
+            {user?.DisplayName || user?.Username}
           </span>
           <button className="iconbtn" aria-label="oracle">
             <Sparkles size={18} />
@@ -88,13 +103,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <button className="iconbtn" aria-label="notifications">
             <Bell size={18} />
           </button>
-          <button className="iconbtn" aria-label="settings">
+          <Link
+            href="/settings"
+            className={`iconbtn${pathname.startsWith("/settings") ? " on" : ""}`}
+            aria-label="settings"
+          >
             <Settings size={18} />
-          </button>
+          </Link>
           <button
             className="iconbtn"
             aria-label="toggle theme"
-            onClick={toggleTheme}
+            onClick={() =>
+              void usePreferencesStore
+                .getState()
+                .save({ theme: theme === "synthwave" ? "ink" : "synthwave" })
+            }
           >
             {theme === "synthwave" ? <Sun size={18} /> : <Moon size={18} />}
           </button>
@@ -183,6 +206,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </div>
             )}
           </div>
+          <VoiceDock />
           <div className="railfoot">
             <div className="row">
               <span className="dot" style={{ width: 5, height: 5 }} /> tunnel:

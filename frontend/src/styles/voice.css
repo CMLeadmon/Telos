@@ -1,0 +1,129 @@
+/* Voice dock — pinned above the rail footer while in a call. */
+.voicedock {
+  margin: 8px 10px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+}
+.voicedock--error {
+  border-color: var(--crimson);
+}
+.vderr {
+  color: var(--crimson);
+  line-height: 1.4;
+  font-family: var(--f-mono);
+}
+.vdhead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.vddot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--r-pill);
+  background: var(--muted);
+  flex: none;
+}
+.vddot.ok {
+  background: var(--live);
+}
+.vdchan {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.vdstatus {
+  margin-left: auto;
+  color: var(--faint);
+  flex: none;
+  font-family: var(--f-mono);
+}
+.vdppl {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.vdppl li {
+  color: var(--muted);
+  padding-left: 12px;
+  position: relative;
+}
+.vdppl li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: transparent;
+  border: 1px solid var(--muted);
+}
+.vdppl li.speaking {
+  color: var(--live);
+}
+.vdppl li.speaking::before {
+  background: var(--live);
+  border-color: var(--live);
+}
+.vddevices {
+  width: 100%;
+}
+.vdrow {
+  display: flex;
+  gap: 6px;
+}
+.vdbtn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.vdbtn:hover {
+  border-color: var(--line-2);
+}
+.vdbtn.wide {
+  font-family: var(--f-mono);
+  font-size: 12px;
+}
+.vdbtn.off {
+  color: var(--crimson);
+  border-color: var(--crimson);
+}
+.vdbtn.danger:hover {
+  color: var(--crimson);
+  border-color: var(--crimson);
+}
+
+/* Mic-test level meter (Voice & Audio settings section). */
+.micmeter {
+  height: 8px;
+  border-radius: var(--r-xs);
+  background: var(--line);
+  overflow: hidden;
+  margin: 8px 0;
+}
+.micmeter-fill {
+  height: 100%;
+  background: var(--live);
+  transition: width 60ms linear;
+}
