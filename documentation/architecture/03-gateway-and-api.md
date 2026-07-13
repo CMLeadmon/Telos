@@ -57,8 +57,14 @@ tls:
 | Audio Stream | `GET /api/v1/stream/audio/{id}` | Jellyfin `GET /Audio/{itemId}/stream` | Proxies a direct audio stream for the requested item. |
 | Video Playback | `GET /api/v1/stream/video/{id}` | Jellyfin `GET /Videos/{itemId}/main.m3u8?PlaySessionId={sessionId}` | Proxies the HLS playlist and segment stream for adaptive video playback. |
 | Digital Library | `GET /api/v1/library/books` | Grimmory `GET /api/v1/books` | Lists the book catalog for the Telos library view. |
-| Library Facets | `GET /api/v1/library/facets` | Grimmory `GET /api/v1/books/facets` | Returns facet values (author, series, tags, etc.) for catalog filtering. |
-| Read Progress | `POST /api/v1/library/progress` | Grimmory `POST /api/v1/books/progress` | Persists reading-progress updates against a book. |
+| Library Facets | `GET /api/v1/library/facets` | *(derived, no upstream call)* | The deployed Grimmory build has no `/api/v1/books/facets` endpoint (500s) — `telos-core` derives author/category/language/format facets from the cached book list instead. |
+| Book Cover | `GET /api/v1/library/books/{id}/cover` | Grimmory `GET /api/v1/media/book/{id}/thumbnail` | Proxies the cover image; the upstream response is mislabeled `application/json`, so the gateway forces `image/jpeg`. |
+| Book Content | `GET /api/v1/library/books/{id}/content` | Grimmory `GET /api/v1/books/{id}/content` | Streams the raw EPUB/PDF bytes for the in-app reader or a PDF download. |
+| Read Progress | `GET`/`PUT /api/v1/library/books/{id}/progress` | *(none — stored in `telos-core` Postgres)* | Grimmory is reached over a single shared admin-credential JWT (see below), so per-user reading progress cannot live upstream; it's stored locally against the Telos user id and Grimmory's numeric book id. |
+
+Grimmory (a BookLore-derived image) does not accept a static bearer token — every request needs a JWT minted via `POST /api/v1/auth/login`, which `telos-core` performs on startup and on token expiry using `GRIMMORY_ADMIN_USER`/`GRIMMORY_ADMIN_PASSWORD` credentials, caching the resulting ~2-hour token in memory. This supersedes the OIDC federation model described for Grimmory below: Grimmory is addressed as a single admin account, and Telos-side identity/permissions (the `view_library` permission) gate access instead.
+
+Audiobooks are not served by Grimmory. They're ordinary Jellyfin audio libraries (see the Media Stream/Catalog rows above); the Library module's audiobook shelf filters Jellyfin's reported libraries down to ones whose name contains "audiobook", since Jellyfin (verified on 10.11.11) does not reliably surface a distinct audiobook `CollectionType` through `/Users/{id}/Views`.
 
 ## 4. Unified identity (OIDC/SSO)
 

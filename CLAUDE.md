@@ -56,6 +56,6 @@ curl http://localhost:8080/api/v1/health
 ## Build Order (roadmap phases)
 
 1. Chat Core (Postgres schemas, Redis, WS gateway) — implemented
-2. Storage & Media (Jellyfin, HLS player) — implemented, Files module UI is still static mock
-3. Catalog (Grimmory integration, e-book reader) — not started in backend; Books module UI is static mock
+2. Storage & Media (Jellyfin, HLS player) — implemented, including the Files module UI (list, upload, download, delete)
+3. Catalog (Grimmory integration, e-book reader) — implemented: catalog with facet filtering, in-app EPUB reader (epubjs) with per-user progress stored in Telos Postgres, audiobooks shelf via Jellyfin. Grimmory is reached via admin-credential JWT login, not OIDC federation — see `documentation/architecture/03-gateway-and-api.md` §3.
 4. Real-Time (LiveKit + voice store) — token minting and client store implemented

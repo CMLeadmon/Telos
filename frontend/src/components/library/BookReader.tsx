@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { Book, Rendition } from "epubjs";
 import { api, libraryContentUrl } from "@/lib/api";
@@ -38,7 +39,10 @@ export function BookReader({
     // epubjs touches the DOM; load it and the book bytes only in the browser.
     Promise.all([
       import("epubjs"),
-      fetch(libraryContentUrl(book.id), { credentials: "include" }).then(
+      fetch(libraryContentUrl(book.id), {
+        credentials: "include",
+        cache: "no-store",
+      }).then(
         (r) => {
           if (!r.ok) throw new Error(`content fetch failed (${r.status})`);
           return r.arrayBuffer();
@@ -59,7 +63,12 @@ export function BookReader({
         rendition.on("relocated", (location: Relocation) => {
           const fraction = location.start.percentage || 0;
           const cfi = location.start.cfi;
-          if (fraction > 0) setPercent(fraction);
+          // epubjs reports percentage 0 for every relocate fired before
+          // locations.generate() resolves (including the initial display
+          // of a restored position) — treat that as "not yet known" rather
+          // than a real position, so it never clobbers saved progress.
+          if (fraction <= 0) return;
+          setPercent(fraction);
           if (saveTimer.current) clearTimeout(saveTimer.current);
           saveTimer.current = setTimeout(() => {
             void api(`/api/v1/library/books/${book.id}/progress`, {
@@ -122,7 +131,12 @@ export function BookReader({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  return (
+  // Portal to the document body: the app shell has an internal stacking
+  // context (.shellbody, z-index:4) that caps any z-index set inside it
+  // below the topbar (z-index:5) — a plain fixed-position overlay nested
+  // in the page tree gets trapped underneath it. No SSR guard needed:
+  // BookReader only ever mounts from a client-side click, never prerendered.
+  return createPortal(
     <div
       className="reader-overlay"
       data-testid="book-reader"
@@ -159,6 +173,7 @@ export function BookReader({
           </button>
         </>
       )}
-    </div>
+    </div>,
+    document.body,
   );
 }
