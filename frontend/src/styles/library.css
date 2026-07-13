@@ -1,0 +1,73 @@
+/* Library module — facet rail, cover grid, reader overlay (DS tokens throughout) */
+.library{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:0;
+  position:relative;z-index:2;overflow:hidden}
+@media (max-width:720px){.library{grid-template-columns:1fr}.library-rail{display:none}}
+
+.library-rail{border-right:1px solid var(--line);padding:18px 16px;overflow-y:auto;
+  display:flex;flex-direction:column;gap:18px}
+.library-rail .railgroup{display:flex;flex-direction:column;gap:6px}
+.library-rail .railhead{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint)}
+.library-rail .facetbtn{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:5px 10px;border:0;border-radius:var(--r);background:transparent;color:var(--muted);
+  font-size:12.5px;text-align:left;cursor:pointer;transition:background .12s,color .12s}
+.library-rail .facetbtn:hover{background:var(--surface-2);color:var(--ink)}
+.library-rail .facetbtn.on{background:var(--surface-2);color:var(--accent);
+  box-shadow:inset 0 0 0 1px var(--line-2)}
+.library-rail .facetbtn .fcount{font-family:var(--f-mono);font-size:10px;color:var(--faint)}
+
+.library-main{min-height:0;display:flex;flex-direction:column;gap:14px;padding:22px 26px;overflow-y:auto}
+.library-tools{display:flex;align-items:center;gap:12px}
+.library-search{flex:1;max-width:340px;padding:8px 12px;border:1px solid var(--line-2);
+  border-radius:var(--r);background:var(--input);color:var(--ink);font-size:13px}
+.library-search:focus{outline:none;border-color:var(--accent)}
+.library-count{font-family:var(--f-mono);font-size:11px;letter-spacing:.08em;color:var(--faint)}
+
+.library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
+.library-card{display:flex;flex-direction:column;gap:8px;border:1px solid var(--line);
+  border-radius:var(--r-lg);background:var(--surface);padding:10px;
+  transition:transform .12s,border-color .12s}
+.library-card:hover{transform:translateY(-2px);border-color:var(--line-2)}
+.library-card .coverwrap{aspect-ratio:2/3;border-radius:var(--r);overflow:hidden;
+  background:var(--surface-2);display:flex;align-items:center;justify-content:center;color:var(--faint)}
+.library-card .coverwrap img{width:100%;height:100%;object-fit:cover;display:block}
+.library-card .btitle{font-size:13px;font-weight:600;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.library-card .bauthors{font-size:11.5px;color:var(--muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.library-card .brow{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:auto}
+.library-card .fmtpill{font-family:var(--f-mono);font-size:9.5px;letter-spacing:.08em;
+  text-transform:uppercase;padding:2px 8px;border-radius:var(--r-pill);color:var(--cyan);
+  box-shadow:inset 0 0 0 1px var(--cyan)}
+.library-card .fmtpill.pdf{color:var(--rose);box-shadow:inset 0 0 0 1px var(--rose)}
+
+/* audiobooks shelf */
+.audioshelf{display:flex;flex-direction:column;gap:8px;margin-top:10px}
+.audioshelf .railhead{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint)}
+.audiorow{display:flex;align-items:center;gap:12px;padding:9px 14px;border:1px solid var(--line);
+  border-radius:var(--r);background:var(--surface);font-size:13px}
+.audiorow .aname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.audiorow .ameta{font-family:var(--f-mono);font-size:11px;color:var(--faint)}
+.audioshelf audio{width:100%;height:34px}
+
+/* reader overlay */
+.reader-overlay{position:fixed;inset:0;z-index:60;background:var(--surface);
+  display:flex;flex-direction:column}
+.reader-bar{display:flex;align-items:center;gap:14px;padding:10px 18px;
+  border-bottom:1px solid var(--line);background:var(--surface-2)}
+.reader-bar .reader-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;font-weight:600;font-size:14px}
+.reader-bar .reader-percent{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.1em;
+  color:var(--faint)}
+.reader-host{flex:1;min-height:0;background:#fff}
+.reader-host>div{height:100%}
+.reader-error{padding:40px;text-align:center;color:var(--rose);font-family:var(--f-mono);font-size:12.5px}
+.reader-loading{padding:40px;text-align:center;color:var(--faint);font-family:var(--f-mono);font-size:12px}
+.reader-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:64px;
+  display:flex;align-items:center;justify-content:center;border:1px solid var(--line-2);
+  border-radius:var(--r);background:var(--surface-2);color:var(--muted);cursor:pointer;opacity:.7;
+  transition:opacity .12s,color .12s}
+.reader-nav:hover{opacity:1;color:var(--ink)}
+.reader-nav-left{left:14px}
+.reader-nav-right{right:14px}
