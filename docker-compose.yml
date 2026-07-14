@@ -31,7 +31,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "5349:5349" # TURN/TLS — terminated by Traefik, forwarded to livekit:5349
     volumes:
       - ${XDG_RUNTIME_DIR}/podman/podman.sock:/var/run/docker.sock:ro,z
       - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
@@ -212,7 +211,7 @@ services:
     environment:
       - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
       - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - "LIVEKIT_TURN_DOMAIN=${TELOS_DOMAIN}"
+      - "LIVEKIT_TURN_DOMAIN=turn.${TELOS_DOMAIN}"
     ports:
       - "7880:7880" # LiveKit websocket — dev fallback URL (frontend livekitUrl())
       - "7881:7881"
@@ -229,3 +228,10 @@ services:
       - "traefik.http.middlewares.livekit-strip.stripprefix.prefixes=/livekit"
       - "traefik.http.routers.livekit.middlewares=livekit-strip"
       - "traefik.http.services.livekit.loadbalancer.server.port=7880"
+      # TURN/TLS: LiveKit advertises turns:turn.<domain>:443, so Traefik demuxes
+      # that SNI on the shared 443 entrypoint, terminates TLS, and forwards plain
+      # TCP to LiveKit's TURN (external_tls). Media relay itself rides UDP 3478.
+      - "traefik.tcp.routers.turn.rule=HostSNI(`turn.${TELOS_DOMAIN}`)"
+      - "traefik.tcp.routers.turn.entrypoints=websecure"
+      - "traefik.tcp.routers.turn.tls=true"
+      - "traefik.tcp.services.turn.loadbalancer.server.port=5349"
