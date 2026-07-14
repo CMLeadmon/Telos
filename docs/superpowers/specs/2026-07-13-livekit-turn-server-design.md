@@ -1,7 +1,30 @@
 # LiveKit TURN Server — Design
 
 Date: 2026-07-13
-Status: Approved
+Status: Implemented (with correction — see below)
+
+## Implementation correction (discovered during verification)
+
+The original design terminated TURN/TLS on a dedicated Traefik entrypoint `:5349`.
+Testing the advertised ICE servers (via the browser's `setConfiguration`) showed
+LiveKit's embedded TURN **hardcodes the advertised TURNS port to 443** for
+`external_tls` — it never advertises `tls_port`/5349 — so that entrypoint was
+never contacted (`turns:<domain>:443` landed on the web app's HTTPS router).
+
+The shipped design instead:
+- Sets the TURN domain to a dedicated subdomain **`turn.<domain>`**
+  (`LIVEKIT_TURN_DOMAIN=turn.${TELOS_DOMAIN}`).
+- LiveKit advertises `turns:turn.<domain>:443` and `turn:<public-ip>:3478`.
+- Traefik demuxes SNI `turn.<domain>` on the **shared 443 entrypoint** (a TCP
+  router defined via docker labels on the `livekit` service, so `${TELOS_DOMAIN}`
+  interpolates), terminates TLS with its existing cert store, and forwards plain
+  TCP to `livekit:5349` (`external_tls: true`). The web app keeps the base-domain
+  SNI on 443. No separate `:5349` entrypoint.
+- New operator requirement: a **`turn.<domain>` DNS record** and the cert must
+  **cover `turn.<domain>`** (LE SAN or wildcard). See `docs/voice-turn-ports.md`.
+
+The sections below describe the original 5349 approach for history; the runbook
+`docs/voice-turn-ports.md` is authoritative for operators.
 
 ## Problem
 
