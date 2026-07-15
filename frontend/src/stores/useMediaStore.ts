@@ -12,7 +12,14 @@ export interface MediaItem {
   id: string;
   title: string;
   duration: string;
-  type: string; // Jellyfin item type: Movie, Episode, Audio, Audiobook
+  type: string; // Jellyfin item type: Series, Season, Movie, Episode, Audio, Audiobook, ...
+  isFolder: boolean;
+  childCount?: number;
+}
+
+export interface MediaCrumb {
+  id: string;
+  title: string;
 }
 
 type LoadStatus = "idle" | "loading" | "ready" | "error";
@@ -27,12 +34,17 @@ interface MediaState {
   libraryStatus: LoadStatus;
   error: string | null;
   activeLibraryId: string | null;
-  itemsByLibrary: Record<string, MediaItem[]>;
-  itemsStatus: Record<string, LoadStatus>;
+  itemsByParent: Record<string, MediaItem[]>;
+  itemsStatusByParent: Record<string, LoadStatus>;
+  path: MediaCrumb[];
+  rootLibrary: MediaLibrary | null;
   nowPlaying: NowPlaying | null;
   fetchLibraries: () => Promise<void>;
-  fetchItems: (libraryId: string) => Promise<void>;
+  fetchItems: (parentId: string) => Promise<void>;
   selectLibrary: (id: string) => void;
+  open: (item: MediaItem, library: MediaLibrary) => void;
+  navigateTo: (index: number) => void;
+  goHome: () => void;
   play: (item: MediaItem, library: MediaLibrary) => void;
   stop: () => void;
 }
@@ -47,8 +59,10 @@ export const useMediaStore = create<MediaState>()((set, get) => ({
   libraryStatus: "idle",
   error: null,
   activeLibraryId: null,
-  itemsByLibrary: {},
-  itemsStatus: {},
+  itemsByParent: {},
+  itemsStatusByParent: {},
+  path: [],
+  rootLibrary: null,
   nowPlaying: null,
 
   fetchLibraries: async () => {
@@ -73,25 +87,51 @@ export const useMediaStore = create<MediaState>()((set, get) => ({
     }
   },
 
-  fetchItems: async (libraryId) => {
-    if (get().itemsStatus[libraryId] === "loading") return;
-    set((s) => ({ itemsStatus: { ...s.itemsStatus, [libraryId]: "loading" } }));
+  fetchItems: async (parentId) => {
+    if (get().itemsStatusByParent[parentId] === "loading") return;
+    set((s) => ({
+      itemsStatusByParent: { ...s.itemsStatusByParent, [parentId]: "loading" },
+    }));
     try {
       const items = asList(
         await api<MediaItem[] | null>(
-          `/api/v1/media/items?parentId=${encodeURIComponent(libraryId)}`,
+          `/api/v1/media/items?parentId=${encodeURIComponent(parentId)}`,
         ),
       );
       set((s) => ({
-        itemsByLibrary: { ...s.itemsByLibrary, [libraryId]: items },
-        itemsStatus: { ...s.itemsStatus, [libraryId]: "ready" },
+        itemsByParent: { ...s.itemsByParent, [parentId]: items },
+        itemsStatusByParent: { ...s.itemsStatusByParent, [parentId]: "ready" },
       }));
     } catch {
-      set((s) => ({ itemsStatus: { ...s.itemsStatus, [libraryId]: "error" } }));
+      set((s) => ({
+        itemsStatusByParent: { ...s.itemsStatusByParent, [parentId]: "error" },
+      }));
     }
   },
 
   selectLibrary: (id) => set({ activeLibraryId: id }),
+
+  open: (item, library) => {
+    if (!item.isFolder) {
+      get().play(item, library);
+      return;
+    }
+    set((s) => ({
+      rootLibrary: s.rootLibrary ?? library,
+      path: [...s.path, { id: item.id, title: item.title }],
+    }));
+    void get().fetchItems(item.id);
+  },
+
+  navigateTo: (index) => {
+    if (index < 0) {
+      set({ path: [], rootLibrary: null });
+      return;
+    }
+    set((s) => ({ path: s.path.slice(0, index + 1) }));
+  },
+
+  goHome: () => get().navigateTo(-1),
 
   play: (item, library) => set({ nowPlaying: { item, library } }),
 
