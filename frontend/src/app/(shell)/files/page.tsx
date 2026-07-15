@@ -11,6 +11,7 @@ import {
   FileText,
   Film,
   Folder,
+  FolderPlus,
   Image as ImageIcon,
   Music,
   Trash2,
@@ -20,6 +21,7 @@ import {
 import { apiBase } from "@/lib/api";
 import {
   type FileEntry,
+  type FolderEntry,
   type UploadDestination,
   useFilesStore,
   validateFile,
@@ -55,6 +57,64 @@ function shortDate(iso: string): string {
   });
 }
 
+function FolderRow({
+  folder,
+  confirming,
+  onEnter,
+  onAskDelete,
+  onCancelDelete,
+  onDelete,
+}: {
+  folder: FolderEntry;
+  confirming: boolean;
+  onEnter: () => void;
+  onAskDelete: () => void;
+  onCancelDelete: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="frow folder" data-testid="folder-row" onClick={onEnter}>
+      <span className="ficon">
+        <Folder size={17} />
+      </span>
+      <span className="fname" title={folder.name}>
+        {folder.name}
+      </span>
+      <span className="fmeta">—</span>
+      <span className="fmeta" />
+      <span className="fmeta">folder</span>
+      <span className="facts" onClick={(e) => e.stopPropagation()}>
+        {confirming ? (
+          <>
+            <button
+              className="iconbtn danger"
+              aria-label={`confirm delete ${folder.name}`}
+              onClick={onDelete}
+            >
+              <Check size={16} />
+            </button>
+            <button
+              className="iconbtn"
+              aria-label="cancel delete"
+              onClick={onCancelDelete}
+            >
+              <X size={16} />
+            </button>
+          </>
+        ) : (
+          <button
+            className="iconbtn danger"
+            aria-label={`delete folder ${folder.name}`}
+            onClick={onAskDelete}
+          >
+            <Trash2 size={16} />
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function FileRow({
   file,
   confirming,
@@ -70,10 +130,7 @@ function FileRow({
 }) {
   const infected = file.scan_status !== "clean";
   return (
-    <div
-      className={`frow${infected ? " infected" : ""}`}
-      data-testid="file-row"
-    >
+    <div className={`frow${infected ? " infected" : ""}`} data-testid="file-row">
       <span className="ficon">{mimeIcon(file.mime_type)}</span>
       <span className="fname" title={file.filename}>
         {file.filename}
@@ -126,8 +183,44 @@ function FileRow({
   );
 }
 
+function Breadcrumbs({
+  path,
+  onNavigate,
+}: {
+  path: string;
+  onNavigate: (path: string) => void;
+}) {
+  const segments = path ? path.split("/") : [];
+  return (
+    <div className="crumbs" data-testid="files-breadcrumbs">
+      <button
+        className={`crumb${segments.length === 0 ? " here" : ""}`}
+        onClick={() => onNavigate("")}
+      >
+        Home
+      </button>
+      {segments.map((seg, i) => {
+        const target = segments.slice(0, i + 1).join("/");
+        return (
+          <span key={target} style={{ display: "contents" }}>
+            <span className="sep">/</span>
+            <button
+              className={`crumb${i === segments.length - 1 ? " here" : ""}`}
+              onClick={() => onNavigate(target)}
+            >
+              {seg}
+            </button>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function FilesPage() {
   const {
+    path,
+    folders,
     files,
     page,
     status,
@@ -135,7 +228,12 @@ export default function FilesPage() {
     hasNextPage,
     uploads,
     notice,
+    fetchDir,
     fetchPage,
+    enterFolder,
+    navigateTo,
+    createFolder,
+    deleteFolder,
     deleteFile,
     upload,
     dismissUpload,
@@ -144,11 +242,13 @@ export default function FilesPage() {
   const [destination, setDestination] = useState<UploadDestination>("library");
   const [dragging, setDragging] = useState(false);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [folderName, setFolderName] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (status === "idle") void fetchPage(1);
-  }, [status, fetchPage]);
+    if (status === "idle") void fetchDir("", 1);
+  }, [status, fetchDir]);
 
   const takeFiles = useCallback(
     (list: FileList | null) => {
@@ -166,6 +266,16 @@ export default function FilesPage() {
     [destination, upload, setNotice],
   );
 
+  const submitFolder = () => {
+    const name = folderName.trim();
+    if (name) void createFolder(name);
+    setFolderName("");
+    setCreatingFolder(false);
+  };
+
+  const hasRows = folders.length > 0 || files.length > 0;
+  const uploadTarget = path ? `/${path}` : "root";
+
   return (
     <>
       <VaporwaveScene />
@@ -181,6 +291,43 @@ export default function FilesPage() {
       </div>
 
       <div className="fwrap">
+        <div className="destrow" style={{ justifyContent: "space-between" }}>
+          <Breadcrumbs path={path} onNavigate={(p) => void navigateTo(p)} />
+          {creatingFolder ? (
+            <div className="newfolderbar">
+              <input
+                autoFocus
+                data-testid="new-folder-input"
+                placeholder="folder name"
+                value={folderName}
+                onChange={(e) => setFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitFolder();
+                  if (e.key === "Escape") {
+                    setFolderName("");
+                    setCreatingFolder(false);
+                  }
+                }}
+              />
+              <button
+                className="iconbtn"
+                aria-label="confirm new folder"
+                onClick={submitFolder}
+              >
+                <Check size={16} />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="btn-ghost btn-sm"
+              data-testid="new-folder-btn"
+              onClick={() => setCreatingFolder(true)}
+            >
+              <FolderPlus size={15} /> New folder
+            </button>
+          )}
+        </div>
+
         {notice && (
           <div className="fnotice" role="status">
             <span>{notice}</span>
@@ -215,8 +362,8 @@ export default function FilesPage() {
           </div>
           <span className="dz-hint">
             {destination === "bookdrop"
-              ? "pdf / epub → bookdrop, max 100 MiB"
-              : "pdf, epub, images, audio, video — max 100 MiB"}
+              ? "pdf / epub → bookdrop (flat), max 100 MiB"
+              : `uploading to ${uploadTarget} — max 100 MiB`}
           </span>
           <input
             ref={inputRef}
@@ -296,14 +443,14 @@ export default function FilesPage() {
           </div>
         )}
 
-        {status === "ready" && files.length === 0 && (
+        {status === "ready" && !hasRows && (
           <div className="placeholder" data-testid="files-empty">
-            <h2>Nothing on the shelf.</h2>
-            <p>drop something above — it gets scanned, hashed and kept.</p>
+            <h2>{path ? "Empty folder." : "Nothing on the shelf."}</h2>
+            <p>drop something above, or make a folder to organize.</p>
           </div>
         )}
 
-        {files.length > 0 && (
+        {hasRows && (
           <div className="ftable" data-testid="files-table">
             <div className="frow head">
               <span />
@@ -313,6 +460,23 @@ export default function FilesPage() {
               <span>added</span>
               <span style={{ textAlign: "right" }}>actions</span>
             </div>
+            {folders.map((f) => (
+              <FolderRow
+                key={f.id}
+                folder={f}
+                confirming={confirmingId === f.id}
+                onEnter={() => {
+                  setConfirmingId(null);
+                  void enterFolder(f.path);
+                }}
+                onAskDelete={() => setConfirmingId(f.id)}
+                onCancelDelete={() => setConfirmingId(null)}
+                onDelete={() => {
+                  setConfirmingId(null);
+                  void deleteFolder(f.id);
+                }}
+              />
+            ))}
             {files.map((f) => (
               <FileRow
                 key={f.id}
