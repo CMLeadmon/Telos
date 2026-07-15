@@ -1577,10 +1577,54 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 }
 
 type MediaPlayableItem struct {
-	ID       string `json:"id"`
-	Title    string `json:"title"`
-	Duration string `json:"duration"`
-	Type     string `json:"type"`
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Duration   string `json:"duration"`
+	Type       string `json:"type"`
+	IsFolder   bool   `json:"isFolder"`
+	ChildCount int    `json:"childCount,omitempty"`
+}
+
+type jellyfinChildItem struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	RunTimeTicks int64  `json:"RunTimeTicks"`
+	Type         string `json:"Type"`
+	IsFolder     bool   `json:"IsFolder"`
+	ChildCount   int    `json:"ChildCount"`
+}
+
+// mapJellyfinChildren converts Jellyfin's raw child items (the direct
+// children of a ParentId — a library's series, a series' seasons, a
+// season's episodes, an audiobook's chapters, etc.) into the gateway's
+// wire format.
+func mapJellyfinChildren(items []jellyfinChildItem) []MediaPlayableItem {
+	result := make([]MediaPlayableItem, 0, len(items))
+	for _, item := range items {
+		durationStr := ""
+		if item.RunTimeTicks > 0 {
+			seconds := item.RunTimeTicks / 10000000
+			h := seconds / 3600
+			m := (seconds % 3600) / 60
+			if h > 0 {
+				durationStr = fmt.Sprintf("%dh %dm", h, m)
+			} else {
+				durationStr = fmt.Sprintf("%dm", m)
+			}
+		} else {
+			durationStr = "0m"
+		}
+
+		result = append(result, MediaPlayableItem{
+			ID:         item.ID,
+			Title:      item.Name,
+			Duration:   durationStr,
+			Type:       item.Type,
+			IsFolder:   item.IsFolder,
+			ChildCount: item.ChildCount,
+		})
+	}
+	return result
 }
 
 func handleMediaItems(w http.ResponseWriter, r *http.Request) {
@@ -1611,7 +1655,7 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := getJellyfinAdminToken()
-	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&Recursive=true&IncludeItemTypes=Movie,Episode,Audio,Audiobook", jellyfinBaseURL, userID, parentId)
+	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&SortBy=IndexNumber,SortName&SortOrder=Ascending&Fields=ChildCount", jellyfinBaseURL, userID, parentId)
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1633,41 +1677,14 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var jResp struct {
-		Items []struct {
-			ID           string `json:"Id"`
-			Name         string `json:"Name"`
-			RunTimeTicks int64  `json:"RunTimeTicks"`
-			Type         string `json:"Type"`
-		} `json:"Items"`
+		Items []jellyfinChildItem `json:"Items"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
 		http.Error(w, "Failed to decode items response", http.StatusInternalServerError)
 		return
 	}
 
-	var items []MediaPlayableItem
-	for _, item := range jResp.Items {
-		durationStr := ""
-		if item.RunTimeTicks > 0 {
-			seconds := item.RunTimeTicks / 10000000
-			h := seconds / 3600
-			m := (seconds % 3600) / 60
-			if h > 0 {
-				durationStr = fmt.Sprintf("%dh %dm", h, m)
-			} else {
-				durationStr = fmt.Sprintf("%dm", m)
-			}
-		} else {
-			durationStr = "0m"
-		}
-
-		items = append(items, MediaPlayableItem{
-			ID:       item.ID,
-			Title:    item.Name,
-			Duration: durationStr,
-			Type:     item.Type,
-		})
-	}
+	items := mapJellyfinChildren(jResp.Items)
 
 	respJSON, err := json.Marshal(items)
 	if err != nil {

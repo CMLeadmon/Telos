@@ -315,6 +315,124 @@ func TestGetJellyfinUserIDPrefersConfiguredUser(t *testing.T) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Jellyfin Item Hierarchy Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestMapJellyfinChildren(t *testing.T) {
+	cases := []struct {
+		name  string
+		input jellyfinChildItem
+		want  MediaPlayableItem
+	}{
+		{
+			name: "folder with children has no duration",
+			input: jellyfinChildItem{
+				ID: "series-1", Name: "King of the Hill", Type: "Series",
+				IsFolder: true, ChildCount: 13,
+			},
+			want: MediaPlayableItem{
+				ID: "series-1", Title: "King of the Hill", Duration: "0m",
+				Type: "Series", IsFolder: true, ChildCount: 13,
+			},
+		},
+		{
+			name: "leaf under an hour shows minutes only",
+			input: jellyfinChildItem{
+				ID: "ep-1", Name: "Pilot", Type: "Episode",
+				RunTimeTicks: 13_000_000_000, IsFolder: false,
+			},
+			want: MediaPlayableItem{
+				ID: "ep-1", Title: "Pilot", Duration: "21m",
+				Type: "Episode", IsFolder: false,
+			},
+		},
+		{
+			name: "leaf over an hour shows hours and minutes",
+			input: jellyfinChildItem{
+				ID: "movie-1", Name: "Office Space", Type: "Movie",
+				RunTimeTicks: 54_000_000_000, IsFolder: false,
+			},
+			want: MediaPlayableItem{
+				ID: "movie-1", Title: "Office Space", Duration: "1h 30m",
+				Type: "Movie", IsFolder: false,
+			},
+		},
+		{
+			name: "zero runtime leaf falls back to 0m",
+			input: jellyfinChildItem{
+				ID: "track-1", Name: "Chapter 1", Type: "Audio", IsFolder: false,
+			},
+			want: MediaPlayableItem{
+				ID: "track-1", Title: "Chapter 1", Duration: "0m",
+				Type: "Audio", IsFolder: false,
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapJellyfinChildren([]jellyfinChildItem{tc.input})
+			if len(got) != 1 {
+				t.Fatalf("mapJellyfinChildren returned %d items, want 1", len(got))
+			}
+			if got[0] != tc.want {
+				t.Errorf("mapJellyfinChildren(%+v) = %+v, want %+v", tc.input, got[0], tc.want)
+			}
+		})
+	}
+}
+
+func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "user-1", "Name": "admin"}})
+		case r.URL.Path == "/Users/user-1/Items":
+			if got := r.URL.Query().Get("ParentId"); got != "series-1" {
+				t.Errorf("ParentId = %q, want series-1", got)
+			}
+			if got := r.URL.Query().Get("Recursive"); got != "" {
+				t.Errorf("Recursive = %q, want unset — recursion must stay off so only direct children come back", got)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"Items": []map[string]any{
+					{"Id": "season-1", "Name": "Season 1", "Type": "Season", "IsFolder": true, "ChildCount": 13},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = srv.URL
+	defer func() { jellyfinBaseURL = oldBase }()
+
+	oldRedis := redisClient
+	redisClient = nil
+	defer func() { redisClient = oldRedis }()
+
+	req := httptest.NewRequest("GET", "/api/v1/media/items?parentId=series-1", nil)
+	rr := httptest.NewRecorder()
+	handleMediaItems(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+
+	var got []MediaPlayableItem
+	if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d items, want 1", len(got))
+	}
+	if !got[0].IsFolder || got[0].ChildCount != 13 || got[0].Title != "Season 1" {
+		t.Errorf("got %+v, want a Season 1 folder with ChildCount 13", got[0])
+	}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // WebSocket Origin Policy Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
