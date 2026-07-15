@@ -752,6 +752,52 @@ func TestHandleDeleteFolderEmptyVsNonEmpty(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Upload targeting
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestMediaUploadTarget(t *testing.T) {
+	old := mediaRoot
+	mediaRoot = t.TempDir()
+	defer func() { mediaRoot = old }()
+
+	if err := os.Mkdir(filepath.Join(mediaRoot, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Root target.
+	destDir, destKey, fileID, err := mediaUploadTarget("", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destDir != mediaRoot || destKey != "a.txt" {
+		t.Fatalf("root target = (%q,%q), want (%q,a.txt)", destDir, destKey, mediaRoot)
+	}
+	if want := base64.RawURLEncoding.EncodeToString([]byte("a.txt")); fileID != want {
+		t.Fatalf("root fileID = %q, want %q", fileID, want)
+	}
+
+	// Subfolder target with collision.
+	if err := os.WriteFile(filepath.Join(mediaRoot, "sub", "a.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	destDir, destKey, fileID, err = mediaUploadTarget("sub", "a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if destDir != filepath.Join(mediaRoot, "sub") || destKey != "a_1.txt" {
+		t.Fatalf("sub target = (%q,%q), want (.../sub, a_1.txt)", destDir, destKey)
+	}
+	if want := base64.RawURLEncoding.EncodeToString([]byte(filepath.Join("sub", "a_1.txt"))); fileID != want {
+		t.Fatalf("sub fileID = %q, want %q", fileID, want)
+	}
+
+	// Escaping path → error.
+	if _, _, _, err := mediaUploadTarget("../etc", "a.txt"); err == nil {
+		t.Fatal("expected error for escaping path")
+	}
+}
+
 
 
 

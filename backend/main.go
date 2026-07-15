@@ -2319,6 +2319,23 @@ func resolveMediaPath(rel string) (string, error) {
 	return clean, nil
 }
 
+// mediaUploadTarget resolves where a media-library upload should land given a
+// caller-supplied relative directory, returning the absolute destination dir,
+// a collision-resolved basename, and the base64url file ID (relative to root).
+func mediaUploadTarget(relDir, filename string) (destDir, destKey, fileID string, err error) {
+	destDir, err = resolveMediaPath(relDir)
+	if err != nil {
+		return "", "", "", err
+	}
+	destKey = getUniqueFilename(destDir, filename)
+	rel, err := filepath.Rel(mediaRoot, filepath.Join(destDir, destKey))
+	if err != nil {
+		return "", "", "", err
+	}
+	fileID = base64.RawURLEncoding.EncodeToString([]byte(rel))
+	return destDir, destKey, fileID, nil
+}
+
 func getUniqueFilename(dir, filename string) string {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
@@ -2502,6 +2519,7 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 		http.Error(w, fmt.Sprintf("File size exceeds %d MiB limit", maxBytes/(1024*1024)), http.StatusBadRequest)
 		return "", false
 	}
+	relDir := r.FormValue("path")
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
@@ -2604,6 +2622,7 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 	// File is clean, promote atomically
 	var destDir string
 	var destKey string
+	var mediaFileID string
 	if isBook {
 		destDir = "/data/shared/bookdrop"
 		destKey = fileHash + ext
@@ -2611,8 +2630,13 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 		destDir = "/data/shared/staging/library"
 		destKey = fileHash + ext
 	} else {
-		destDir = "/data/shared/media"
-		destKey = getUniqueFilename(destDir, header.Filename)
+		var terr error
+		destDir, destKey, mediaFileID, terr = mediaUploadTarget(relDir, header.Filename)
+		if terr != nil {
+			os.Remove(tempPath)
+			http.Error(w, "Invalid upload path", http.StatusBadRequest)
+			return "", false
+		}
 	}
 
 	destPath := filepath.Join(destDir, destKey)
@@ -2639,7 +2663,7 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 	// Insert into DB (skip for standard media library files)
 	var fileID string
 	if !isBook && writeResponse {
-		fileID = base64.RawURLEncoding.EncodeToString([]byte(destKey))
+		fileID = mediaFileID
 	} else {
 		err = dbPool.QueryRow(r.Context(), `
 			INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type)
