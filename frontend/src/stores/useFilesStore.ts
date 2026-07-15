@@ -13,6 +13,20 @@ export interface FileEntry {
   created_at: string;
 }
 
+export interface FolderEntry {
+  id: string;
+  name: string;
+  path: string;
+}
+
+interface DirResponse {
+  path: string;
+  folders: FolderEntry[] | null;
+  files: FileEntry[] | null;
+  page: number;
+  hasNext: boolean;
+}
+
 export type UploadDestination = "library" | "bookdrop";
 
 export type UploadState =
@@ -62,6 +76,8 @@ function asList<T>(value: T[] | null | undefined): T[] {
 let uploadCounter = 0;
 
 interface FilesState {
+  path: string;
+  folders: FolderEntry[];
   files: FileEntry[];
   page: number;
   status: "idle" | "loading" | "ready" | "error";
@@ -69,7 +85,12 @@ interface FilesState {
   hasNextPage: boolean;
   uploads: ActiveUpload[];
   notice: string | null;
+  fetchDir: (path: string, page: number) => Promise<void>;
   fetchPage: (page: number) => Promise<void>;
+  enterFolder: (path: string) => Promise<void>;
+  navigateTo: (path: string) => Promise<void>;
+  createFolder: (name: string) => Promise<void>;
+  deleteFolder: (id: string) => Promise<void>;
   deleteFile: (id: string) => Promise<void>;
   upload: (file: File, destination: UploadDestination) => Promise<void>;
   dismissUpload: (key: number) => void;
@@ -77,6 +98,8 @@ interface FilesState {
 }
 
 export const useFilesStore = create<FilesState>()((set, get) => ({
+  path: "",
+  folders: [],
   files: [],
   page: 1,
   status: "idle",
@@ -85,16 +108,19 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
   uploads: [],
   notice: null,
 
-  fetchPage: async (page) => {
+  fetchDir: async (path, page) => {
     set({ status: "loading", error: null });
     try {
-      const rows = await api<FileEntry[] | null>(`/api/v1/files?page=${page}`);
-      const files = asList(rows);
+      const res = await api<DirResponse>(
+        `/api/v1/files?path=${encodeURIComponent(path)}&page=${page}`,
+      );
       set({
-        files,
+        path: res.path ?? path,
+        folders: asList(res.folders),
+        files: asList(res.files),
         page,
         status: "ready",
-        hasNextPage: files.length === PAGE_SIZE,
+        hasNextPage: Boolean(res.hasNext),
       });
     } catch (err) {
       set({
@@ -104,14 +130,63 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
     }
   },
 
+  fetchPage: async (page) => {
+    await get().fetchDir(get().path, page);
+  },
+
+  enterFolder: async (path) => {
+    await get().fetchDir(path, 1);
+  },
+
+  navigateTo: async (path) => {
+    await get().fetchDir(path, 1);
+  },
+
+  createFolder: async (name) => {
+    try {
+      await api("/api/v1/folders", {
+        method: "POST",
+        body: JSON.stringify({ path: get().path, name }),
+      });
+      await get().fetchDir(get().path, 1);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 403) {
+        set({ notice: "you don't have permission to create folders" });
+      } else if (err instanceof ApiError && err.status === 409) {
+        set({ notice: "a folder with that name already exists" });
+      } else {
+        set({
+          notice: err instanceof Error ? err.message : "couldn't create folder",
+        });
+      }
+    }
+  },
+
+  deleteFolder: async (id) => {
+    try {
+      await api(`/api/v1/folders/${id}`, { method: "DELETE" });
+      await get().fetchDir(get().path, get().page);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        set({ notice: "folder isn't empty — clear it first" });
+      } else if (err instanceof ApiError && err.status === 403) {
+        set({ notice: "you don't have permission to delete folders" });
+      } else {
+        set({
+          notice: err instanceof Error ? err.message : "delete failed",
+        });
+      }
+    }
+  },
+
   deleteFile: async (id) => {
     try {
       await api(`/api/v1/files/${id}`, { method: "DELETE" });
-      const { page, files } = get();
-      // Deleting the last row of a later page: step back so the view
-      // doesn't land on an empty page.
-      const target = files.length === 1 && page > 1 ? page - 1 : page;
-      await get().fetchPage(target);
+      const { path, page, folders, files } = get();
+      // Deleting the last row of a later page: step back a page.
+      const target =
+        folders.length + files.length === 1 && page > 1 ? page - 1 : page;
+      await get().fetchDir(path, target);
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         set({ notice: "you don't have permission to delete files" });
@@ -137,18 +212,25 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
         uploads: s.uploads.map((u) => (u.key === key ? { ...u, state } : u)),
       }));
 
+    // Library uploads land in the current folder; bookdrop stays flat.
     const path =
       destination === "bookdrop" ? "/api/v1/files/books" : "/api/v1/files";
+    const extra =
+      destination === "bookdrop" ? undefined : { path: get().path };
     try {
-      await uploadFile(path, file, (phase, percent) =>
-        patch(
-          phase === "scanning"
-            ? { phase: "scanning" }
-            : { phase: "uploading", percent },
-        ),
+      await uploadFile(
+        path,
+        file,
+        (phase, percent) =>
+          patch(
+            phase === "scanning"
+              ? { phase: "scanning" }
+              : { phase: "uploading", percent },
+          ),
+        extra,
       );
       set((s) => ({ uploads: s.uploads.filter((u) => u.key !== key) }));
-      await get().fetchPage(1);
+      await get().fetchDir(get().path, 1);
     } catch (err) {
       let message = "upload failed";
       if (err instanceof UploadError) {
@@ -156,8 +238,7 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
           message = "you don't have permission to upload here";
         else if (err.status === 422) {
           message = "rejected by security scan";
-          // The gateway keeps infected uploads as audit rows — show it.
-          void get().fetchPage(1);
+          void get().fetchDir(get().path, 1);
         } else if (err.status === 503)
           message = "security scanner unavailable — try again later";
         else if (err.message) message = err.message;

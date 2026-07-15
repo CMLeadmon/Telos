@@ -27,6 +27,7 @@ export function uploadFile(
   path: string,
   file: File,
   onProgress: (phase: UploadPhase, percent: number) => void,
+  extra?: Record<string, string>,
 ): Promise<UploadOutcome> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -58,6 +59,9 @@ export function uploadFile(
     };
     const form = new FormData();
     form.append("file", file);
+    for (const [k, v] of Object.entries(extra ?? {})) {
+      form.append(k, v);
+    }
     xhr.send(form);
   });
 }
