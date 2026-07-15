@@ -25,3 +25,37 @@
 .composer input::placeholder{color:var(--faint)}
 .composer .send{width:44px;height:44px;border-radius:var(--r);background:var(--rose);color:#000;
   display:flex;align-items:center;justify-content:center;flex:none}
+
+/* Message hover actions and deletion tombstone */
+.msg { position: relative; }
+.msgactions { position: absolute; top: -12px; right: 8px; display: none; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 4px; z-index: 10; }
+.msg:hover .msgactions { display: flex; }
+.mbody.deleted { font-style: italic; color: var(--faint); }
+.deleted-msg { background: rgba(0, 0, 0, 0.05); padding: 8px 12px; border-radius: var(--r-xs); }
+
+/* Reactions list and pills */
+.reactions-container-wrapper { margin-top: 6px; }
+.reactions-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.reacts { display: flex; flex-wrap: wrap; gap: 6px; }
+.react { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: var(--r-xs); border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 12px; font-family: var(--f-mono); color: var(--muted); height: 24px; transition: background 0.1s, border-color 0.1s; }
+.react:hover { border-color: var(--muted); background: var(--surface-2); }
+.react.on { background: rgba(255, 0, 128, 0.1); border-color: var(--rose); color: var(--rose); }
+.react.add { color: var(--faint); font-weight: bold; border-style: dashed; }
+.react.add:hover { color: var(--ink); border-style: solid; }
+
+/* Inline Edit Box */
+.edit-box { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; width: 100%; max-width: 600px; }
+.edit-input { width: 100%; background: var(--input); border: 1px solid var(--line); color: var(--ink); border-radius: var(--r-xs); padding: 8px 12px; outline: none; font-size: 13.5px; }
+.edit-input:focus { border-color: var(--accent); }
+.edit-actions { display: flex; gap: 8px; }
+.btn-save { background: var(--rose); color: #000; border: none; border-radius: var(--r-xs); padding: 4px 12px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.btn-cancel { background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 4px 12px; font-size: 12px; cursor: pointer; }
+.btn-cancel:hover { color: var(--ink); background: var(--surface-2); }
+
+/* Quick reactions popover */
+.quick-react-popup { position: absolute; bottom: 100%; right: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-xs); display: flex; gap: 6px; padding: 6px; z-index: 20; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); margin-bottom: 4px; }
+.quick-react-btn { background: transparent; border: none; font-size: 16px; cursor: pointer; padding: 4px; border-radius: var(--r-xs); transition: background 0.1s; }
+.quick-react-btn:hover { background: var(--surface-2); }
+
+.pin-badge { margin-left: 6px; color: var(--rose); display: inline-flex; align-items: center; }
+

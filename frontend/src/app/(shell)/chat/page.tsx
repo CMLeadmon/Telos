@@ -3,15 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Hash, Plus, Send } from "lucide-react";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
+import { useAuthStore } from "@/stores/useAuthStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
-
-const AVATAR_HUES = ["--rose", "--cyan", "--violet", "--indigo", "--azure"];
-
-function avatarHue(name: string): string {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return `var(${AVATAR_HUES[h % AVATAR_HUES.length]})`;
-}
+import { ChatMessage } from "@/components/chat/ChatMessage";
 
 export default function ChatPage() {
   const { channels, activeChannelId, messages, connection, connect, send } =
@@ -20,6 +14,11 @@ export default function ChatPage() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const active = channels.find((c) => c.id === activeChannelId);
+
+  const currentUser = useAuthStore((s) => s.user);
+  const canModerate = currentUser?.Roles.some((r) =>
+    ["Administrator", "Host", "Curator", "Owner"].includes(r)
+  ) ?? false;
 
   useEffect(() => {
     if (!activeChannelId && channels.length > 0) {
@@ -61,19 +60,7 @@ export default function ChatPage() {
           </div>
         )}
         {messages.map((m) => (
-          <div className="msg" key={m.id}>
-            <div className="av" style={{ background: avatarHue(m.sender) }}>
-              {m.avatar}
-            </div>
-            <div style={{ minWidth: 0 }}>
-              <div className="mhead">
-                <span className="mname">{m.sender}</span>
-                <span className="rolepill">{m.role}</span>
-                <span className="mtime">{m.timestamp}</span>
-              </div>
-              <p className="mbody">{m.content}</p>
-            </div>
-          </div>
+          <ChatMessage key={m.id} message={m} canModerate={canModerate} />
         ))}
       </div>
 
