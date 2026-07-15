@@ -2,7 +2,7 @@
 FROM node:22-alpine AS frontend
 WORKDIR /fe
 COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
+RUN npm install --legacy-peer-deps
 COPY frontend/ ./
 RUN npm run build
 
@@ -13,7 +13,7 @@ COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
 COPY --from=frontend /fe/out ./out
-RUN CGO_ENABLED=0 GOOS=linux go build -o telos-core main.go
+RUN CGO_ENABLED=0 GOOS=linux go build -o telos-core .
 
 # Final Image
 FROM alpine:latest

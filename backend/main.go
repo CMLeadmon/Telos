@@ -277,6 +277,7 @@ func main() {
 	mux.Handle("GET /api/v1/channels/{id}/pins", withAuth(http.HandlerFunc(handleListPins), "view_channel"))
 	mux.Handle("POST /api/v1/channels/{id}/pins", withAuth(http.HandlerFunc(handlePinMessage), "manage_messages"))
 	mux.Handle("DELETE /api/v1/channels/{id}/pins/{mid}", withAuth(http.HandlerFunc(handleUnpinMessage), "manage_messages"))
+	mux.Handle("GET /api/v1/users/search", withAuth(http.HandlerFunc(handleUserSearch), "view_channel"))
 
 	// Jellyfin Proxy routes (Require view_media)
 	mux.Handle("GET /api/v1/media", withAuth(http.HandlerFunc(handleMedia), "view_media"))
@@ -1610,6 +1611,52 @@ func handleListPins(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string][]WSMessage{"pins": pins})
+}
+
+type SearchUserResponse struct {
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	AvatarUrl   string `json:"avatarUrl,omitempty"`
+}
+
+func handleUserSearch(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
+	limitStr := r.URL.Query().Get("limit")
+	limit := 8
+	if limitStr != "" {
+		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 && val <= 50 {
+			limit = val
+		}
+	}
+
+	queryPattern := "%" + q + "%"
+	rows, err := dbPool.Query(r.Context(), `
+		SELECT id::text, username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
+		FROM users
+		WHERE active = TRUE AND (username ILIKE $1 OR display_name ILIKE $1)
+		LIMIT $2
+	`, queryPattern, limit)
+	if err != nil {
+		http.Error(w, "query failed", 500)
+		return
+	}
+	defer rows.Close()
+
+	results := []SearchUserResponse{}
+	for rows.Next() {
+		var u SearchUserResponse
+		var hasAvatar bool
+		if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &hasAvatar); err == nil {
+			if hasAvatar {
+				u.AvatarUrl = "/api/v1/users/" + u.ID + "/avatar"
+			}
+			results = append(results, u)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }
 
 func buildWSMessage(ctx context.Context, msgID, userID, content string, ts time.Time) WSMessage {

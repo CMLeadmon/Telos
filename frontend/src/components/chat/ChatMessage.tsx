@@ -6,6 +6,8 @@ import { ChatMessage as ChatMessageType, useChatSessionStore } from "@/stores/us
 import { useAuthStore } from "@/stores/useAuthStore";
 import { apiBase } from "@/lib/api";
 import { Reactions } from "./Reactions";
+import { MessageBody } from "./MessageBody";
+import { EmojiPicker } from "./EmojiPicker";
 
 const AVATAR_HUES = ["--rose", "--cyan", "--violet", "--indigo", "--azure"];
 
@@ -28,9 +30,7 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
 
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState(message.content);
-  const [showQuickReactions, setShowQuickReactions] = useState(false);
-
-  const quickEmojis = ["🔥", "📖", "🌊", "✅", "👍", "😂"];
+  const [showPicker, setShowPicker] = useState(false);
 
   const handleEdit = async () => {
     if (editContent.trim() && editContent !== message.content) {
@@ -43,11 +43,6 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
     if (confirm("Are you sure you want to delete this message?")) {
       await deleteMessage(message.id);
     }
-  };
-
-  const handleQuickReact = async (emoji: string) => {
-    await toggleReaction(message.id, emoji);
-    setShowQuickReactions(false);
   };
 
   if (message.deleted) {
@@ -75,22 +70,18 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
           <button
             className="iconbtn action-btn"
             title="React"
-            onClick={() => setShowQuickReactions(!showQuickReactions)}
+            onClick={() => setShowPicker(!showPicker)}
           >
             <Smile size={16} />
           </button>
-          {showQuickReactions && (
-            <div className="quick-react-popup">
-              {quickEmojis.map((emoji) => (
-                <button
-                  key={emoji}
-                  className="quick-react-btn"
-                  onClick={() => handleQuickReact(emoji)}
-                >
-                  {emoji}
-                </button>
-              ))}
-            </div>
+          {showPicker && (
+            <EmojiPicker
+              onPick={(emoji) => {
+                toggleReaction(message.id, emoji);
+                setShowPicker(false);
+              }}
+              onClose={() => setShowPicker(false)}
+            />
           )}
         </div>
         {canModerate && (
@@ -150,7 +141,7 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
             </div>
           </div>
         ) : (
-          <p className="mbody">{message.content}</p>
+          <MessageBody content={message.content} />
         )}
 
         {/* Reactions list */}
@@ -158,13 +149,24 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
           {message.reactions && message.reactions.length > 0 ? (
             <div className="reactions-row">
               <Reactions messageId={message.id} reactions={message.reactions} />
-              <button
-                className="react add"
-                onClick={() => setShowQuickReactions(!showQuickReactions)}
-                title="Add Reaction"
-              >
-                ＋
-              </button>
+              <div style={{ position: "relative" }}>
+                <button
+                  className="react add"
+                  onClick={() => setShowPicker(!showPicker)}
+                  title="Add Reaction"
+                >
+                  ＋
+                </button>
+                {showPicker && (
+                  <EmojiPicker
+                    onPick={(emoji) => {
+                      toggleReaction(message.id, emoji);
+                      setShowPicker(false);
+                    }}
+                    onClose={() => setShowPicker(false)}
+                  />
+                )}
+              </div>
             </div>
           ) : null}
         </div>

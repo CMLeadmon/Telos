@@ -15,10 +15,14 @@
     "next": "^16.0.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "zustand": "^5.0.6"
   },
   "devDependencies": {
     "@playwright/test": "^1.53.0",
+    "@types/dom-mediacapture-record": "^1.0.22",
     "@types/node": "^24.0.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
