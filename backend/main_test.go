@@ -681,5 +681,77 @@ func TestHandleListFilesReturnsFoldersAndFiles(t *testing.T) {
 	}
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Folder create / delete
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestHandleCreateFolder(t *testing.T) {
+	old := mediaRoot
+	mediaRoot = t.TempDir()
+	defer func() { mediaRoot = old }()
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/v1/folders", strings.NewReader(body))
+		rr := httptest.NewRecorder()
+		handleCreateFolder(rr, req)
+		return rr
+	}
+
+	if rr := post(`{"path":"","name":"docs"}`); rr.Code != 201 {
+		t.Fatalf("create status = %d, want 201 (body %s)", rr.Code, rr.Body.String())
+	}
+	if info, err := os.Stat(filepath.Join(mediaRoot, "docs")); err != nil || !info.IsDir() {
+		t.Fatal("expected docs/ to exist on disk")
+	}
+	if rr := post(`{"path":"","name":"docs"}`); rr.Code != 409 {
+		t.Fatalf("duplicate status = %d, want 409", rr.Code)
+	}
+	if rr := post(`{"path":"","name":".."}`); rr.Code != 400 {
+		t.Fatalf("dotdot name status = %d, want 400", rr.Code)
+	}
+	if rr := post(`{"path":"","name":"a/b"}`); rr.Code != 400 {
+		t.Fatalf("slashed name status = %d, want 400", rr.Code)
+	}
+}
+
+func TestHandleDeleteFolderEmptyVsNonEmpty(t *testing.T) {
+	old := mediaRoot
+	mediaRoot = t.TempDir()
+	defer func() { mediaRoot = old }()
+
+	if err := os.Mkdir(filepath.Join(mediaRoot, "empty"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(mediaRoot, "full"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mediaRoot, "full", "x.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	del := func(rel string) *httptest.ResponseRecorder {
+		id := base64.RawURLEncoding.EncodeToString([]byte(rel))
+		req := httptest.NewRequest("DELETE", "/api/v1/folders/"+id, nil)
+		req.SetPathValue("id", id)
+		rr := httptest.NewRecorder()
+		handleDeleteFolder(rr, req)
+		return rr
+	}
+
+	if rr := del("full"); rr.Code != 409 {
+		t.Fatalf("non-empty delete status = %d, want 409", rr.Code)
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, "full")); err != nil {
+		t.Fatal("non-empty folder should still exist")
+	}
+	if rr := del("empty"); rr.Code != 200 {
+		t.Fatalf("empty delete status = %d, want 200", rr.Code)
+	}
+	if _, err := os.Stat(filepath.Join(mediaRoot, "empty")); !os.IsNotExist(err) {
+		t.Fatal("empty folder should be gone")
+	}
+}
+
+
 
 

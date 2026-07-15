@@ -302,6 +302,8 @@ func main() {
 	mux.Handle("POST /api/v1/files/books", withAuth(http.HandlerFunc(handleUploadBook), "upload_books"))
 	mux.Handle("GET /api/v1/files/{id}/download", withAuth(http.HandlerFunc(handleDownloadFile), "view_files"))
 	mux.Handle("DELETE /api/v1/files/{id}", withAuth(http.HandlerFunc(handleDeleteFile), "manage_files"))
+	mux.Handle("POST /api/v1/folders", withAuth(http.HandlerFunc(handleCreateFolder), "upload_files"))
+	mux.Handle("DELETE /api/v1/folders/{id}", withAuth(http.HandlerFunc(handleDeleteFolder), "manage_files"))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
@@ -2745,6 +2747,88 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" || len(name) > 255 || name == "." || name == ".." ||
+		strings.ContainsAny(name, "/\x00") {
+		http.Error(w, "Invalid folder name", http.StatusBadRequest)
+		return
+	}
+
+	parent, err := resolveMediaPath(body.Path)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	if info, err := os.Stat(parent); err != nil || !info.IsDir() {
+		http.Error(w, "Parent folder not found", http.StatusNotFound)
+		return
+	}
+
+	target := filepath.Join(parent, name)
+	if err := os.Mkdir(target, 0755); err != nil {
+		if os.IsExist(err) {
+			http.Error(w, "A folder with that name already exists", http.StatusConflict)
+			return
+		}
+		http.Error(w, "Failed to create folder", http.StatusInternalServerError)
+		return
+	}
+
+	rel, err := filepath.Rel(mediaRoot, target)
+	if err != nil {
+		http.Error(w, "Internal error", http.StatusInternalServerError)
+		return
+	}
+	id := base64.RawURLEncoding.EncodeToString([]byte(rel))
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"id": id, "name": name, "path": rel})
+}
+
+func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	relBytes, err := base64.RawURLEncoding.DecodeString(id)
+	if err != nil {
+		http.Error(w, "Invalid folder ID", http.StatusBadRequest)
+		return
+	}
+	target, err := resolveMediaPath(string(relBytes))
+	if err != nil || target == mediaRoot {
+		http.Error(w, "Invalid folder", http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil || !info.IsDir() {
+		http.Error(w, "Folder not found", http.StatusNotFound)
+		return
+	}
+
+	// Refuse non-empty folders (rmdir semantics) — check before removing.
+	children, err := os.ReadDir(target)
+	if err != nil {
+		http.Error(w, "Failed to read folder", http.StatusInternalServerError)
+		return
+	}
+	if len(children) > 0 {
+		http.Error(w, "Folder isn't empty", http.StatusConflict)
+		return
+	}
+	if err := os.Remove(target); err != nil {
+		http.Error(w, "Failed to delete folder", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
