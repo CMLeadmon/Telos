@@ -265,6 +265,11 @@ func main() {
 
 	// Chat WebSocket
 	mux.Handle("GET /api/v1/chat/ws", withAuth(http.HandlerFunc(handleWebSocket), "view_channel"))
+	mux.Handle("POST /api/v1/channels/{id}/messages", withAuth(http.HandlerFunc(handleSendMessage), "send_messages"))
+	mux.Handle("PATCH /api/v1/channels/{id}/messages/{mid}", withAuth(http.HandlerFunc(handleEditMessage), "send_messages"))
+	mux.Handle("DELETE /api/v1/channels/{id}/messages/{mid}", withAuth(http.HandlerFunc(handleDeleteMessage), "view_channel"))
+	mux.Handle("POST /api/v1/channels/{id}/messages/{mid}/reactions", withAuth(http.HandlerFunc(handleAddReaction), "send_messages"))
+	mux.Handle("DELETE /api/v1/channels/{id}/messages/{mid}/reactions/{emoji}", withAuth(http.HandlerFunc(handleRemoveReaction), "send_messages"))
 
 	// Channel list
 	mux.Handle("GET /api/v1/channels", withAuth(http.HandlerFunc(handleListChannels), "view_channel"))
@@ -1278,109 +1283,305 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Client '%s' connected to channel '%s' via WebSocket", userID, channelIDStr)
 
-	// Read loop: receive messages from this user, persist, and broadcast
+	// Keep the connection open; we no longer accept inbound messages.
 	for {
-		_, p, err := conn.ReadMessage()
-		if err != nil {
-			log.Printf("WebSocket read ended for '%s': %v", userID, err)
+		if _, _, err := conn.ReadMessage(); err != nil {
+			log.Printf("WebSocket connection closed for '%s': %v", userID, err)
 			break
 		}
+	}
+}
 
-		if len(p) > 4000 {
-			log.Printf("WebSocket message from %s rejected: length exceeds 4,000 characters", userID)
-			continue
-		}
+func buildWSMessage(ctx context.Context, msgID, userID, content string, ts time.Time) WSMessage {
+	var username, displayName string
+	var hasAvatar bool
+	var role string
+	var roles []string
 
-		var incoming struct {
-			Content string `json:"content"`
-		}
-		if err := json.Unmarshal(p, &incoming); err != nil {
-			continue
-		}
+	err := dbPool.QueryRow(ctx, `
+		SELECT username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
+		FROM users WHERE id = $1
+	`, userID).Scan(&username, &displayName, &hasAvatar)
+	if err != nil {
+		log.Printf("buildWSMessage: failed to get user details: %v", err)
+	}
 
-		if incoming.Content == "" {
-			continue
-		}
-
-		var msgID string
-		var timestamp time.Time
-		var username string
-		var role string
-
-		err = dbPool.QueryRow(ctx, `
-			INSERT INTO messages (channel_id, user_id, content) 
-			VALUES ($1, $2, $3) 
-			RETURNING id, created_at
-		`, channelIDStr, userID, incoming.Content).Scan(&msgID, &timestamp)
-		if err != nil {
-			log.Printf("Failed to persist message: %v", err)
-			continue
-		}
-
-		// Get sender details
-		var roles []string
-		var displayName string
-		var hasAvatar bool
-		err = dbPool.QueryRow(ctx, `
-			SELECT username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
-			FROM users WHERE id = $1
-		`, userID).Scan(&username, &displayName, &hasAvatar)
-		if err != nil {
-			continue
-		}
-		roleRows, err := dbPool.Query(ctx, `
-			SELECT role_id FROM user_roles WHERE user_id = $1
-		`, userID)
-		if err == nil {
-			for roleRows.Next() {
-				var rID string
-				if err := roleRows.Scan(&rID); err == nil {
-					roles = append(roles, rID)
-				}
+	roleRows, err := dbPool.Query(ctx, `
+		SELECT role_id FROM user_roles WHERE user_id = $1
+	`, userID)
+	if err == nil {
+		for roleRows.Next() {
+			var rID string
+			if err := roleRows.Scan(&rID); err == nil {
+				roles = append(roles, rID)
 			}
-			roleRows.Close()
 		}
-		if len(roles) > 0 {
-			role = roles[0]
-		} else {
-			role = "Member"
-		}
+		roleRows.Close()
+	}
+	if len(roles) > 0 {
+		role = roles[0]
+	} else {
+		role = "Member"
+	}
 
-		avatar := "MB"
-		if len(username) >= 2 {
-			avatar = strings.ToUpper(username[:2])
-		}
+	avatar := "MB"
+	if len(username) >= 2 {
+		avatar = strings.ToUpper(username[:2])
+	}
 
-		avatarURL := ""
-		if hasAvatar {
-			avatarURL = "/api/v1/users/" + userID + "/avatar"
-		}
+	avatarURL := ""
+	if hasAvatar {
+		avatarURL = "/api/v1/users/" + userID + "/avatar"
+	}
 
-		broadcastMsg := WSNotification{
-			Type: "message",
-			Message: &WSMessage{
-				ID:          msgID,
-				Sender:      username,
-				SenderID:    userID,
-				DisplayName: displayName,
-				Avatar:      avatar,
-				AvatarUrl:   avatarURL,
-				Role:        role,
-				Content:     incoming.Content,
-				Timestamp:   timestamp.Format("03:04 pm"),
-			},
-		}
+	return WSMessage{
+		ID:          msgID,
+		Sender:      username,
+		SenderID:    userID,
+		DisplayName: displayName,
+		Avatar:      avatar,
+		AvatarUrl:   avatarURL,
+		Role:        role,
+		Content:     content,
+		Timestamp:   ts.Format("03:04 pm"),
+	}
+}
 
-		payload, err := json.Marshal(broadcastMsg)
-		if err != nil {
-			continue
-		}
+func publishChatEvent(ctx context.Context, channelID string, ev WSEvent) {
+	ev.ChannelID = channelID
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		log.Printf("marshal chat event: %v", err)
+		return
+	}
+	if err := redisClient.Publish(ctx, "telos:chat:"+channelID, payload).Err(); err != nil {
+		log.Printf("publish chat event: %v", err)
+	}
+}
 
-		err = redisClient.Publish(ctx, redisChanName, payload).Err()
-		if err != nil {
-			log.Printf("Failed to publish to Redis: %v", err)
+func handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	user := r.Context().Value(userContextKey).(*UserContext)
+	var body struct {
+		Content string `json:"content"`
+		Embed   *struct {
+			Kind string `json:"kind"`
+			Ref  string `json:"ref"`
+		} `json:"embed"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	body.Content = strings.TrimSpace(body.Content)
+	if body.Content == "" && body.Embed == nil {
+		http.Error(w, "empty message", 400)
+		return
+	}
+	if len(body.Content) > 4000 {
+		http.Error(w, "too long", 400)
+		return
+	}
+
+	var msgID string
+	var ts time.Time
+	err := dbPool.QueryRow(r.Context(), `
+		INSERT INTO messages (channel_id, user_id, content) VALUES ($1, $2, $3)
+		RETURNING id, created_at`, channelID, user.ID, body.Content).Scan(&msgID, &ts)
+	if err != nil {
+		http.Error(w, "persist failed", 500)
+		return
+	}
+
+	msg := buildWSMessage(r.Context(), msgID, user.ID, body.Content, ts)
+	publishChatEvent(r.Context(), channelID, WSEvent{Type: "message", Message: &msg})
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	json.NewEncoder(w).Encode(map[string]*WSMessage{"message": &msg})
+}
+
+func handleEditMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	mid := r.PathValue("mid")
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	var body struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	body.Content = strings.TrimSpace(body.Content)
+	if body.Content == "" || len(body.Content) > 4000 {
+		http.Error(w, "invalid content", 400)
+		return
+	}
+
+	var ts time.Time
+	err := dbPool.QueryRow(r.Context(), `
+		UPDATE messages SET content=$1, edited_at=now()
+		WHERE id=$2 AND channel_id=$3 AND user_id=$4 AND deleted_at IS NULL
+		RETURNING created_at`, body.Content, mid, channelID, user.ID).Scan(&ts)
+	if err != nil {
+		http.Error(w, "not found or not yours", 404)
+		return
+	}
+
+	msg := buildWSMessage(r.Context(), mid, user.ID, body.Content, ts)
+	msg.EditedAt = time.Now().Format("03:04 pm")
+	publishChatEvent(r.Context(), channelID, WSEvent{Type: "message.update", Message: &msg})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]*WSMessage{"message": &msg})
+}
+
+func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	mid := r.PathValue("mid")
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	isMod, err := hasPermission(r.Context(), user, "manage_messages", nil)
+	if err != nil {
+		http.Error(w, "internal error", 500)
+		return
+	}
+
+	tag, err := dbPool.Exec(r.Context(), `
+		UPDATE messages SET deleted_at=now(), content='', embed_kind=NULL, embed_ref=NULL, embed_snapshot=NULL
+		WHERE id=$1 AND channel_id=$2 AND deleted_at IS NULL AND ($3 OR user_id=$4)`,
+		mid, channelID, isMod, user.ID)
+	if err != nil {
+		http.Error(w, "delete failed", 500)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "not found or forbidden", 404)
+		return
+	}
+
+	_, _ = dbPool.Exec(r.Context(), `DELETE FROM channel_pins WHERE message_id=$1`, mid)
+
+	publishChatEvent(r.Context(), channelID, WSEvent{Type: "message.delete", MessageID: mid})
+	w.WriteHeader(204)
+}
+
+func isEmoji(s string) bool {
+	runes := []rune(s)
+	if len(runes) == 0 || len(runes) > 8 {
+		return false
+	}
+	for _, r := range runes {
+		if r < 127 && ((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r < 32) {
+			return false
 		}
 	}
+	return true
+}
+
+func handleAddReaction(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	mid := r.PathValue("mid")
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	var body struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+	if !isEmoji(body.Emoji) {
+		http.Error(w, "bad emoji", 400)
+		return
+	}
+
+	var exists bool
+	err := dbPool.QueryRow(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM messages WHERE id=$1 AND channel_id=$2 AND deleted_at IS NULL)
+	`, mid, channelID).Scan(&exists)
+	if err != nil || !exists {
+		http.Error(w, "message not found", 404)
+		return
+	}
+
+	_, err = dbPool.Exec(r.Context(), `
+		INSERT INTO message_reactions (message_id, user_id, emoji) VALUES ($1, $2, $3)
+		ON CONFLICT (message_id, user_id, emoji) DO NOTHING
+	`, mid, user.ID, body.Emoji)
+	if err != nil {
+		http.Error(w, "failed to add reaction", 500)
+		return
+	}
+
+	var count int
+	err = dbPool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM message_reactions WHERE message_id=$1 AND emoji=$2
+	`, mid, body.Emoji).Scan(&count)
+	if err != nil {
+		http.Error(w, "failed to count reactions", 500)
+		return
+	}
+
+	publishChatEvent(r.Context(), channelID, WSEvent{
+		Type: "reaction",
+		Reaction: &WSReaction{
+			MessageID: mid,
+			Emoji:     body.Emoji,
+			UserID:    user.ID,
+			Op:        "add",
+			Count:     count,
+		},
+	})
+	w.WriteHeader(200)
+}
+
+func handleRemoveReaction(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	mid := r.PathValue("mid")
+	emoji := r.PathValue("emoji")
+	if unescaped, err := url.PathUnescape(emoji); err == nil {
+		emoji = unescaped
+	}
+	if !isEmoji(emoji) {
+		http.Error(w, "bad emoji", 400)
+		return
+	}
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	tag, err := dbPool.Exec(r.Context(), `
+		DELETE FROM message_reactions WHERE message_id=$1 AND user_id=$2 AND emoji=$3
+	`, mid, user.ID, emoji)
+	if err != nil {
+		http.Error(w, "failed to remove reaction", 500)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "reaction not found", 404)
+		return
+	}
+
+	var count int
+	err = dbPool.QueryRow(r.Context(), `
+		SELECT COUNT(*) FROM message_reactions WHERE message_id=$1 AND emoji=$2
+	`, mid, emoji).Scan(&count)
+	if err != nil {
+		http.Error(w, "failed to count reactions", 500)
+		return
+	}
+
+	publishChatEvent(r.Context(), channelID, WSEvent{
+		Type: "reaction",
+		Reaction: &WSReaction{
+			MessageID: mid,
+			Emoji:     emoji,
+			UserID:    user.ID,
+			Op:        "remove",
+			Count:     count,
+		},
+	})
+	w.WriteHeader(204)
 }
 
 type ChannelResponse struct {
@@ -2134,16 +2335,68 @@ func getUniqueFilename(dir, filename string) string {
 	}
 }
 
+// mimeForName maps a filename's extension to a MIME type for library listings.
+func mimeForName(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".mp4":
+		return "video/mp4"
+	case ".mkv":
+		return "video/x-matroska"
+	case ".webm":
+		return "video/webm"
+	case ".mp3":
+		return "audio/mpeg"
+	case ".m4a":
+		return "audio/mp4"
+	case ".wav":
+		return "audio/wav"
+	case ".ogg":
+		return "audio/ogg"
+	case ".pdf":
+		return "application/pdf"
+	case ".epub":
+		return "application/epub+zip"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".png":
+		return "image/png"
+	case ".webp":
+		return "image/webp"
+	default:
+		return "application/octet-stream"
+	}
+}
+
 func handleListFiles(w http.ResponseWriter, r *http.Request) {
-	pageStr := r.URL.Query().Get("page")
-	page, err := strconv.Atoi(pageStr)
+	relPath := r.URL.Query().Get("path")
+	page, err := strconv.Atoi(r.URL.Query().Get("page"))
 	if err != nil || page < 1 {
 		page = 1
 	}
-	limit := 20
-	offset := (page - 1) * limit
+	const limit = 20
 
-	type FileResponse struct {
+	dir, err := resolveMediaPath(relPath)
+	if err != nil {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Folder not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Failed to read directory", http.StatusInternalServerError)
+		return
+	}
+
+	type folderEntry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	type fileEntry struct {
 		ID         string    `json:"id"`
 		Filename   string    `json:"filename"`
 		SHA256     string    `json:"sha256"`
@@ -2154,103 +2407,66 @@ func handleListFiles(w http.ResponseWriter, r *http.Request) {
 		CreatedAt  time.Time `json:"created_at"`
 	}
 
-	var files []FileResponse
-	rootDir := "/data/shared/media"
-
-	err = filepath.WalkDir(rootDir, func(path string, d fs.DirEntry, err error) error {
+	folders := []folderEntry{}
+	files := []fileEntry{}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
+		rel := filepath.Join(relPath, name)
+		id := base64.RawURLEncoding.EncodeToString([]byte(rel))
+		if e.IsDir() {
+			folders = append(folders, folderEntry{ID: id, Name: name, Path: rel})
+			continue
+		}
+		info, err := e.Info()
 		if err != nil {
-			return nil // ignore individual file errors
+			continue
 		}
-		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".") && path != rootDir {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if strings.HasPrefix(d.Name(), ".") {
-			return nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-
-		relPath, err := filepath.Rel(rootDir, path)
-		if err != nil {
-			return nil
-		}
-
-		id := base64.RawURLEncoding.EncodeToString([]byte(relPath))
-		h := sha256.Sum256([]byte(relPath))
-		sha256Hex := hex.EncodeToString(h[:])
-
-		mimeType := ""
-		ext := strings.ToLower(filepath.Ext(relPath))
-		switch ext {
-		case ".mp4":
-			mimeType = "video/mp4"
-		case ".mkv":
-			mimeType = "video/x-matroska"
-		case ".mp3":
-			mimeType = "audio/mpeg"
-		case ".m4a":
-			mimeType = "audio/mp4"
-		case ".wav":
-			mimeType = "audio/wav"
-		case ".ogg":
-			mimeType = "audio/ogg"
-		case ".webm":
-			mimeType = "video/webm"
-		case ".pdf":
-			mimeType = "application/pdf"
-		case ".epub":
-			mimeType = "application/epub+zip"
-		case ".jpg", ".jpeg":
-			mimeType = "image/jpeg"
-		case ".png":
-			mimeType = "image/png"
-		case ".webp":
-			mimeType = "image/webp"
-		default:
-			mimeType = "application/octet-stream"
-		}
-
-		files = append(files, FileResponse{
+		files = append(files, fileEntry{
 			ID:         id,
-			Filename:   relPath,
-			SHA256:     sha256Hex,
+			Filename:   name,
+			SHA256:     "",
 			UploaderID: "",
 			ScanStatus: "clean",
 			SizeBytes:  info.Size(),
-			MimeType:   mimeType,
+			MimeType:   mimeForName(name),
 			CreatedAt:  info.ModTime(),
 		})
-		return nil
-	})
-
-	if err != nil {
-		http.Error(w, "Failed to scan media directory", http.StatusInternalServerError)
-		return
 	}
 
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].CreatedAt.After(files[j].CreatedAt)
-	})
+	sort.Slice(folders, func(i, j int) bool { return folders[i].Name < folders[j].Name })
+	sort.Slice(files, func(i, j int) bool { return files[i].CreatedAt.After(files[j].CreatedAt) })
 
-	var paginatedFiles []FileResponse
-	if offset < len(files) {
-		end := offset + limit
-		if end > len(files) {
-			end = len(files)
+	// Paginate over the combined (folders-first) sequence.
+	total := len(folders) + len(files)
+	offset := (page - 1) * limit
+	end := offset + limit
+	if offset > total {
+		offset = total
+	}
+	if end > total {
+		end = total
+	}
+	pageFolders := []folderEntry{}
+	pageFiles := []fileEntry{}
+	for i := offset; i < end; i++ {
+		if i < len(folders) {
+			pageFolders = append(pageFolders, folders[i])
+		} else {
+			pageFiles = append(pageFiles, files[i-len(folders)])
 		}
-		paginatedFiles = files[offset:end]
-	} else {
-		paginatedFiles = []FileResponse{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(paginatedFiles)
+	json.NewEncoder(w).Encode(map[string]any{
+		"path":    relPath,
+		"folders": pageFolders,
+		"files":   pageFiles,
+		"page":    page,
+		"hasNext": end < total,
+	})
 }
 
 func handleUploadFile(w http.ResponseWriter, r *http.Request) {

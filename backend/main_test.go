@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -589,5 +590,96 @@ func TestWSEventDeleteMarshal(t *testing.T) {
 		t.Fatalf("omitempty leaked empty fields: %s", got)
 	}
 }
+
+func TestIsEmoji(t *testing.T) {
+	cases := []struct {
+		input string
+		want  bool
+	}{
+		{"🔥", true},
+		{"👍", true},
+		{"✅", true},
+		{"abc", false},
+		{"123", false},
+		{"", false},
+		{"this-is-a-very-long-string-that-is-not-an-emoji", false},
+	}
+	for _, c := range cases {
+		if got := isEmoji(c.input); got != c.want {
+			t.Errorf("isEmoji(%q) = %v, want %v", c.input, got, c.want)
+		}
+	}
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Per-directory file listing
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestHandleListFilesReturnsFoldersAndFiles(t *testing.T) {
+	old := mediaRoot
+	mediaRoot = t.TempDir()
+	defer func() { mediaRoot = old }()
+
+	if err := os.Mkdir(filepath.Join(mediaRoot, "vacation"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mediaRoot, "root.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mediaRoot, "vacation", "beach.jpg"), []byte("img"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Root listing: one folder (vacation), one file (root.txt); beach.jpg is NOT here.
+	req := httptest.NewRequest("GET", "/api/v1/files?path=&page=1", nil)
+	rr := httptest.NewRecorder()
+	handleListFiles(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("root list status = %d, want 200", rr.Code)
+	}
+	var root struct {
+		Path    string `json:"path"`
+		Folders []struct {
+			ID, Name, Path string
+		} `json:"folders"`
+		Files []struct {
+			ID, Filename string
+		} `json:"files"`
+		HasNext bool `json:"hasNext"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &root); err != nil {
+		t.Fatalf("unmarshal root: %v (body %s)", err, rr.Body.String())
+	}
+	if len(root.Folders) != 1 || root.Folders[0].Name != "vacation" {
+		t.Fatalf("root folders = %+v, want one 'vacation'", root.Folders)
+	}
+	if len(root.Files) != 1 || root.Files[0].Filename != "root.txt" {
+		t.Fatalf("root files = %+v, want one 'root.txt'", root.Files)
+	}
+
+	// Enter vacation: beach.jpg present, as a basename.
+	req2 := httptest.NewRequest("GET", "/api/v1/files?path=vacation&page=1", nil)
+	rr2 := httptest.NewRecorder()
+	handleListFiles(rr2, req2)
+	var sub struct {
+		Files []struct{ Filename string } `json:"files"`
+	}
+	if err := json.Unmarshal(rr2.Body.Bytes(), &sub); err != nil {
+		t.Fatalf("unmarshal sub: %v", err)
+	}
+	if len(sub.Files) != 1 || sub.Files[0].Filename != "beach.jpg" {
+		t.Fatalf("vacation files = %+v, want one 'beach.jpg'", sub.Files)
+	}
+
+	// Bad path → 400.
+	reqBad := httptest.NewRequest("GET", "/api/v1/files?path=../etc&page=1", nil)
+	rrBad := httptest.NewRecorder()
+	handleListFiles(rrBad, reqBad)
+	if rrBad.Code != 400 {
+		t.Fatalf("escaping path status = %d, want 400", rrBad.Code)
+	}
+}
+
 
 
