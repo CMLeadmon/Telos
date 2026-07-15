@@ -9,12 +9,80 @@ import {
   type LibraryBook,
   useLibraryStore,
 } from "@/stores/useLibraryStore";
-import { useMediaStore } from "@/stores/useMediaStore";
+import { useMediaStore, type MediaItem } from "@/stores/useMediaStore";
 import { BookReader } from "@/components/library/BookReader";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
+function AudiobookRow({
+  item,
+  playing,
+  onToggle,
+}: {
+  item: MediaItem;
+  playing: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="audiorow">
+      <Music size={15} />
+      <span className="aname">{item.title}</span>
+      <span className="ameta">{item.duration}</span>
+      <button
+        className="btn-ghost btn-sm"
+        aria-label={`play ${item.title}`}
+        onClick={onToggle}
+      >
+        {playing ? "playing" : "play"}
+      </button>
+      {playing && (
+        <audio
+          controls
+          autoPlay
+          data-testid="audiobook-player"
+          src={`${apiBase()}/api/v1/stream/audio/${encodeURIComponent(item.id)}`}
+        />
+      )}
+    </div>
+  );
+}
+
+// A shelf library's direct children are now book folders (Task 1 dropped
+// Jellyfin's Recursive=true), so each book needs its own one-level-deeper
+// fetch to surface its playable chapters.
+function AudiobookBook({
+  book,
+  playingId,
+  onToggle,
+}: {
+  book: MediaItem;
+  playingId: string | null;
+  onToggle: (id: string) => void;
+}) {
+  const { itemsByParent, itemsStatusByParent, fetchItems } = useMediaStore();
+
+  useEffect(() => {
+    if (book.isFolder && itemsStatusByParent[book.id] === undefined) {
+      void fetchItems(book.id);
+    }
+  }, [book.id, book.isFolder, itemsStatusByParent, fetchItems]);
+
+  const tracks = book.isFolder ? (itemsByParent[book.id] ?? []) : [book];
+  return (
+    <>
+      {tracks.map((item) => (
+        <AudiobookRow
+          key={item.id}
+          item={item}
+          playing={playingId === item.id}
+          onToggle={() => onToggle(item.id)}
+        />
+      ))}
+    </>
+  );
+}
+
 function AudiobookShelf() {
-  const { libraries, libraryStatus, itemsByLibrary, fetchLibraries } =
+  const { libraries, libraryStatus, itemsByParent, fetchLibraries } =
     useMediaStore();
   const [playingId, setPlayingId] = useState<string | null>(null);
 
@@ -35,34 +103,18 @@ function AudiobookShelf() {
   return (
     <div className="audioshelf">
       {shelves.map((lib) => {
-        const items = itemsByLibrary[lib.id] ?? [];
-        if (items.length === 0) return null;
+        const books = itemsByParent[lib.id] ?? [];
+        if (books.length === 0) return null;
         return (
           <div key={lib.id}>
             <span className="railhead">{`// ${lib.name}`}</span>
-            {items.map((item) => (
-              <div key={item.id} className="audiorow">
-                <Music size={15} />
-                <span className="aname">{item.title}</span>
-                <span className="ameta">{item.duration}</span>
-                <button
-                  className="btn-ghost btn-sm"
-                  aria-label={`play ${item.title}`}
-                  onClick={() =>
-                    setPlayingId(playingId === item.id ? null : item.id)
-                  }
-                >
-                  {playingId === item.id ? "playing" : "play"}
-                </button>
-                {playingId === item.id && (
-                  <audio
-                    controls
-                    autoPlay
-                    data-testid="audiobook-player"
-                    src={`${apiBase()}/api/v1/stream/audio/${encodeURIComponent(item.id)}`}
-                  />
-                )}
-              </div>
+            {books.map((book) => (
+              <AudiobookBook
+                key={book.id}
+                book={book}
+                playingId={playingId}
+                onToggle={(id) => setPlayingId(playingId === id ? null : id)}
+              />
             ))}
           </div>
         );
