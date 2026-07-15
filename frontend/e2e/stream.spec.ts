@@ -23,6 +23,14 @@ test("drilling into a folder poster shows breadcrumbs and its children", async (
   await expect(page.getByTestId("stream-browse")).toBeVisible({
     timeout: 15_000,
   });
+  // Libraries render immediately; each row's items resolve asynchronously
+  // afterward, so give any poster (folder or leaf) time to appear before
+  // deciding whether a folder exists.
+  await page
+    .locator('[data-testid="poster-folder"], [data-testid="poster-leaf"]')
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .catch(() => {});
 
   const folder = page.getByTestId("poster-folder").first();
   test.skip(
@@ -48,6 +56,11 @@ test("drilling down to a leaf item starts playback", async ({ page }) => {
   await expect(page.getByTestId("stream-browse")).toBeVisible({
     timeout: 15_000,
   });
+  await page
+    .locator('[data-testid="poster-folder"], [data-testid="poster-leaf"]')
+    .first()
+    .waitFor({ timeout: 15_000 })
+    .catch(() => {});
 
   // Descend through folders (series -> season -> episode, or book ->
   // chapter) until a leaf poster appears, then play it.
