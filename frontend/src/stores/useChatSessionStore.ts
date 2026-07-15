@@ -33,6 +33,15 @@ export interface ChatMessage {
   };
 }
 
+export interface PresenceUser {
+  userId: string;
+  username: string;
+  displayName: string;
+  role: string;
+  avatar: string;
+  avatarUrl: string;
+}
+
 interface WSNotification {
   type: "history" | "message" | "message.update" | "message.delete" | "reaction" | "pin" | "presence";
   messages?: ChatMessage[];
@@ -52,14 +61,7 @@ interface WSNotification {
   };
   presence?: {
     channelId?: string;
-    online: {
-      userId: string;
-      username: string;
-      displayName: string;
-      role: string;
-      avatar: string;
-      avatarUrl: string;
-    }[];
+    online: PresenceUser[];
     count: number;
   };
 }
@@ -69,6 +71,9 @@ interface ChatSessionState {
   activeChannelId: string | null;
   messages: ChatMessage[];
   connection: "idle" | "connecting" | "open" | "closed";
+  online: PresenceUser[];
+  onlineCount: number;
+  pins: ChatMessage[];
   fetchChannels: () => Promise<void>;
   connect: (channelId: string) => void;
   disconnect: () => void;
@@ -76,6 +81,7 @@ interface ChatSessionState {
   editMessage: (id: string, content: string) => Promise<void>;
   deleteMessage: (id: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
+  togglePin: (messageId: string) => Promise<void>;
 }
 
 let socket: WebSocket | null = null;
@@ -85,6 +91,9 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
   activeChannelId: null,
   messages: [],
   connection: "idle",
+  online: [],
+  onlineCount: 0,
+  pins: [],
 
   fetchChannels: async () => {
     const channels = await api<Channel[]>("/api/v1/channels");
@@ -94,6 +103,22 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
   connect: (channelId) => {
     get().disconnect();
     set({ activeChannelId: channelId, messages: [], connection: "connecting" });
+
+    api<{ online: PresenceUser[]; count: number }>(`/api/v1/channels/${channelId}/members`)
+      .then((res) => {
+        set({ online: res.online, onlineCount: res.count });
+      })
+      .catch((err) => {
+        console.error("Failed to fetch channel members:", err);
+      });
+
+    api<{ pins: ChatMessage[] }>(`/api/v1/channels/${channelId}/pins`)
+      .then((res) => {
+        set({ pins: res.pins });
+      })
+      .catch((err) => {
+        console.error("Failed to fetch channel pins:", err);
+      });
 
     const ws = new WebSocket(
       `${wsBase()}/api/v1/chat/ws?channel=${encodeURIComponent(channelId)}`,
@@ -155,6 +180,25 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
             return { ...m, reactions };
           }),
         }));
+      } else if (notification.type === "presence" && notification.presence) {
+        set({ online: notification.presence.online, onlineCount: notification.presence.count });
+      } else if (notification.type === "pin" && notification.pin) {
+        const { messageId, op } = notification.pin;
+        const activeId = get().activeChannelId;
+        set((s) => ({
+          messages: s.messages.map((m) =>
+            m.id === messageId ? { ...m, pinned: op === "add" } : m,
+          ),
+        }));
+        if (activeId) {
+          api<{ pins: ChatMessage[] }>(`/api/v1/channels/${activeId}/pins`)
+            .then((res) => {
+              set({ pins: res.pins });
+            })
+            .catch((err) => {
+              console.error("Failed to refresh pins:", err);
+            });
+        }
       }
     };
     ws.onclose = () => {
@@ -218,6 +262,23 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
       await api(`/api/v1/channels/${channelId}/messages/${messageId}/reactions`, {
         method: "POST",
         body: JSON.stringify({ emoji }),
+      });
+    }
+  },
+
+  togglePin: async (messageId) => {
+    const channelId = get().activeChannelId;
+    if (!channelId) return;
+    const msg = get().messages.find((m) => m.id === messageId);
+    const pinned = msg?.pinned;
+    if (pinned) {
+      await api(`/api/v1/channels/${channelId}/pins/${messageId}`, {
+        method: "DELETE",
+      });
+    } else {
+      await api(`/api/v1/channels/${channelId}/pins`, {
+        method: "POST",
+        body: JSON.stringify({ messageId }),
       });
     }
   },

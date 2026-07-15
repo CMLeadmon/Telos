@@ -273,6 +273,10 @@ func main() {
 
 	// Channel list
 	mux.Handle("GET /api/v1/channels", withAuth(http.HandlerFunc(handleListChannels), "view_channel"))
+	mux.Handle("GET /api/v1/channels/{id}/members", withAuth(http.HandlerFunc(handleChannelMembers), "view_channel"))
+	mux.Handle("GET /api/v1/channels/{id}/pins", withAuth(http.HandlerFunc(handleListPins), "view_channel"))
+	mux.Handle("POST /api/v1/channels/{id}/pins", withAuth(http.HandlerFunc(handlePinMessage), "manage_messages"))
+	mux.Handle("DELETE /api/v1/channels/{id}/pins/{mid}", withAuth(http.HandlerFunc(handleUnpinMessage), "manage_messages"))
 
 	// Jellyfin Proxy routes (Require view_media)
 	mux.Handle("GET /api/v1/media", withAuth(http.HandlerFunc(handleMedia), "view_media"))
@@ -1285,6 +1289,26 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("Client '%s' connected to channel '%s' via WebSocket", userID, channelIDStr)
 
+	// Set initial heartbeat and presence join
+	presenceJoin(ctx, channelIDStr, userID)
+	defer presenceLeave(ctx, channelIDStr, userID)
+
+	ticker := time.NewTicker(25 * time.Second)
+	defer ticker.Stop()
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				redisClient.Set(ctx, "telos:presence:hb:"+userID, "1", 60*time.Second)
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	// Keep the connection open; we no longer accept inbound messages.
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
@@ -1292,6 +1316,300 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+}
+
+func presenceJoin(ctx context.Context, cid, uid string) {
+	redisClient.HIncrBy(ctx, "telos:presence:chan:"+cid, uid, 1)
+	redisClient.HIncrBy(ctx, "telos:presence:refs", uid, 1)
+	redisClient.SAdd(ctx, "telos:presence:online", uid)
+	redisClient.Set(ctx, "telos:presence:hb:"+uid, "1", 60*time.Second)
+
+	broadcastPresence(ctx, cid)
+}
+
+func presenceLeave(ctx context.Context, cid, uid string) {
+	n, _ := redisClient.HIncrBy(ctx, "telos:presence:chan:"+cid, uid, -1).Result()
+	if n <= 0 {
+		redisClient.HDel(ctx, "telos:presence:chan:"+cid, uid)
+	}
+
+	g, _ := redisClient.HIncrBy(ctx, "telos:presence:refs", uid, -1).Result()
+	if g <= 0 {
+		redisClient.HDel(ctx, "telos:presence:refs", uid)
+		redisClient.SRem(ctx, "telos:presence:online", uid)
+	}
+
+	broadcastPresence(ctx, cid)
+}
+
+func broadcastPresence(ctx context.Context, cid string) {
+	roster, count, err := channelRoster(ctx, cid)
+	if err != nil {
+		log.Printf("broadcastPresence error: %v", err)
+		return
+	}
+	publishChatEvent(ctx, cid, WSEvent{
+		Type: "presence",
+		Presence: &WSPresence{
+			ChannelID: cid,
+			Online:    roster,
+			Count:     count,
+		},
+	})
+}
+
+func channelRoster(ctx context.Context, cid string) ([]PresenceUser, int, error) {
+	fields, err := redisClient.HGetAll(ctx, "telos:presence:chan:"+cid).Result()
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var activeUserIDs []string
+	for uid, countStr := range fields {
+		count, _ := strconv.Atoi(countStr)
+		if count > 0 {
+			exists, _ := redisClient.Exists(ctx, "telos:presence:hb:"+uid).Result()
+			if exists > 0 {
+				activeUserIDs = append(activeUserIDs, uid)
+			} else {
+				redisClient.HDel(ctx, "telos:presence:chan:"+cid, uid)
+				g, _ := redisClient.HIncrBy(ctx, "telos:presence:refs", uid, -1).Result()
+				if g <= 0 {
+					redisClient.HDel(ctx, "telos:presence:refs", uid)
+					redisClient.SRem(ctx, "telos:presence:online", uid)
+				}
+			}
+		}
+	}
+
+	roster := []PresenceUser{}
+	if len(activeUserIDs) > 0 {
+		rows, err := dbPool.Query(ctx, `
+			SELECT id::text, username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
+			FROM users
+			WHERE id = ANY($1)
+		`, activeUserIDs)
+		if err != nil {
+			return nil, 0, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var u PresenceUser
+			var hasAvatar bool
+			if err := rows.Scan(&u.UserID, &u.Username, &u.DisplayName, &hasAvatar); err == nil {
+				var role string
+				dbPool.QueryRow(ctx, `
+					SELECT role_id FROM user_roles WHERE user_id = $1 LIMIT 1
+				`, u.UserID).Scan(&role)
+				if role == "" {
+					role = "Member"
+				}
+				u.Role = role
+
+				u.Avatar = "MB"
+				if len(u.Username) >= 2 {
+					u.Avatar = strings.ToUpper(u.Username[:2])
+				}
+				if hasAvatar {
+					u.AvatarUrl = "/api/v1/users/" + u.UserID + "/avatar"
+				}
+				roster = append(roster, u)
+			}
+		}
+	}
+
+	globalCount, _ := redisClient.SCard(ctx, "telos:presence:online").Result()
+	return roster, int(globalCount), nil
+}
+
+func handleChannelMembers(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	roster, count, err := channelRoster(r.Context(), channelID)
+	if err != nil {
+		http.Error(w, "failed to get roster", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"online": roster,
+		"count":  count,
+	})
+}
+
+func handlePinMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	user := r.Context().Value(userContextKey).(*UserContext)
+
+	var body struct {
+		MessageID string `json:"messageId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", 400)
+		return
+	}
+
+	var exists bool
+	err := dbPool.QueryRow(r.Context(), `
+		SELECT EXISTS(SELECT 1 FROM messages WHERE id=$1 AND channel_id=$2 AND deleted_at IS NULL)
+	`, body.MessageID, channelID).Scan(&exists)
+	if err != nil || !exists {
+		http.Error(w, "message not found in channel", 404)
+		return
+	}
+
+	_, err = dbPool.Exec(r.Context(), `
+		INSERT INTO channel_pins (channel_id, message_id, pinned_by) VALUES ($1, $2, $3)
+		ON CONFLICT (channel_id, message_id) DO NOTHING
+	`, channelID, body.MessageID, user.ID)
+	if err != nil {
+		http.Error(w, "pin failed", 500)
+		return
+	}
+
+	publishChatEvent(r.Context(), channelID, WSEvent{
+		Type: "pin",
+		Pin: &WSPin{
+			MessageID: body.MessageID,
+			Op:        "add",
+		},
+	})
+
+	w.WriteHeader(201)
+}
+
+func handleUnpinMessage(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+	mid := r.PathValue("mid")
+
+	tag, err := dbPool.Exec(r.Context(), `
+		DELETE FROM channel_pins WHERE channel_id=$1 AND message_id=$2
+	`, channelID, mid)
+	if err != nil {
+		http.Error(w, "unpin failed", 500)
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		http.Error(w, "pin not found", 404)
+		return
+	}
+
+	publishChatEvent(r.Context(), channelID, WSEvent{
+		Type: "pin",
+		Pin: &WSPin{
+			MessageID: mid,
+			Op:        "remove",
+		},
+	})
+
+	w.WriteHeader(204)
+}
+
+func handleListPins(w http.ResponseWriter, r *http.Request) {
+	channelID := r.PathValue("id")
+
+	rows, err := dbPool.Query(r.Context(), `
+		SELECT m.id::text, u.id::text, u.username, COALESCE(u.display_name, ''),
+			u.avatar_file_id IS NOT NULL, m.content, m.created_at, m.edited_at,
+			(cp.message_id IS NOT NULL) AS pinned,
+			m.embed_kind, m.embed_ref, m.embed_snapshot
+		FROM channel_pins cp
+		JOIN messages m ON cp.message_id = m.id
+		JOIN users u ON m.user_id = u.id
+		WHERE cp.channel_id = $1 AND m.deleted_at IS NULL
+		ORDER BY cp.pinned_at DESC
+	`, channelID)
+	if err != nil {
+		http.Error(w, "failed to query pins", 500)
+		return
+	}
+	defer rows.Close()
+
+	pins := []WSMessage{}
+	var ids []string
+	for rows.Next() {
+		var msg WSMessage
+		var t time.Time
+		var hasAvatar bool
+		var editedAt *time.Time
+		var embedKind, embedRef *string
+		var embedSnapshot []byte
+		err := rows.Scan(
+			&msg.ID, &msg.SenderID, &msg.Sender, &msg.DisplayName, &hasAvatar,
+			&msg.Content, &t, &editedAt, &msg.Pinned,
+			&embedKind, &embedRef, &embedSnapshot,
+		)
+		if err != nil {
+			http.Error(w, "failed to scan pin", 500)
+			return
+		}
+		msg.Timestamp = t.Format("03:04 pm")
+		if editedAt != nil {
+			msg.EditedAt = editedAt.Format("03:04 pm")
+		}
+		if len(msg.Sender) >= 2 {
+			msg.Avatar = strings.ToUpper(msg.Sender[:2])
+		} else {
+			msg.Avatar = "MB"
+		}
+		if hasAvatar {
+			msg.AvatarUrl = "/api/v1/users/" + msg.SenderID + "/avatar"
+		}
+		if embedKind != nil && embedRef != nil {
+			msg.Embed = &MessageEmbed{
+				Kind:     *embedKind,
+				Ref:      *embedRef,
+				Snapshot: embedSnapshot,
+			}
+		}
+
+		var role string
+		dbPool.QueryRow(r.Context(), `
+			SELECT role_id FROM user_roles WHERE user_id = $1 LIMIT 1
+		`, msg.SenderID).Scan(&role)
+		if role == "" {
+			role = "Member"
+		}
+		msg.Role = role
+
+		pins = append(pins, msg)
+		ids = append(ids, msg.ID)
+	}
+
+	if len(ids) > 0 {
+		rrows, err := dbPool.Query(r.Context(), `
+			SELECT message_id::text, emoji, COUNT(*)::int, array_agg(user_id::text)
+			FROM message_reactions
+			WHERE message_id = ANY($1)
+			GROUP BY message_id, emoji
+		`, ids)
+		if err == nil {
+			defer rrows.Close()
+			reactionsMap := make(map[string][]ReactionSummary)
+			for rrows.Next() {
+				var mid, emoji string
+				var count int
+				var users []string
+				if err := rrows.Scan(&mid, &emoji, &count, &users); err == nil {
+					reactionsMap[mid] = append(reactionsMap[mid], ReactionSummary{
+						Emoji: emoji,
+						Count: count,
+						Users: users,
+					})
+				}
+			}
+			for i := range pins {
+				if r, exists := reactionsMap[pins[i].ID]; exists {
+					pins[i].Reactions = r
+				} else {
+					pins[i].Reactions = []ReactionSummary{}
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string][]WSMessage{"pins": pins})
 }
 
 func buildWSMessage(ctx context.Context, msgID, userID, content string, ts time.Time) WSMessage {

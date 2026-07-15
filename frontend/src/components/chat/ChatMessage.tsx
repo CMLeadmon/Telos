@@ -21,7 +21,7 @@ interface ChatMessageProps {
 }
 
 export function ChatMessage({ message, canModerate }: ChatMessageProps) {
-  const { editMessage, deleteMessage, toggleReaction } = useChatSessionStore();
+  const { editMessage, deleteMessage, toggleReaction, togglePin } = useChatSessionStore();
   const currentUser = useAuthStore((s) => s.user);
   const myId = currentUser?.ID;
   const isOwn = message.senderId === myId;
@@ -93,6 +93,15 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
             </div>
           )}
         </div>
+        {canModerate && (
+          <button
+            className={`iconbtn action-btn${message.pinned ? " on" : ""}`}
+            title={message.pinned ? "Unpin Message" : "Pin Message"}
+            onClick={() => togglePin(message.id)}
+          >
+            <Pin size={16} />
+          </button>
+        )}
         {isOwn && (
           <button className="iconbtn action-btn" title="Edit" onClick={() => setIsEditing(true)}>
             <Edit2 size={16} />

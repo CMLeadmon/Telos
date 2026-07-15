@@ -25,6 +25,7 @@ import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
 import { avatarUrl } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
+import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
 
 const MODULES = [
@@ -42,7 +43,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Theme toggling routes through usePreferencesStore so it persists server-side.
   const prefsLoaded = usePreferencesStore((s) => s.loaded);
   const loadPrefs = usePreferencesStore((s) => s.load);
-  const { channels, activeChannelId, fetchChannels, connect } =
+  const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
   const voice = useVoiceSessionStore();
 
@@ -88,6 +89,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <input placeholder="Title, Author, Series, Genre, or Tags…" />
         </div>
         <div className="topacts">
+          <span className="chip">
+            <span className="dot" style={{ background: "var(--cyan)" }} />
+            {onlineCount} online
+          </span>
           <span className="chip">
             {user?.HasAvatar ? (
               // eslint-disable-next-line @next/next/no-img-element
@@ -217,6 +222,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </aside>
 
         <main className="arena">{children}</main>
+        {onChat && <ChatAside />}
       </div>
 
       <nav className="tabbar">
