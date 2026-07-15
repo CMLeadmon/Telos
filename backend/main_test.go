@@ -532,3 +532,62 @@ func TestProxyRequestStripsUpstreamCORSHeaders(t *testing.T) {
 		t.Errorf("proxied body = %q, want upstream body", rr.Body.String())
 	}
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Media path safety
+// ═══════════════════════════════════════════════════════════════════════════
+
+func TestResolveMediaPath(t *testing.T) {
+	old := mediaRoot
+	mediaRoot = "/data/shared/media"
+	defer func() { mediaRoot = old }()
+
+	cases := []struct {
+		name    string
+		rel     string
+		want    string
+		wantErr bool
+	}{
+		{"root", "", "/data/shared/media", false},
+		{"child", "vacation", "/data/shared/media/vacation", false},
+		{"nested", "vacation/2024", "/data/shared/media/vacation/2024", false},
+		{"dirty slashes", "a//b/", "/data/shared/media/a/b", false},
+		{"leading slash stays inside", "/etc/passwd", "/data/shared/media/etc/passwd", false},
+		{"escape dotdot", "../etc", "", true},
+		{"escape nested dotdot", "a/../../x", "", true},
+		{"nul byte", "a\x00b", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := resolveMediaPath(c.rel)
+			if c.wantErr {
+				if err == nil {
+					t.Fatalf("resolveMediaPath(%q) = %q, want error", c.rel, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveMediaPath(%q) unexpected error: %v", c.rel, err)
+			}
+			if got != c.want {
+				t.Errorf("resolveMediaPath(%q) = %q, want %q", c.rel, got, c.want)
+			}
+		})
+	}
+}
+
+func TestWSEventDeleteMarshal(t *testing.T) {
+	b, err := json.Marshal(WSEvent{Type: "message.delete", MessageID: "abc", ChannelID: "c1"})
+	if err != nil {
+		t.Fatalf("failed to marshal WSEvent: %v", err)
+	}
+	got := string(b)
+	if !strings.Contains(got, `"type":"message.delete"`) || !strings.Contains(got, `"messageId":"abc"`) {
+		t.Fatalf("unexpected: %s", got)
+	}
+	if strings.Contains(got, `"reaction"`) || strings.Contains(got, `"messages"`) {
+		t.Fatalf("omitempty leaked empty fields: %s", got)
+	}
+}
+
+

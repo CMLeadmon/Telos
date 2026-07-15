@@ -71,22 +71,75 @@ type HealthResponse struct {
 }
 
 type WSMessage struct {
-	ID          string `json:"id"`
-	Sender      string `json:"sender"`
-	SenderID    string `json:"senderId"`
-	DisplayName string `json:"displayName"`
-	Avatar      string `json:"avatar"`
-	AvatarUrl   string `json:"avatarUrl"`
-	Role        string `json:"role"`
-	Content     string `json:"content"`
-	Timestamp   string `json:"timestamp"`
+	ID          string            `json:"id"`
+	Sender      string            `json:"sender"`
+	SenderID    string            `json:"senderId"`
+	DisplayName string            `json:"displayName"`
+	Avatar      string            `json:"avatar"`
+	AvatarUrl   string            `json:"avatarUrl"`
+	Role        string            `json:"role"`
+	Content     string            `json:"content"`
+	Timestamp   string            `json:"timestamp"`
+	Reactions   []ReactionSummary `json:"reactions,omitempty"`
+	EditedAt    string            `json:"editedAt,omitempty"` // formatted, empty if never edited
+	Deleted     bool              `json:"deleted,omitempty"`  // soft-deleted tombstone
+	Pinned      bool              `json:"pinned,omitempty"`
+	Embed       *MessageEmbed     `json:"embed,omitempty"`
 }
 
-type WSNotification struct {
-	Type     string      `json:"type"`               // "history" or "message"
-	Messages []WSMessage `json:"messages,omitempty"` // For history
-	Message  *WSMessage  `json:"message,omitempty"`  // For individual message
+type ReactionSummary struct {
+	Emoji string   `json:"emoji"`
+	Count int      `json:"count"`
+	Users []string `json:"users"` // userIds who reacted
 }
+
+type MessageEmbed struct {
+	Kind     string          `json:"kind"`     // library_book|stream_film|file
+	Ref      string          `json:"ref"`
+	Snapshot json.RawMessage `json:"snapshot"` // {title,subtitle,kicker,cover,duration}
+}
+
+type WSEvent struct {
+	Type      string          `json:"type"` // history|message|message.update|message.delete|reaction|pin|presence
+	Messages  []WSMessage     `json:"messages,omitempty"`  // history
+	Message   *WSMessage      `json:"message,omitempty"`   // message | message.update
+	MessageID string          `json:"messageId,omitempty"` // message.delete | reaction | pin
+	ChannelID string          `json:"channelId,omitempty"`
+	Reaction  *WSReaction     `json:"reaction,omitempty"`  // reaction
+	Pin       *WSPin          `json:"pin,omitempty"`       // pin
+	Presence  *WSPresence     `json:"presence,omitempty"`  // presence
+}
+
+type WSReaction struct {
+	MessageID string `json:"messageId"`
+	Emoji     string `json:"emoji"`
+	UserID    string `json:"userId"`
+	Op        string `json:"op"`    // "add" | "remove"
+	Count     int    `json:"count"` // new total for this emoji on this message
+	Mine      bool   `json:"-"`     // computed client-side, never serialized
+}
+
+type WSPin struct {
+	MessageID string `json:"messageId"`
+	Op        string `json:"op"` // "add" | "remove"
+}
+
+type WSPresence struct {
+	ChannelID string         `json:"channelId,omitempty"`
+	Online    []PresenceUser `json:"online"` // roster for this channel
+	Count     int            `json:"count"`  // realm-wide online count
+}
+
+type PresenceUser struct {
+	UserID      string `json:"userId"`
+	Username    string `json:"username"`
+	DisplayName string `json:"displayName"`
+	Role        string `json:"role"`
+	Avatar      string `json:"avatar"`
+	AvatarUrl   string `json:"avatarUrl"`
+}
+
+type WSNotification = WSEvent
 
 type UserContext struct {
 	ID          string
@@ -1363,9 +1416,14 @@ func handleListChannels(w http.ResponseWriter, r *http.Request) {
 func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, error) {
 	rows, err := dbPool.Query(ctx, `
 		SELECT m.id::text, u.id::text, u.username, COALESCE(u.display_name, ''),
-			u.avatar_file_id IS NOT NULL, m.content, m.created_at
+			u.avatar_file_id IS NOT NULL,
+			CASE WHEN m.deleted_at IS NULL THEN m.content ELSE '' END,
+			m.created_at, m.edited_at, m.deleted_at IS NOT NULL,
+			(cp.message_id IS NOT NULL) AS pinned,
+			m.embed_kind, m.embed_ref, m.embed_snapshot
 		FROM messages m
 		JOIN users u ON m.user_id = u.id
+		LEFT JOIN channel_pins cp ON cp.message_id = m.id AND cp.channel_id = m.channel_id
 		WHERE m.channel_id = $1
 		ORDER BY m.created_at DESC
 		LIMIT 50
@@ -1375,15 +1433,27 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 	}
 	defer rows.Close()
 
-	var msgs []WSMessage
+	msgs := []WSMessage{}
+	var ids []string
 	for rows.Next() {
 		var msg WSMessage
 		var t time.Time
 		var hasAvatar bool
-		if err := rows.Scan(&msg.ID, &msg.SenderID, &msg.Sender, &msg.DisplayName, &hasAvatar, &msg.Content, &t); err != nil {
+		var editedAt *time.Time
+		var embedKind, embedRef *string
+		var embedSnapshot []byte
+		err := rows.Scan(
+			&msg.ID, &msg.SenderID, &msg.Sender, &msg.DisplayName, &hasAvatar,
+			&msg.Content, &t, &editedAt, &msg.Deleted, &msg.Pinned,
+			&embedKind, &embedRef, &embedSnapshot,
+		)
+		if err != nil {
 			return nil, err
 		}
 		msg.Timestamp = t.Format("03:04 pm")
+		if editedAt != nil {
+			msg.EditedAt = editedAt.Format("03:04 pm")
+		}
 		if len(msg.Sender) >= 2 {
 			msg.Avatar = strings.ToUpper(msg.Sender[:2])
 		} else {
@@ -1391,6 +1461,13 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 		}
 		if hasAvatar {
 			msg.AvatarUrl = "/api/v1/users/" + msg.SenderID + "/avatar"
+		}
+		if embedKind != nil && embedRef != nil {
+			msg.Embed = &MessageEmbed{
+				Kind:     *embedKind,
+				Ref:      *embedRef,
+				Snapshot: embedSnapshot,
+			}
 		}
 
 		// Resolve role
@@ -1404,7 +1481,43 @@ func getMessagesForChannel(ctx context.Context, channelID string) ([]WSMessage, 
 		msg.Role = role
 
 		msgs = append(msgs, msg)
+		ids = append(ids, msg.ID)
 	}
+
+	if len(ids) > 0 {
+		rrows, err := dbPool.Query(ctx, `
+			SELECT message_id::text, emoji, COUNT(*)::int, array_agg(user_id::text)
+			FROM message_reactions
+			WHERE message_id = ANY($1)
+			GROUP BY message_id, emoji
+			ORDER BY MIN(created_at)
+		`, ids)
+		if err == nil {
+			defer rrows.Close()
+			reactionsMap := make(map[string][]ReactionSummary)
+			for rrows.Next() {
+				var mid, emoji string
+				var count int
+				var users []string
+				if err := rrows.Scan(&mid, &emoji, &count, &users); err == nil {
+					reactionsMap[mid] = append(reactionsMap[mid], ReactionSummary{
+						Emoji: emoji,
+						Count: count,
+						Users: users,
+					})
+				}
+			}
+			for i := range msgs {
+				if r, exists := reactionsMap[msgs[i].ID]; exists {
+					msgs[i].Reactions = r
+				} else {
+					msgs[i].Reactions = []ReactionSummary{}
+				}
+			}
+		}
+	}
+
+	// Reverse to chronological ascending
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
 	}
@@ -1984,6 +2097,25 @@ func scanFileWithClamAV(r io.Reader) (bool, string, error) {
 	return false, "failed", fmt.Errorf("unexpected scan response: %s", respStr)
 }
 
+// mediaRoot is the shared file library's on-disk root. It is a package var so
+// tests can point it at a temp directory.
+var mediaRoot = "/data/shared/media"
+
+// resolveMediaPath joins a caller-supplied relative path to mediaRoot, cleans
+// it, and confirms the result stays within mediaRoot. Returns the absolute
+// on-disk path or an error for traversal/escape attempts. rel == "" yields
+// mediaRoot itself.
+func resolveMediaPath(rel string) (string, error) {
+	if strings.ContainsRune(rel, 0) {
+		return "", errors.New("invalid path")
+	}
+	clean := filepath.Clean(filepath.Join(mediaRoot, rel))
+	if clean != mediaRoot && !strings.HasPrefix(clean, mediaRoot+string(os.PathSeparator)) {
+		return "", errors.New("path escapes media root")
+	}
+	return clean, nil
+}
+
 func getUniqueFilename(dir, filename string) string {
 	ext := filepath.Ext(filename)
 	base := strings.TrimSuffix(filename, ext)
@@ -2323,10 +2455,7 @@ func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 
 	// Try base64 decoding first (filesystem paths)
 	if relPathBytes, err := base64.RawURLEncoding.DecodeString(id); err == nil {
-		relPath := string(relPathBytes)
-		filePath := filepath.Join("/data/shared/media", relPath)
-		cleanPath := filepath.Clean(filePath)
-		if strings.HasPrefix(cleanPath, "/data/shared/media") && cleanPath != "/data/shared/media" {
+		if cleanPath, err := resolveMediaPath(string(relPathBytes)); err == nil && cleanPath != mediaRoot {
 			if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
 				w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filepath.Base(cleanPath)))
 				w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -2368,10 +2497,7 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 
 	// Try base64 decoding first
 	if relPathBytes, err := base64.RawURLEncoding.DecodeString(id); err == nil {
-		relPath := string(relPathBytes)
-		filePath := filepath.Join("/data/shared/media", relPath)
-		cleanPath := filepath.Clean(filePath)
-		if strings.HasPrefix(cleanPath, "/data/shared/media") && cleanPath != "/data/shared/media" {
+		if cleanPath, err := resolveMediaPath(string(relPathBytes)); err == nil && cleanPath != mediaRoot {
 			if info, err := os.Stat(cleanPath); err == nil && !info.IsDir() {
 				if err := os.Remove(cleanPath); err != nil {
 					http.Error(w, "Failed to delete file from disk", http.StatusInternalServerError)
