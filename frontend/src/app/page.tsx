@@ -15,7 +15,7 @@ export default function LandingPage() {
     <div className="page">
       <nav className="lnav">
         <div className="brand">
-          <BrandLogo />
+          <BrandLogo size={67} />
           <span className="word">TELOS</span>
         </div>
         <div className="navlinks">
@@ -172,7 +172,7 @@ export default function LandingPage() {
       <footer>
         <div className="wrap">
           <div className="lockup">
-            <BrandLogo size={32} />
+            <BrandLogo size={29} />
             TELOS
           </div>
           <span className="mono" style={{ color: "var(--faint)", fontSize: 12 }}>

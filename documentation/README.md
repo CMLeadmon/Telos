@@ -37,7 +37,7 @@ Telos merges Discord-style chat/voice, Jellyfin-style streaming, Grimmory-style 
 ## 4. Reading Order
 
 - **For Infrastructure & Operations:** Study the system layout in [`architecture/01-system-overview.md`](./architecture/01-system-overview.md), then inspect the Compose configurations in [`architecture/02-deployment.md`](./architecture/02-deployment.md).
-- **Logo Renders:** The canonical monochromatic logo renders reside at `resources/Telos_1.png`, `resources/Telos_2.png`, and `resources/Telos_3.png`. The expected path for the custom vaporwave logo variant is `resources/Telos_vaporwave.png`.
+- **Logo Renders:** The canonical monochromatic logo renders reside at `resources/logos/Telos_sun_ink.svg`. The custom vaporwave/synthwave logo variant is located at `resources/logos/Telos_sun_synthwave.svg`.
 
 ---
 

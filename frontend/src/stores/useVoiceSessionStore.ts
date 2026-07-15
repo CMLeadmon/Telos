@@ -5,6 +5,8 @@ import {
   Room,
   RoomEvent,
   Track,
+  LogLevel,
+  setLogExtension,
 } from "livekit-client";
 import { api, livekitUrl } from "@/lib/api";
 import {
@@ -13,6 +15,31 @@ import {
   type MicPipeline,
 } from "@/lib/voiceAudio";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
+
+// Silence harmless LiveKit data channel teardown errors
+setLogExtension((level, msg, context) => {
+  if (
+    msg.toLowerCase().includes("closed unexpectedly") &&
+    (msg.toLowerCase().includes("data channel") || msg.toLowerCase().includes("data_track"))
+  ) {
+    return;
+  }
+  const logMap = {
+    [LogLevel.trace]: console.trace,
+    [LogLevel.debug]: console.debug,
+    [LogLevel.info]: console.info,
+    [LogLevel.warn]: console.warn,
+    [LogLevel.error]: console.error,
+    [LogLevel.silent]: () => {},
+  };
+  const logger = logMap[level] || console.log;
+  if (context !== undefined) {
+    logger(`[LiveKit] ${msg}`, context);
+  } else {
+    logger(`[LiveKit] ${msg}`);
+  }
+});
+
 
 export interface VoiceParticipant {
   identity: string;

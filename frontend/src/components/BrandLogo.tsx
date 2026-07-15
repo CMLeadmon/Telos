@@ -3,9 +3,15 @@
 import { useThemeStore } from "@/stores/useThemeStore";
 
 // The vaporwave lockup belongs to synthwave; the ink logos to Standard.
-export function BrandLogo({ size = 46 }: { size?: number }) {
+export function BrandLogo({ size = 41 }: { size?: number }) {
   const theme = useThemeStore((s) => s.theme);
-  const src = theme === "ink" ? "/logos/telos-ink.png" : "/logos/telos-vaporwave.png";
+  const src = theme === "ink" ? "/logos/telos-ink.svg" : "/logos/telos-vaporwave.svg";
+  const style: React.CSSProperties = {
+    height: size,
+    width: size,
+    objectFit: "contain",
+    ...(theme === "ink" ? { borderRadius: "10px" } : {}),
+  };
   // eslint-disable-next-line @next/next/no-img-element
-  return <img src={src} alt="Telos" style={{ height: size, width: size }} />;
+  return <img src={src} alt="Telos" style={style} />;
 }

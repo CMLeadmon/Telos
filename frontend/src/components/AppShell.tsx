@@ -80,7 +80,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     <div className="app app--viewport" data-testid="app-shell">
       <div className="topbar">
         <div className="brand">
-          <BrandLogo size={69} />
+          <BrandLogo size={62} />
           <span className="word">TELOS</span>
         </div>
         <div className="searchbar">

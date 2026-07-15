@@ -22,4 +22,4 @@ npx playwright test   # needs `npm run dev` already running — no webServer in 
 ```
 
 ## Assets
-`public/logos/*.png` are processed copies (transparency reconstructed) of `../resources/` originals — the originals have a baked-in checkerboard/white background; don't copy them over these.
+`public/logos/*.svg` are copied from `../resources/logos/` — the original SVGs have clean transparent backgrounds.

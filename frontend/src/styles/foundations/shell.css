@@ -4,7 +4,7 @@
 .topbar{height:74px;flex:none;display:flex;align-items:center;gap:18px;padding:0 22px;
   background:var(--surface);border-bottom:1px solid var(--line);position:relative;z-index:5}
 .brand{display:flex;align-items:center;gap:12px;width:220px;flex:none}
-.brand img{height:46px;width:46px;object-fit:contain}
+.brand img{height:62px;width:62px;object-fit:contain}
 .brand .word{font-family:var(--f-display);font-weight:700;font-size:20px;letter-spacing:.03em}
 .searchbar{flex:1;max-width:540px;position:relative;display:flex;align-items:center}
 .searchbar i{position:absolute;left:14px;color:var(--faint);width:16px;height:16px}

@@ -50,7 +50,7 @@ export default function LoginPage() {
       <VaporwaveScene />
       <form className="authcard" onSubmit={submit}>
         <div className="lockup">
-          <BrandLogo size={56} />
+          <BrandLogo size={67} />
           <span className="word">TELOS</span>
         </div>
         <span className="kicker" style={{ textAlign: "center" }}>

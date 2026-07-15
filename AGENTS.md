@@ -55,5 +55,6 @@ cd frontend && npm run lint && npx playwright test
 
 ## 5. Assets Reference
 
-- Canonical logo renders are located at [`resources/Telos_1.png`](./resources/Telos_1.png), [`resources/Telos_2.png`](./resources/Telos_2.png), and [`resources/Telos_3.png`](./resources/Telos_3.png).
-- The expected path for the owner-supplied vaporwave logo variant is `resources/Telos_vaporwave.png` (implementations must fall back to the monochrome mark when this asset is not present).
+- Canonical logo renders are located at [`resources/logos/Telos_sun_ink.svg`](./resources/logos/Telos_sun_ink.svg).
+- The custom vaporwave logo variant is located at [`resources/logos/Telos_sun_synthwave.svg`](./resources/logos/Telos_sun_synthwave.svg).
+
