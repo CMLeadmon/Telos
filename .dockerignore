@@ -11,3 +11,9 @@ backend/telos-core
 .env
 .env.local
 config/certs
+frontend/test-results
+frontend/playwright-report
+frontend/coverage
+backups
+docs
+resources

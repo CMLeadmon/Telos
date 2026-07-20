@@ -10,15 +10,15 @@ Read `AGENTS.md` for the build-order phases and hard constraints, and `documenta
 
 ## Commands
 
-**Go is not installed on the host** — run backend toolchain commands in a container. The host uses **podman** (not docker); the Traefik service mounts the podman socket.
+**Go is not installed on the host** — run backend toolchain commands in a container. The host uses **podman** (not docker). Traefik intentionally does not mount the Podman socket.
 
 ```bash
 # Full stack (requires .env — copy .env.example and fill in real values)
 podman-compose up -d --build
 
 # Backend tests/vet (from repo root)
-podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.22 go test ./...
-podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.22 go vet ./...
+podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go test ./...
+podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go vet ./...
 
 # Frontend (from frontend/)
 npm run dev      # dev server on :3000, talks to gateway on :8080
@@ -42,7 +42,7 @@ curl http://localhost:8080/api/v1/health
 - Media: `/api/v1/media*` and `/api/v1/stream/*` reverse-proxy Jellyfin (internal hostname `jellyfin:8096`) using `JELLYFIN_ADMIN_TOKEN`. Video streaming resolves PlaybackInfo then redirects to an HLS `.m3u8` sub-path proxied to Jellyfin. Redis caches Jellyfin lookups under `telos:jellyfin:*` keys.
 - Voice: `GET /api/v1/voice/token` mints a LiveKit HS256 JWT by hand (no LiveKit SDK) — see `GenerateLiveKitToken` and its test in `main_test.go`.
 
-**Mock fallbacks everywhere.** When Postgres/Redis are down or Jellyfin auth fails, handlers log a warning and serve hardcoded mock data (names suffixed `(Mock)`). A working-looking UI does not prove an integration works — check `podman logs telos-core` for fallback warnings.
+**Explicit degraded behavior.** Upstream failures return 502/503 and appear as `degraded` in `/api/v1/health`; handlers must never fabricate catalog or media records.
 
 **Frontend.** Next.js 16 static export (`output: "export"` in `next.config.ts`) — no server components at runtime, no API routes. Essentially one large client component, `frontend/src/components/CoreAppShell.tsx` (all four modules: Chat/Stream/Books/Files), plus two Zustand stores in `frontend/src/stores/` (`useThemeStore`, `useVoiceSessionStore` wrapping `livekit-client`). In dev, the component detects port 3000 and points API/WS calls at `:8080`. Heed `frontend/AGENTS.md`: this Next.js version is newer than training data — consult `node_modules/next/dist/docs/` before nontrivial Next.js work.
 

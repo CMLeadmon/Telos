@@ -61,7 +61,7 @@ grep -rn "ci""te:" documentation/ AGENTS.md ; echo "exit=$?"
 grep -rnE "TO""DO|TB""D" documentation/ AGENTS.md ; echo "exit=$?"
 
 # 2. Backend tests (Go is not installed on the host; run in a container)
-podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.22 go test ./...
+podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go test ./...
 
 # 3. Frontend lint + E2E (E2E needs `npm run dev` running on :3000)
 cd frontend && npm run lint && npx playwright test

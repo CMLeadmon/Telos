@@ -60,6 +60,7 @@ cd "$repo_root"
 required_paths() {
 	cat <<'EOF'
 .env.example
+.nvmrc
 AGENTS.md
 docker-compose.yml
 docker-compose.dev.yml
@@ -181,6 +182,28 @@ run_inventory() {
 			*) fail_inventory "development overlay binding is not loopback-only: $p" ;;
 			esac
 		done <<<"$dev_ports"
+	fi
+
+	# Pinned-toolchain assertions: no build input may float.
+	grep -qE '^go 1\.26\.5$' backend/go.mod ||
+		fail_inventory "backend/go.mod does not pin go 1.26.5"
+	[ -f .nvmrc ] && [ "$(cat .nvmrc)" = "24.18.0" ] ||
+		fail_inventory ".nvmrc does not pin Node.js 24.18.0"
+	grep -q 'FROM node:24\.18\.0-alpine' backend/Dockerfile ||
+		fail_inventory "backend/Dockerfile does not pin node:24.18.0-alpine"
+	grep -q 'FROM golang:1\.26\.5-alpine' backend/Dockerfile ||
+		fail_inventory "backend/Dockerfile does not pin golang:1.26.5-alpine"
+	grep -q 'image: postgres:16\.14-alpine' docker-compose.yml ||
+		fail_inventory "docker-compose.yml does not pin postgres:16.14-alpine"
+	grep -q '"next": "16\.2\.10"' frontend/package.json ||
+		fail_inventory "frontend/package.json does not pin next 16.2.10 exactly"
+	grep -q '"postcss": "8\.5\.10"' frontend/package.json ||
+		fail_inventory "frontend/package.json does not pin the postcss 8.5.10 override"
+	grep -q '"epubjs": "0\.4\.2"' frontend/package.json ||
+		fail_inventory "frontend/package.json does not pin epubjs 0.4.2"
+	if grep -nE '"(dependencies|devDependencies)"' -A 40 frontend/package.json |
+		grep -E '": "[\^~]' >/dev/null; then
+		fail_inventory "frontend/package.json contains floating (^/~) dependency ranges"
 	fi
 
 	if [ "$INVENTORY_FAILED" -ne 0 ]; then
