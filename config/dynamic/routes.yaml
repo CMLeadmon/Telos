@@ -1,0 +1,56 @@
+http:
+  routers:
+    livekit:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/livekit`)'
+      entryPoints:
+        - websecure
+      priority: 100
+      middlewares:
+        - livekit-strip
+      service: livekit
+      tls:
+        certResolver: letsencrypt
+    telos-core:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/`)'
+      entryPoints:
+        - websecure
+      priority: 1
+      middlewares:
+        - upload-limits
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+  middlewares:
+    livekit-strip:
+      stripPrefix:
+        prefixes:
+          - /livekit
+    upload-limits:
+      buffering:
+        maxRequestBodyBytes: 104857600
+
+  services:
+    livekit:
+      loadBalancer:
+        servers:
+          - url: http://livekit:7880
+    telos-core:
+      loadBalancer:
+        servers:
+          - url: http://telos-core:8080
+
+tcp:
+  routers:
+    turn:
+      rule: 'HostSNI(`turn.{{ env "TELOS_DOMAIN" }}`)'
+      entryPoints:
+        - websecure
+      service: turn
+      tls:
+        certResolver: letsencrypt
+  services:
+    turn:
+      loadBalancer:
+        servers:
+          - address: livekit:5349

@@ -35,7 +35,23 @@ Every implementing agent must strictly comply with these core rules:
 
 ---
 
-## 4. Verification Suite
+## 4. Environment Inputs
+
+`.env.example` is the canonical inventory of every environment variable the
+stack reads; `docker compose --env-file .env.example config --quiet` must
+succeed at all times. Production inputs (domain, ACME, database, Redis,
+LiveKit, Jellyfin, Grimmory credentials, `STORAGE_PATH`, `TELOS_BOOTSTRAP_TOKEN`)
+appear in the file's production section with placeholder values only.
+Development-only inputs (`TELOS_ENV=development` plus the loopback-only
+`docker-compose.dev.yml` overlay) are listed in the development section and
+must never reach a production deployment. Runtime-critical configuration
+(`backend/db/migrations/`, `config/`, `docker-compose*.yml`,
+`documentation/operations/`, `scripts/`) must remain tracked;
+`scripts/verify-clean-checkout.sh --inventory-only` enforces this.
+
+---
+
+## 5. Verification Suite
 
 Run this plain shell verification command block to validate your changes:
 
@@ -53,7 +69,7 @@ cd frontend && npm run lint && npx playwright test
 
 ---
 
-## 5. Assets Reference
+## 6. Assets Reference
 
 - Canonical logo renders are located at [`resources/logos/Telos_sun_ink.svg`](./resources/logos/Telos_sun_ink.svg).
 - The custom vaporwave logo variant is located at [`resources/logos/Telos_sun_synthwave.svg`](./resources/logos/Telos_sun_synthwave.svg).

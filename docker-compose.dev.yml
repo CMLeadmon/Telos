@@ -1,0 +1,9 @@
+# Development-only host bindings. Layer this over docker-compose.yml; never
+# deploy this override as part of the production stack.
+services:
+  telos-core:
+    ports:
+      - "127.0.0.1:8080:8080"
+  livekit:
+    ports:
+      - "127.0.0.1:7880:7880"
