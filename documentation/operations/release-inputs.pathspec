@@ -54,3 +54,4 @@ scripts/tests/verify-clean-checkout-test.sh
 scripts/verify-clean-checkout.sh
 documentation/operations/release-inputs.pathspec
 documentation/operations/clean-checkout-verification.md
+documentation/operations/dependency-security-baseline.md
