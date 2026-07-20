@@ -13,10 +13,10 @@ Telos merges Discord-style chat/voice, Jellyfin-style streaming, Grimmory-style 
 | Parameter | Specification |
 |---|---|
 | **Default Host** | `telos.local` |
-| **Tech Stack** | Go/Rust core gateway + React/TypeScript/Zustand client |
-| **Headless Services** | Traefik v3.3, PostgreSQL 16, Redis 7, Jellyfin, Grimmory, MariaDB 10.11, LiveKit |
-| **Theming System** | Flat light / Flat dark (default) / Vaporwave (classic neon) |
-| **Licensing Target** | MIT or Apache-2.0 for custom gateway/client core; child services run under their respective copyleft licenses (GPL/AGPL) |
+| **Tech Stack** | Go core gateway + React/TypeScript/Zustand client |
+| **Headless Services** | Traefik v3, PostgreSQL 16, Redis 7, Jellyfin, Grimmory, MariaDB 10.11, LiveKit, ClamAV |
+| **Theming System** | Synthwave (default) / Ink |
+| **License** | Apache-2.0 for the Telos gateway/client (see `LICENSE`, `NOTICE`, `CREDITS.md`); isolated services run under their respective licenses (GPL/AGPL/MIT/etc.) |
 
 ---
 
@@ -28,9 +28,10 @@ Telos merges Discord-style chat/voice, Jellyfin-style streaming, Grimmory-style 
 |---|---|
 | [`architecture/01-system-overview.md`](./architecture/01-system-overview.md) | Suite-orchestration paradigm, network ports, volume paths, and system topology. |
 | [`architecture/02-deployment.md`](./documentation/../architecture/02-deployment.md) | Secret interpolation schema, `.env.example` configurations, and multi-network Compose files. |
-| [`architecture/03-gateway-and-api.md`](./architecture/03-gateway-and-api.md) | Ingress routing labels, static Traefik parameters, SSO curl examples, and core REST API matrices. |
+| [`architecture/03-gateway-and-api.md`](./architecture/03-gateway-and-api.md) | File-provider ingress, upstream credential boundaries, and core REST API matrices. |
 | [`architecture/04-frontend-architecture.md`](./architecture/04-frontend-architecture.md) | Zustand real-time stores, LiveKit v2 listener connections, and persistent app shell integrations. |
 | [`architecture/05-roadmap-and-licensing.md`](./architecture/05-roadmap-and-licensing.md) | Integrated roadmap phases, mitigation strategies, copyleft boundary analysis, and service attributions. |
+| [`operations/backup-and-restore.md`](./operations/backup-and-restore.md) | Production backup contents, secure retention, destructive restore procedure, and verification checklist. |
 
 ---
 

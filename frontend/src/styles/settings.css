@@ -1,0 +1,66 @@
+/* Settings module — Telos Design System */
+.settings{display:flex;gap:26px;height:100%;min-height:0;padding:26px;overflow:hidden}
+.setnav{width:210px;flex:none;display:flex;flex-direction:column;gap:4px;overflow-y:auto}
+.setnav .grouplabel{margin:14px 0 6px}
+.setnavbtn{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r);
+  font-family:var(--f-sans);font-weight:600;font-size:13.5px;color:var(--muted);background:none;border:0;
+  cursor:pointer;text-align:left;width:100%}
+.setnavbtn:hover{background:var(--surface-2);color:var(--ink)}
+.setnavbtn.on{background:var(--surface-2);color:var(--accent);box-shadow:inset 0 0 0 1px var(--line)}
+.setpanel{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;gap:18px;max-width:760px}
+.setpanel h2{font-size:19px;margin:0}
+.setcard{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--r-lg);padding:20px;
+  display:flex;flex-direction:column;gap:14px}
+.setrow{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.setrow .lbl{display:flex;flex-direction:column;gap:3px}
+.setrow .lbl b{font-size:13.5px}
+.setrow .lbl span{font-size:12px;color:var(--faint)}
+.setfield{display:flex;flex-direction:column;gap:6px}
+.setfield label{font-family:var(--f-mono);font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint)}
+.setfield input,.setfield select,.setrow select{background:var(--input);border:1px solid var(--line);border-radius:var(--r);
+  padding:10px 12px;color:var(--ink);font-family:var(--f-sans);font-size:13.5px}
+.setfield input:focus,.setfield select:focus,.setrow select:focus{outline:none;border-color:var(--accent)}
+.setfield input:disabled{opacity:.55}
+.settable{width:100%;border-collapse:collapse;font-size:13px}
+.settable th{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+.settable td{padding:10px;border-bottom:1px solid var(--line);vertical-align:middle}
+.setava{width:64px;height:64px;border-radius:var(--r-pill);object-fit:cover;border:1px solid var(--line);
+  background:var(--surface);flex:none;font-family:var(--f-mono);font-size:18px}
+.chipav{width:18px;height:18px;border-radius:var(--r-pill);object-fit:cover}
+.msgav{width:100%;height:100%;border-radius:inherit;object-fit:cover;display:block}
+.setmsg{font-family:var(--f-mono);font-size:12px}
+.setmsg.ok{color:var(--live)}
+.setmsg.err{color:var(--rose)}
+.setswitch{appearance:none;width:38px;height:22px;border-radius:var(--r-pill);background:var(--input);
+  border:1px solid var(--line);position:relative;cursor:pointer;flex:none;margin:0}
+.setswitch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:var(--muted);transition:transform .15s ease,background .15s ease}
+.setswitch:checked{background:var(--primary)}
+.setswitch:checked::after{transform:translateX(16px);background:var(--on-primary)}
+.setperms{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+.setperm{display:flex;align-items:flex-start;gap:8px;font-size:12.5px;padding:8px;border-radius:var(--r);
+  border:1px solid var(--line);cursor:pointer}
+.setperm .desc{color:var(--faint);font-size:11.5px}
+.setdanger{border-color:color-mix(in srgb, var(--rose) 45%, var(--line))}
+html[data-motion="reduced"] *,html[data-motion="reduced"] *::before,html[data-motion="reduced"] *::after{
+  animation-duration:.001s!important;transition-duration:.001s!important}
+@media (max-width: 900px){.settings{flex-direction:column;padding:16px;overflow-y:auto}
+  .setnav{width:100%;flex-direction:row;flex-wrap:wrap;overflow:visible}
+  .setnav .grouplabel{width:100%}}
+
+/* Credits */
+.creditsec h2{font-size:18px;margin-bottom:6px}
+.creditintro{color:var(--muted);font-size:13px;max-width:62ch;margin-bottom:14px}
+.creditintro a{color:var(--cyan)}
+.creditlist{list-style:none;margin:0 0 18px;padding:0;display:flex;flex-direction:column;gap:8px}
+.creditrow{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;
+  border:1px solid var(--line);border-radius:var(--r)}
+.creditmain{display:flex;flex-direction:column;gap:2px;min-width:0}
+.creditname{font-weight:600;font-size:13.5px}
+.creditrole{color:var(--faint);font-size:12px}
+.creditlinks{display:flex;gap:14px;flex:none}
+.creditlinks a{display:inline-flex;align-items:center;gap:5px;font-family:var(--f-mono);font-size:11.5px;
+  color:var(--cyan);text-decoration:none}
+.creditlinks a:hover{text-decoration:underline}
+@media (max-width: 700px){.creditrow{flex-direction:column;align-items:flex-start}}

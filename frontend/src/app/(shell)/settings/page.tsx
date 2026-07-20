@@ -1,7 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import { KeyRound, Mail, Mic, Palette, Shield, User, Users } from "lucide-react";
+import {
+  BadgeInfo,
+  KeyRound,
+  Mail,
+  Mic,
+  Palette,
+  Shield,
+  User,
+  Users,
+} from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { ProfileSection } from "@/components/settings/ProfileSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
@@ -10,12 +19,14 @@ import { VoiceAudioSection } from "@/components/settings/VoiceAudioSection";
 import { AdminUsersSection } from "@/components/settings/AdminUsersSection";
 import { AdminInvitesSection } from "@/components/settings/AdminInvitesSection";
 import { AdminRolesSection } from "@/components/settings/AdminRolesSection";
+import { CreditsSection } from "@/components/settings/CreditsSection";
 
 const SECTIONS = [
   { id: "profile", label: "Profile", icon: User, admin: false, C: ProfileSection },
   { id: "security", label: "Security", icon: Shield, admin: false, C: SecuritySection },
   { id: "appearance", label: "Appearance", icon: Palette, admin: false, C: AppearanceSection },
   { id: "voice", label: "Voice & Audio", icon: Mic, admin: false, C: VoiceAudioSection },
+  { id: "credits", label: "Credits", icon: BadgeInfo, admin: false, C: CreditsSection },
   { id: "users", label: "Members", icon: Users, admin: true, C: AdminUsersSection },
   { id: "invites", label: "Invites", icon: Mail, admin: true, C: AdminInvitesSection },
   { id: "roles", label: "Roles", icon: KeyRound, admin: true, C: AdminRolesSection },

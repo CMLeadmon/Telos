@@ -21,7 +21,7 @@ export default function LandingPage() {
         <div className="navlinks">
           <a href="#product">Product</a>
           <a href="#sovereign">Self-host</a>
-          <a href="https://github.com" rel="noreferrer">
+          <a href="https://github.com/CMLeadmon/Telos" rel="noreferrer">
             Docs
           </a>
         </div>
@@ -51,7 +51,7 @@ export default function LandingPage() {
             </Link>
             <a
               className="btn-ghost btn-lg"
-              href="https://github.com"
+              href="https://github.com/CMLeadmon/Telos"
               rel="noreferrer"
             >
               <Github size={17} /> Star on GitHub
@@ -74,8 +74,8 @@ export default function LandingPage() {
             <h3>Chat</h3>
             <p>
               Group messaging built for talking about what you&apos;re reading
-              and watching. Threads, voice lounges, and an AI that summarizes
-              what you missed.
+              and watching. Threads, voice lounges, and a durable inbox that
+              keeps what you missed.
             </p>
           </div>
           <div className="feat">
@@ -105,8 +105,9 @@ export default function LandingPage() {
             </div>
             <h3>Library</h3>
             <p>
-              EPUBs, PDFs and audiobooks in one shelf. Read in-app, annotate
-              together, and let the oracle analyze any chapter.
+              EPUBs, PDFs and audiobooks in one shelf. Read in-app, keep
+              private notes, and share annotations with your community when
+              you choose.
             </p>
           </div>
         </div>
@@ -123,11 +124,16 @@ export default function LandingPage() {
             </h2>
             <p>
               Telos runs on a box you control — a homelab, a VPS, an old
-              laptop. Your friends join over an encrypted tunnel. Nothing
-              leaves the node unless you send it.
+              laptop. Your friends join over direct HTTPS, or a private
+              network you operate. External calls — metadata lookups and
+              encrypted off-node backups — happen only when you enable them.
             </p>
             <div className="cta">
-              <a className="btn cyan" href="https://github.com" rel="noreferrer">
+              <a
+                className="btn cyan"
+                href="https://github.com/CMLeadmon/Telos/blob/main/documentation/architecture/02-deployment.md"
+                rel="noreferrer"
+              >
                 <Terminal size={16} /> Read the deploy guide
               </a>
             </div>
@@ -147,7 +153,7 @@ export default function LandingPage() {
             </div>
             <div className="cell">
               <div className="k">License</div>
-              <div className="v indigo">AGPL-3.0</div>
+              <div className="v indigo">Apache-2.0</div>
             </div>
           </div>
         </div>

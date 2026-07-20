@@ -172,4 +172,4 @@ The `SubModuleRenderer` component swaps page views (Chat, Stream, Books, Files) 
 
 ## 5. Theming State
 
-Theme selection (`light`, `dark`, or `vaporwave`) is persisted in a local storage store managed via Zustand. The theme is applied as a `data-theme` attribute on the root element. Components must consume the CSS variables exposed under the selected theme rather than conditionally branching styles within components.
+Theme selection (`synthwave`, the default, or `ink`) is persisted in a local storage store managed via Zustand. The theme is applied as a `data-theme` attribute on the root element. Components must consume the CSS variables exposed under the selected theme rather than conditionally branching styles within components.
