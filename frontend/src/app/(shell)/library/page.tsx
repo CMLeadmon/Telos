@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpen, ExternalLink, ImageOff, Music } from "lucide-react";
+import { BookOpen, ImageOff, Music, Settings, Share2 } from "lucide-react";
 import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
@@ -10,7 +10,9 @@ import {
   useLibraryStore,
 } from "@/stores/useLibraryStore";
 import { useMediaStore, type MediaItem } from "@/stores/useMediaStore";
+import { useAuthStore } from "@/stores/useAuthStore";
 import { BookReader } from "@/components/library/BookReader";
+import { BookManageModal } from "@/components/library/BookManageModal";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 function AudiobookRow({
@@ -156,14 +158,35 @@ function FacetGroup({
 function BookCard({
   book,
   onRead,
+  onManage,
+  canManage,
 }: {
   book: LibraryBook;
   onRead: () => void;
+  onManage: () => void;
+  canManage: boolean;
 }) {
   const [coverBroken, setCoverBroken] = useState(false);
   const isEpub = book.format === "EPUB";
+  const open = () => {
+    if (isEpub) onRead();
+    else window.open(libraryContentUrl(book.id), "_blank", "noopener");
+  };
   return (
-    <article className="library-card" data-testid="library-card">
+    <article
+      className="library-card"
+      data-testid="library-card"
+      role="button"
+      tabIndex={0}
+      aria-label={`${isEpub ? "read" : "open"} ${book.title}`}
+      onClick={open}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          open();
+        }
+      }}
+    >
       <div className="coverwrap">
         {coverBroken ? (
           <ImageOff size={28} />
@@ -182,25 +205,30 @@ function BookCard({
       <div className="bauthors">{asList(book.authors).join(", ")}</div>
       <div className="brow">
         <span className={`fmtpill${isEpub ? "" : " pdf"}`}>{book.format}</span>
-        {isEpub ? (
-          <button
-            className="btn-ghost btn-sm"
-            aria-label={`read ${book.title}`}
-            onClick={onRead}
-          >
-            read
-          </button>
-        ) : (
+        <div className="book-actions">
           <a
             className="btn-ghost btn-sm"
-            aria-label={`open ${book.title}`}
-            href={libraryContentUrl(book.id)}
-            target="_blank"
-            rel="noreferrer"
+            aria-label={`share ${book.title}`}
+            title="Share to chat"
+            href={`/chat?share_kind=library_book&share_ref=${book.id}`}
+            onClick={(e) => e.stopPropagation()}
           >
-            open <ExternalLink size={12} />
+            <Share2 size={12} />
           </a>
-        )}
+          {canManage && (
+            <button
+              className="btn-ghost btn-sm"
+              aria-label={`manage ${book.title}`}
+              title="Book settings"
+              onClick={(event) => {
+                event.stopPropagation();
+                onManage();
+              }}
+            >
+              <Settings size={12} />
+            </button>
+          )}
+        </div>
       </div>
     </article>
   );
@@ -217,13 +245,31 @@ export default function LibraryPage() {
     clearFilters,
     filtered,
   } = useLibraryStore();
+  const canManage = useAuthStore(
+    (state) => state.user?.Permissions?.includes("manage_library") ?? false,
+  );
   const [reading, setReading] = useState<LibraryBook | null>(null);
+  const [managing, setManaging] = useState<LibraryBook | null>(null);
+
+  const books = filtered();
 
   useEffect(() => {
     if (status === "idle") void fetchCatalog();
   }, [status, fetchCatalog]);
 
-  const books = filtered();
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const readId = params.get("read");
+    if (readId && books.length > 0) {
+      const found = books.find((b) => String(b.id) === readId);
+      if (found) {
+        setTimeout(() => setReading(found), 0);
+      }
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [books]);
+
   const anyFilter =
     filters.author !== null ||
     filters.category !== null ||
@@ -317,7 +363,13 @@ export default function LibraryPage() {
           {books.length > 0 && (
             <div className="library-grid" data-testid="library-grid">
               {books.map((b) => (
-                <BookCard key={b.id} book={b} onRead={() => setReading(b)} />
+                <BookCard
+                  key={b.id}
+                  book={b}
+                  canManage={canManage}
+                  onRead={() => setReading(b)}
+                  onManage={() => setManaging(b)}
+                />
               ))}
             </div>
           )}
@@ -328,6 +380,12 @@ export default function LibraryPage() {
 
       {reading && (
         <BookReader book={reading} onClose={() => setReading(null)} />
+      )}
+      {managing && (
+        <BookManageModal
+          book={managing}
+          onClose={() => setManaging(null)}
+        />
       )}
     </>
   );

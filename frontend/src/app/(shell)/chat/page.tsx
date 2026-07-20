@@ -1,20 +1,30 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Hash, Plus, Send, Smile } from "lucide-react";
+import { Hash, Plus, Send, Smile, X } from "lucide-react";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { EmojiPicker } from "@/components/chat/EmojiPicker";
 import { MentionAutocomplete, type SearchUser } from "@/components/chat/MentionAutocomplete";
+import { SharePicker } from "@/components/chat/SharePicker";
 import { api } from "@/lib/api";
+
+interface ShareItemMetadata {
+  id: string | number;
+  title: string;
+}
 
 export default function ChatPage() {
   const { channels, activeChannelId, messages, connection, connect, send } =
     useChatSessionStore();
   const [draft, setDraft] = useState("");
   const [showPicker, setShowPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showSharePicker, setShowSharePicker] = useState(false);
+  const [pickerInitialTab, setPickerInitialTab] = useState<"book" | "film">("book");
+  const [stagedEmbed, setStagedEmbed] = useState<{ kind: "library_book" | "stream_film"; ref: string; title: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -35,6 +45,33 @@ export default function ChatPage() {
       if (first) connect(first.id);
     }
   }, [activeChannelId, channels, connect]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const shareKind = params.get("share_kind");
+    const shareRef = params.get("share_ref");
+    if (shareKind && shareRef) {
+      const kind = shareKind as "library_book" | "stream_film";
+      const url = kind === "library_book"
+        ? `/api/v1/library/books/${shareRef}`
+        : `/api/v1/media/items/${shareRef}`;
+
+      api<ShareItemMetadata>(url)
+        .then((item) => {
+          if (item) {
+            setStagedEmbed({
+              kind,
+              ref: shareRef,
+              title: item.title,
+            });
+          }
+        })
+        .catch((err) => console.error("failed to fetch shared item", err));
+
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
@@ -147,9 +184,10 @@ export default function ChatPage() {
   };
 
   const submit = () => {
-    if (draft.trim()) {
-      send(draft);
+    if (draft.trim() || stagedEmbed) {
+      send(draft, stagedEmbed ? { kind: stagedEmbed.kind, ref: stagedEmbed.ref } : undefined);
       setDraft("");
+      setStagedEmbed(null);
       setMentionQuery(null);
       setMatchingUsers([]);
     }
@@ -181,10 +219,118 @@ export default function ChatPage() {
         ))}
       </div>
 
+      {stagedEmbed && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            background: "var(--surface-2)",
+            border: "1px solid var(--line)",
+            borderBottom: "none",
+            borderRadius: "var(--r) var(--r) 0 0",
+            padding: "6px 12px",
+            fontSize: "12px",
+            color: "var(--ink)",
+            maxWidth: "600px",
+            margin: "0 auto",
+            position: "relative",
+            zIndex: 5,
+          }}
+        >
+          <span style={{ fontWeight: 600, color: "var(--accent)" }}>
+            Staged Embed:
+          </span>
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {stagedEmbed.title} ({stagedEmbed.kind === "library_book" ? "Book" : "Media"})
+          </span>
+          <button
+            onClick={() => setStagedEmbed(null)}
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "var(--faint)",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="composer">
-        <button className="iconbtn" aria-label="attach">
-          <Plus size={20} />
-        </button>
+        <div style={{ position: "relative" }}>
+          <button className="iconbtn" aria-label="attach" onClick={() => setShowAttachMenu(!showAttachMenu)}>
+            <Plus size={20} />
+          </button>
+          {showAttachMenu && (
+            <>
+              <div style={{ position: "fixed", inset: 0, zIndex: 1050 }} onClick={() => setShowAttachMenu(false)} />
+              <div
+                style={{
+                  position: "absolute",
+                  bottom: "100%",
+                  left: 0,
+                  marginBottom: "8px",
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--line)",
+                  borderRadius: "var(--r-xs)",
+                  padding: "4px",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "2px",
+                  zIndex: 1055,
+                  minWidth: "160px",
+                  boxShadow: "0 -4px 12px rgba(0,0,0,0.2)",
+                  backdropFilter: "blur(8px)",
+                }}
+              >
+                <button
+                  onClick={() => {
+                    setPickerInitialTab("book");
+                    setShowSharePicker(true);
+                    setShowAttachMenu(false);
+                  }}
+                  style={{
+                    padding: "6px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderRadius: "var(--r-xs)",
+                    textAlign: "left",
+                    color: "var(--ink)",
+                    fontSize: "12.5px",
+                    cursor: "pointer",
+                  }}
+                  className="attach-opt-btn"
+                >
+                  Share from Library
+                </button>
+                <button
+                  onClick={() => {
+                    setPickerInitialTab("film");
+                    setShowSharePicker(true);
+                    setShowAttachMenu(false);
+                  }}
+                  style={{
+                    padding: "6px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderRadius: "var(--r-xs)",
+                    textAlign: "left",
+                    color: "var(--ink)",
+                    fontSize: "12.5px",
+                    cursor: "pointer",
+                  }}
+                  className="attach-opt-btn"
+                >
+                  Share from Stream
+                </button>
+              </div>
+            </>
+          )}
+        </div>
         <div className="cwrap" style={{ position: "relative" }}>
           <input
             ref={inputRef}
@@ -220,6 +366,16 @@ export default function ChatPage() {
           <Send size={17} />
         </button>
       </div>
+
+      {showSharePicker && (
+        <SharePicker
+          defaultTab={pickerInitialTab}
+          onClose={() => setShowSharePicker(false)}
+          onPick={(kind, ref, title) => {
+            setStagedEmbed({ kind, ref, title });
+          }}
+        />
+      )}
     </>
   );
 }

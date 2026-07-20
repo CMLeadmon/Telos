@@ -35,18 +35,18 @@ All internal ports are container-internal (the port the process listens on insid
 | `telos-core` | custom Go (or Rust) build | Gateway, auth, chat/presence backend | ingress, backend, db | 8080 |
 | `postgres` | `postgres:16-alpine` | Chat + metadata persistence | db | 5432 |
 | `redis` | `redis:7-alpine` | Presence/state/cache | backend | 6379 |
-| `jellyfin` | `jellyfin/jellyfin:latest` | Headless transcoding + HLS streaming | ingress, backend | 8096 |
-| `grimmory` | `grimmory/grimmory:latest` | Headless publication catalog | ingress, backend, db | 6060 |
+| `jellyfin` | `jellyfin/jellyfin:latest` | Headless transcoding + HLS streaming | backend | 8096 |
+| `grimmory` | `grimmory/grimmory:latest` | Headless publication catalog | backend, db | 6060 |
 | `grimmory-db` | `mariadb:10.11` | Grimmory's dedicated database | db | 3306 |
 | `livekit` | `livekit/livekit-server:v1.10` | WebRTC SFU (voice/video) | ingress, backend | 7880 + published media ports |
 
 Three Docker networks partition the stack by trust boundary:
 
-- **`telos-ingress`** — joined by every container Traefik must reach directly (`traefik` itself, `telos-core`, `jellyfin`, `grimmory`, `livekit`). Nothing outside this network can be routed to by the edge.
-- **`telos-backend`** — joined by every container that participates in application-level backend traffic (`telos-core`, `redis`, `jellyfin`, `grimmory`, `livekit`). This is where presence, cache, and inter-service calls travel.
+- **`telos-ingress`** — joined only by Traefik and its two direct targets (`telos-core` and `livekit`). Nothing outside this network can be routed to by the edge.
+- **`telos-backend`** — joined by every container that participates in application-level backend traffic (`telos-core`, `redis`, `clamav`, `jellyfin`, `grimmory`, `livekit`). This is where presence, cache, scans, and inter-service calls travel.
 - **`telos-db`** — joined only by containers that speak to a database (`telos-core`, `postgres`, `grimmory`, `grimmory-db`). This network is not reachable from `telos-ingress`, isolating datastores from direct edge exposure.
 
-`telos-core` and `grimmory` each straddle all three networks because each is simultaneously an ingress target, a backend participant, and a database client.
+`telos-core` straddles all three networks. Grimmory joins only backend and database networks and is never an ingress target.
 
 ## 4. Topology diagram
 
@@ -64,27 +64,31 @@ The diagram below shows the two fundamentally different traffic shapes in Telos:
                      | (ingress) |
                      +-----+-----+
                            |
-                           | path-routed by prefix
-         +-------------+-------------+-------------+-------------+
-         |             |             |             |
-         v             v             v             v
-    /api/v1, /     /livekit      /jellyfin     /grimmory
-    auth, WS      (signaling
-    chat            only)
-         |             |             |             |
-         v             v             v             v
-   +-----------+ +-----------+ +-----------+ +-----------+
-   |telos-core | |  livekit  | | jellyfin  | | grimmory  |
-   +-----+-----+ +-----+-----+ +-----+-----+ +-----+-----+
-         |             |             |             |
-         v             v             +------+------+
-   +-----------+ +-----------+              |
-   | postgres  | |   redis   |              v
-   +-----------+ +-----------+   +-----------------------+
-                                  |  shared host storage  |
-                                  |  /mnt/storage/shared  |
-                                  | (jellyfin + grimmory) |
-                                  +-----------------------+
+                           | file-provider routes
+                    +------+------+
+                    |             |
+                    v             v
+               /api/v1, /     /livekit
+               auth, WS       signaling
+                    |             |
+                    v             v
+              +-----------+ +-----------+
+              |telos-core | |  livekit  |
+              +-----+-----+ +-----------+
+                    |
+          +---------+----------+
+          |         |          |
+          v         v          v
+   +----------+ +--------+ +----------+
+   | postgres | | redis  | | Jellyfin |
+   +----------+ +--------+ +----------+
+                                |
+                                v
+                    +-----------------------+
+                    |  shared host storage  |
+                    +-----------------------+
+
+   telos-core --------------------> grimmory
 
                                                 +-------------+
                                      grimmory-> | grimmory-db |
@@ -112,7 +116,7 @@ Key facts this diagram encodes:
 
 - **Chat** — client opens a WebSocket to `telos-core` (routed through `traefik`); messages persist to `postgres`; presence and typing/online state propagate via `redis` pub/sub to other connected `telos-core` instances.
 - **Voice** — client requests a join token from `telos-core`, which mints a signed JWT; the client presents that JWT to `livekit` over the `/livekit` signaling path (through `traefik`); once the session negotiates, the actual audio/video media flows as direct RTP/UDP between client and `livekit` on published media ports, never touching `traefik`.
-- **Media (streaming)** — video/audio playback requests HLS segments, which `traefik` proxies through to `jellyfin` under the `/jellyfin` path; `jellyfin` performs transcoding against files on shared host storage and streams segments back through the same path.
+- **Media (streaming)** — video/audio playback requests use narrow `/api/v1/stream/*` handlers on `telos-core`; the gateway authenticates and streams the corresponding Jellyfin response without exposing Jellyfin's administrative API.
 - **Books** — file uploads land in the `bookdrop` staging location; `grimmory` watches that location, ingests new files into its catalog, and fetches enrichment metadata from external sources (Google Books, Open Library) before persisting catalog records to `grimmory-db`.
 
 ## 6. Grimmory provenance

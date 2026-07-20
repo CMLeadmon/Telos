@@ -11,15 +11,26 @@ This Next.js version is newer than model training data — consult `node_modules
 ## Layout
 - Routes: `/` (landing), `/login`, and `(shell)/` group: `/chat`, `/stream`, `/library`, `/files` sharing `AppShell` (topbar · rail · arena · tabbar).
 - Stores (`src/stores/`): `useThemeStore` (persisted), `useAuthStore` (cookie session via `/api/v1/auth/*`), `useChatSessionStore` (channels + chat WS), `useVoiceSessionStore` (LiveKit).
-- `src/lib/api.ts` holds the single-origin logic: in `next dev` (port 3000) it targets the gateway on `:8080`; in production everything is relative.
+- `src/lib/api.ts` is always single-origin. The development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway; production serves the static export from that gateway directly.
 
 ## Commands
 ```bash
-npm run dev      # dev server on :3000 (gateway must run on :8080 for live data)
+npm run dev      # public dev server on :3000; proxies to loopback gateway/LiveKit
 npm run build    # static export to out/ (embedded by the Go gateway)
 npm run lint
 npx playwright test   # needs `npm run dev` already running — no webServer in config
 ```
+
+For access through a hostname other than `localhost`, list each trusted
+hostname or IP in comma-separated `TELOS_DEV_ORIGINS` values in the ignored
+`.env.development.local`. The development-only gateway and LiveKit loopback
+bindings are defined in `../docker-compose.dev.yml`; clients only need :3000.
+
+Port 3000 is plain HTTP. Browsers allow microphone capture on HTTP localhost as
+a development exception, but not on LAN IPs, Tailscale IPs, public IPs, or
+ordinary hostnames. Remote clients can render the development app over port
+3000, but voice requires a trusted HTTPS proxy or tunnel. Production users must
+use the Traefik-served `https://${TELOS_DOMAIN}` origin.
 
 ## Assets
 `public/logos/*.svg` are copied from `../resources/logos/` — the original SVGs have clean transparent backgrounds.

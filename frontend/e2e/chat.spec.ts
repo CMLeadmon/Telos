@@ -18,14 +18,14 @@ async function login(page: Page) {
 test("message send round-trips over WS after REST post", async ({ page }) => {
   await login(page);
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
-  
+
   const uniqueText = `e2e-msg-${Math.random().toString(36).slice(2)}`;
-  
+
   const input = page.locator('.composer input');
   await expect(input).toBeVisible();
   await input.fill(uniqueText);
   await input.press("Enter");
-  
+
   const mbody = page.locator(`.mbody`, { hasText: uniqueText });
   await expect(mbody).toBeVisible();
 });
@@ -40,7 +40,7 @@ test("online members roster is populated and counts update", async ({ page }) =>
 test("messages can be pinned and unpinned, showing in the pins aside", async ({ page }) => {
   await login(page);
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
-  
+
   const uniqueText = `e2e-pin-msg-${Math.random().toString(36).slice(2)}`;
 
   const input = page.locator('.composer input');
@@ -127,7 +127,7 @@ test("@mention autocomplete searches and inserts mentions", async ({ page }) => 
 
   const input = page.locator('.composer input');
   await input.fill("@");
-  
+
   // Autocomplete dropdown should appear
   const mentionDropdown = page.locator('.mention-dropdown');
   await expect(mentionDropdown).toBeVisible();
@@ -144,4 +144,43 @@ test("@mention autocomplete searches and inserts mentions", async ({ page }) => 
   // Send message
   await input.press("Enter");
   await expect(page.locator('.mbody', { hasText: `@${USERNAME!}` }).last()).toBeVisible();
+});
+
+test("media-share embed loop: share from library, send embed card, and navigate back via read action", async ({ page }) => {
+  await login(page);
+
+  // Go to Library and share Pride and Prejudice
+  await page.goto("/library/");
+  const card = page.getByTestId("library-card").filter({ hasText: "Pride and Prejudice" });
+  await expect(card).toBeVisible({ timeout: 15000 });
+
+  const shareBtn = card.getByRole("link", { name: /^share / });
+  await expect(shareBtn).toBeVisible();
+  await shareBtn.click();
+
+  // Verify redirected to chat and embed is staged
+  await page.waitForURL("**/chat**");
+  const stagedPreview = page.locator('span', { hasText: "Pride and Prejudice" });
+  await expect(stagedPreview).toBeVisible();
+
+  // Write a message and submit
+  const input = page.locator('.composer input');
+  await input.fill("Highly recommended read!");
+  await input.press("Enter");
+
+  // Verify message and rich card are rendered
+  await expect(page.locator('.mbody', { hasText: "Highly recommended read!" }).last()).toBeVisible();
+  const embedCard = page.locator('.share-card', { hasText: "Pride and Prejudice" }).last();
+  await expect(embedCard).toBeVisible();
+  await expect(embedCard.locator('div', { hasText: "LIBRARY BOOK" }).first()).toBeVisible();
+
+  // Click read button inside the card
+  const readActionBtn = embedCard.locator('button', { hasText: "Read" });
+  await expect(readActionBtn).toBeVisible();
+  await readActionBtn.click();
+
+  // Verify it navigates back to library and opens book reader
+  await page.waitForURL("**/library/**");
+  const reader = page.getByTestId("book-reader");
+  await expect(reader).toBeVisible({ timeout: 30000 });
 });

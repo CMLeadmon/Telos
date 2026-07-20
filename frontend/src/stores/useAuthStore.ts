@@ -5,15 +5,32 @@ export interface CurrentUser {
   ID: string;
   Username: string;
   Roles: string[];
+  Permissions: string[];
+  DisplayName: string;
+  HasAvatar: boolean;
 }
 
 interface AuthState {
   user: CurrentUser | null;
   status: "unknown" | "authenticated" | "anonymous";
   fetchMe: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
-  bootstrap: (username: string, password: string, token: string) => Promise<void>;
-  acceptInvite: (username: string, password: string, token: string) => Promise<void>;
+  login: (
+    username: string,
+    password: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
+  bootstrap: (
+    username: string,
+    password: string,
+    token: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
+  acceptInvite: (
+    username: string,
+    password: string,
+    token: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -27,35 +44,47 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       set({ user, status: "authenticated" });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        set({ user: null, status: "anonymous" });
+        set((state) =>
+          state.status === "authenticated"
+            ? state
+            : { user: null, status: "anonymous" },
+        );
       } else {
-        set({ status: "anonymous" });
+        set((state) =>
+          state.status === "authenticated" ? state : { status: "anonymous" },
+        );
       }
     }
   },
 
-  login: async (username, password) => {
+  login: async (username, password, signal) => {
     await api("/api/v1/auth/login", {
       method: "POST",
       body: JSON.stringify({ username, password }),
+      signal,
     });
-    await get().fetchMe();
+    const user = await api<CurrentUser>("/api/v1/auth/me", { signal });
+    set({ user, status: "authenticated" });
   },
 
-  bootstrap: async (username, password, token) => {
+  bootstrap: async (username, password, token, signal) => {
     await api("/api/v1/auth/bootstrap", {
       method: "POST",
       body: JSON.stringify({ username, password, token }),
+      signal,
     });
-    await get().login(username, password);
+    if (signal?.aborted) throw new ApiError(408, "Request timed out.");
+    await get().login(username, password, signal);
   },
 
-  acceptInvite: async (username, password, token) => {
+  acceptInvite: async (username, password, token, signal) => {
     await api("/api/v1/auth/invites/accept", {
       method: "POST",
       body: JSON.stringify({ username, password, token }),
+      signal,
     });
-    await get().login(username, password);
+    if (signal?.aborted) throw new ApiError(408, "Request timed out.");
+    await get().login(username, password, signal);
   },
 
   logout: async () => {

@@ -1,5 +1,10 @@
+"use client";
+
 // The sanctioned decoration: retro sun + perspective grid + glowline + palms.
 // Renders flat (rose sun, faint navy grid) automatically under data-theme="ink".
+// Users can turn it off entirely via Settings → Appearance.
+
+import { usePreferencesStore } from "@/stores/usePreferencesStore";
 
 const PALM_PATHS = (
   <>
@@ -13,6 +18,8 @@ const PALM_PATHS = (
 );
 
 export function VaporwaveScene() {
+  const sceneEnabled = usePreferencesStore((s) => s.prefs.sceneEnabled);
+  if (!sceneEnabled) return null;
   return (
     <div className="scene" aria-hidden="true">
       <div className="sun" />

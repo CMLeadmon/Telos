@@ -1,11 +1,8 @@
 // Single-origin gateway client. In production the static export is served by
-// the Go gateway itself, so all paths are relative. In `next dev` (port 3000)
-// the gateway runs separately on :8080.
+// the Go gateway. The development server proxies these same paths to the local
+// gateway, so browsers never need direct access to an additional port.
 
 export function apiBase(): string {
-  if (typeof window !== "undefined" && window.location.port === "3000") {
-    return `${window.location.protocol}//${window.location.hostname}:8080`;
-  }
   return "";
 }
 
@@ -24,20 +21,15 @@ export function libraryContentUrl(bookId: number): string {
 export function wsBase(): string {
   if (typeof window === "undefined") return "";
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-  if (window.location.port === "3000") {
-    return `${proto}//${window.location.hostname}:8080`;
-  }
   return `${proto}//${window.location.host}`;
 }
 
 export function livekitUrl(): string {
   const configured = process.env.NEXT_PUBLIC_LIVEKIT_URL;
   if (configured) return configured;
-  if (typeof window !== "undefined" && window.location.port === "3000") {
-    return `ws://${window.location.hostname}:7880`;
-  }
   if (typeof window !== "undefined") {
-    return `wss://${window.location.host}/livekit`;
+    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${proto}//${window.location.host}/livekit`;
   }
   return "";
 }
@@ -48,17 +40,38 @@ export class ApiError extends Error {
   }
 }
 
-// Session cookie is HttpOnly; credentials must ride along in dev where the
-// gateway is a different origin.
+// The session cookie is HttpOnly and all browser requests stay same-origin.
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${apiBase()}${path}`, {
-    credentials: "include",
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    ...init,
-  });
+  let res: Response;
+  try {
+    const headers = new Headers(init?.headers);
+    if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
+      headers.set("Content-Type", "application/json");
+    }
+    res = await fetch(`${apiBase()}${path}`, {
+      ...init,
+      credentials: "include",
+      headers,
+    });
+  } catch {
+    if (init?.signal?.aborted) {
+      throw new ApiError(408, "Request timed out.");
+    }
+    throw new ApiError(
+      0,
+      "Cannot reach this Telos node. Check the server address and try again.",
+    );
+  }
+
+  const text = await res.text().catch(() => "");
   if (!res.ok) {
-    const text = await res.text().catch(() => res.statusText);
     throw new ApiError(res.status, text.trim() || res.statusText);
   }
-  return res.json() as Promise<T>;
+  if (!text.trim()) return undefined as T;
+
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ApiError(res.status, "Server returned an invalid response.");
+  }
 }

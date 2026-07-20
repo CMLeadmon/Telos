@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -8,10 +9,15 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
+	"net"
 	"net/http"
+	"net/textproto"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,6 +36,12 @@ var grimmoryTok struct {
 	expiresAt time.Time
 }
 
+var grimmoryMetadataHTTPClient = func() *http.Client {
+	transport := upstreamTransport.Clone()
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &http.Client{Transport: transport}
+}()
+
 func grimmoryLogin(ctx context.Context) (string, time.Duration, error) {
 	payload, _ := json.Marshal(map[string]string{
 		"username": os.Getenv("GRIMMORY_ADMIN_USER"),
@@ -41,7 +53,10 @@ func grimmoryLogin(ctx context.Context) (string, time.Duration, error) {
 		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req = req.WithContext(requestCtx)
+	resp, err := upstreamHTTPClient.Do(req)
 	if err != nil {
 		return "", 0, err
 	}
@@ -78,16 +93,19 @@ func getGrimmoryToken(ctx context.Context) (string, error) {
 	return tok, nil
 }
 
-// grimmoryGET performs an authenticated GET, re-logging-in once on 401
-// (token revoked server-side, e.g. after a Grimmory restart).
-func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
+// grimmoryRequest performs one explicit authenticated upstream request,
+// re-logging-in once on 401 (for example after a Grimmory restart).
+func grimmoryRequest(ctx context.Context, client *http.Client, method, path, contentType string, body []byte) (*http.Response, error) {
 	do := func(tok string) (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, "GET", grimmoryBaseURL+path, nil)
+		req, err := http.NewRequestWithContext(ctx, method, grimmoryBaseURL+path, bytes.NewReader(body))
 		if err != nil {
 			return nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+tok)
-		return http.DefaultClient.Do(req)
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		return client.Do(req)
 	}
 	tok, err := getGrimmoryToken(ctx)
 	if err != nil {
@@ -107,20 +125,32 @@ func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
 	return resp, err
 }
 
+func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
+	return grimmoryRequest(ctx, upstreamHTTPClient, http.MethodGet, path, "", nil)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Library — books catalog (translated from Grimmory)
 // ═══════════════════════════════════════════════════════════════════════════
 
 type LibraryBook struct {
-	ID         int64    `json:"id"`
-	Title      string   `json:"title"`
-	Authors    []string `json:"authors"`
-	Categories []string `json:"categories"`
-	Language   string   `json:"language"`
-	Format     string   `json:"format"` // primaryFile.bookType: "EPUB" | "PDF"
-	FileSizeKB int64    `json:"fileSizeKb"`
-	AddedOn    string   `json:"addedOn"`
-	Library    string   `json:"library"`
+	ID            int64    `json:"id"`
+	Title         string   `json:"title"`
+	Subtitle      string   `json:"subtitle"`
+	Authors       []string `json:"authors"`
+	Categories    []string `json:"categories"`
+	Language      string   `json:"language"`
+	Description   string   `json:"description"`
+	SeriesName    string   `json:"seriesName"`
+	SeriesNumber  *float64 `json:"seriesNumber"`
+	Publisher     string   `json:"publisher"`
+	PublishedDate string   `json:"publishedDate"`
+	ISBN10        string   `json:"isbn10"`
+	ISBN13        string   `json:"isbn13"`
+	Format        string   `json:"format"` // primaryFile.bookType: "EPUB" | "PDF"
+	FileSizeKB    int64    `json:"fileSizeKb"`
+	AddedOn       string   `json:"addedOn"`
+	Library       string   `json:"library"`
 }
 
 type FacetValue struct {
@@ -141,10 +171,18 @@ type grimmoryBook struct {
 	AddedOn     string `json:"addedOn"`
 	LibraryName string `json:"libraryName"`
 	Metadata    struct {
-		Title      string   `json:"title"`
-		Language   string   `json:"language"`
-		Authors    []string `json:"authors"`
-		Categories []string `json:"categories"`
+		Title         string   `json:"title"`
+		Subtitle      string   `json:"subtitle"`
+		Authors       []string `json:"authors"`
+		Categories    []string `json:"categories"`
+		Language      string   `json:"language"`
+		Description   string   `json:"description"`
+		SeriesName    string   `json:"seriesName"`
+		SeriesNumber  *float64 `json:"seriesNumber"`
+		Publisher     string   `json:"publisher"`
+		PublishedDate string   `json:"publishedDate"`
+		ISBN10        string   `json:"isbn10"`
+		ISBN13        string   `json:"isbn13"`
 	} `json:"metadata"`
 	PrimaryFile struct {
 		BookType   string `json:"bookType"`
@@ -152,8 +190,23 @@ type grimmoryBook struct {
 	} `json:"primaryFile"`
 }
 
+func libraryBookFromGrimmory(b grimmoryBook) LibraryBook {
+	return LibraryBook{
+		ID: b.ID, Title: b.Metadata.Title, Subtitle: b.Metadata.Subtitle,
+		Authors: b.Metadata.Authors, Categories: b.Metadata.Categories,
+		Language: b.Metadata.Language, Description: b.Metadata.Description,
+		SeriesName: b.Metadata.SeriesName, SeriesNumber: b.Metadata.SeriesNumber,
+		Publisher: b.Metadata.Publisher, PublishedDate: b.Metadata.PublishedDate,
+		ISBN10: b.Metadata.ISBN10, ISBN13: b.Metadata.ISBN13,
+		Format: b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
+		AddedOn: b.AddedOn, Library: b.LibraryName,
+	}
+}
+
 func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
-	resp, err := grimmoryGET(ctx, "/api/v1/books")
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	resp, err := grimmoryGET(requestCtx, "/api/v1/books")
 	if err != nil {
 		return nil, err
 	}
@@ -167,59 +220,97 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	}
 	books := make([]LibraryBook, 0, len(raw))
 	for _, b := range raw {
-		books = append(books, LibraryBook{
-			ID: b.ID, Title: b.Metadata.Title, Authors: b.Metadata.Authors,
-			Categories: b.Metadata.Categories, Language: b.Metadata.Language,
-			Format: b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
-			AddedOn: b.AddedOn, Library: b.LibraryName,
-		})
+		books = append(books, libraryBookFromGrimmory(b))
 	}
 	return books, nil
 }
 
-var mockLibraryBooks = []LibraryBook{
-	{ID: 1, Title: "The Sovereign Stack (Mock)", Authors: []string{"Telos Docs Team (Mock)"},
-		Categories: []string{"Technology"}, Language: "en", Format: "EPUB", FileSizeKB: 1024,
-		AddedOn: "2026-01-01T00:00:00Z", Library: "Books (Mock)"},
-	{ID: 2, Title: "Single Origin (Mock)", Authors: []string{"Gateway Author (Mock)"},
-		Categories: []string{"Fiction"}, Language: "en", Format: "PDF", FileSizeKB: 2048,
-		AddedOn: "2026-01-02T00:00:00Z", Library: "Books (Mock)"},
+var errGrimmoryBookNotFound = errors.New("grimmory book not found")
+
+func fetchGrimmoryBook(ctx context.Context, id string) (LibraryBook, error) {
+	resp, err := grimmoryGET(ctx, "/api/v1/books/"+id+"?withDescription=true")
+	if err != nil {
+		return LibraryBook{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return LibraryBook{}, errGrimmoryBookNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return LibraryBook{}, fmt.Errorf("grimmory book returned %s", resp.Status)
+	}
+	var raw grimmoryBook
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return LibraryBook{}, err
+	}
+	return libraryBookFromGrimmory(raw), nil
 }
 
-// getLibraryBooks serves from Redis (60s), then Grimmory, then mocks.
-func getLibraryBooks(ctx context.Context) []LibraryBook {
+// getLibraryBooks serves from Redis (60s), then Grimmory. Upstream failures
+// are returned to callers; fabricated catalog entries must never look real or
+// be embedded into durable chat history.
+func getLibraryBooks(ctx context.Context) ([]LibraryBook, error) {
 	const cacheKey = "telos:grimmory:books"
 	if redisClient != nil {
 		if val, err := redisClient.Get(ctx, cacheKey).Result(); err == nil && val != "" {
 			var books []LibraryBook
 			if json.Unmarshal([]byte(val), &books) == nil {
-				return books
+				return books, nil
 			}
 		}
 	}
 	books, err := fetchGrimmoryBooks(ctx)
 	if err != nil {
-		log.Printf("WARN: grimmory books unavailable, serving mock data: %v", err)
-		return mockLibraryBooks
+		log.Printf("WARN: grimmory books unavailable: %v", err)
+		return nil, fmt.Errorf("%w: grimmory: %v", errUpstreamUnavailable, err)
 	}
 	if redisClient != nil {
 		if raw, err := json.Marshal(books); err == nil {
 			_ = redisClient.Set(ctx, cacheKey, string(raw), 60*time.Second).Err()
 		}
 	}
-	return books
+	return books, nil
 }
 
 func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
-	books := getLibraryBooks(r.Context())
+	books, err := getLibraryBooks(r.Context())
+	if err != nil {
+		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(books)
+}
+
+func handleLibraryBookByID(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	requestCtx, cancel := upstreamRequestContext(r.Context())
+	defer cancel()
+	book, err := fetchGrimmoryBook(requestCtx, id)
+	if errors.Is(err, errGrimmoryBookNotFound) {
+		http.Error(w, "book not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(book)
 }
 
 // Grimmory's /api/v1/books/facets endpoint does not exist in the deployed
 // build (500s); facets are derived here from the book list instead.
 func handleLibraryFacets(w http.ResponseWriter, r *http.Request) {
-	books := getLibraryBooks(r.Context())
+	books, err := getLibraryBooks(r.Context())
+	if err != nil {
+		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	count := func(pick func(LibraryBook) []string) []FacetValue {
 		m := map[string]int{}
 		for _, b := range books {
@@ -252,11 +343,467 @@ func handleLibraryFacets(w http.ResponseWriter, r *http.Request) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Library — shared catalog management
+//
+// Verified against the deployed Grimmory image on 2026-07-16:
+//   - metadata updates take {"metadata": ..., "clearFlags": {}} and support
+//     replaceMode=REPLACE_WHEN_PROVIDED, which preserves unlisted fields;
+//   - prospective metadata takes FetchMetadataRequest and returns SSE;
+//   - cover upload uses multipart field "file";
+//   - delete takes DELETE /api/v1/books?ids=<id> and removes the file.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const maxLibraryCoverBytes = 5 << 20
+
+type LibraryMetadata struct {
+	Title         string   `json:"title"`
+	Subtitle      string   `json:"subtitle"`
+	Authors       []string `json:"authors"`
+	Categories    []string `json:"categories"`
+	Language      string   `json:"language"`
+	Description   string   `json:"description"`
+	SeriesName    string   `json:"seriesName"`
+	SeriesNumber  *float64 `json:"seriesNumber"`
+	Publisher     string   `json:"publisher"`
+	PublishedDate string   `json:"publishedDate"`
+	ISBN10        string   `json:"isbn10"`
+	ISBN13        string   `json:"isbn13"`
+}
+
+type LibraryMetadataCandidate struct {
+	LibraryMetadata
+	Provider string `json:"provider"`
+	CoverURL string `json:"coverUrl"`
+}
+
+type grimmoryMetadataCandidate struct {
+	LibraryMetadata
+	Provider     string `json:"provider"`
+	ThumbnailURL string `json:"thumbnailUrl"`
+	CoverURL     string `json:"coverUrl"`
+}
+
+func writeLibraryError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func mapGrimmoryMutationStatus(w http.ResponseWriter, resp *http.Response) bool {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		writeLibraryError(w, http.StatusNotFound, "book not found")
+	} else {
+		writeLibraryError(w, http.StatusBadGateway, "Grimmory rejected the request")
+	}
+	return false
+}
+
+func invalidateLibraryCache(ctx context.Context) {
+	if redisClient == nil {
+		return
+	}
+	var cursor uint64
+	for {
+		keys, next, err := redisClient.Scan(ctx, cursor, "telos:grimmory:*", 100).Result()
+		if err != nil {
+			log.Printf("WARN: could not scan Grimmory cache keys: %v", err)
+			return
+		}
+		if len(keys) > 0 {
+			if err := redisClient.Del(ctx, keys...).Err(); err != nil {
+				log.Printf("WARN: could not invalidate Grimmory cache: %v", err)
+				return
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return
+		}
+	}
+}
+
+func handleUpdateLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+	var metadata LibraryMetadata
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err := decoder.Decode(&metadata); err != nil {
+		writeLibraryError(w, http.StatusBadRequest, "invalid metadata")
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"metadata": metadata, "clearFlags": map[string]bool{},
+	})
+	if err != nil {
+		writeLibraryError(w, http.StatusInternalServerError, "could not encode metadata")
+		return
+	}
+	ctx, cancel := upstreamRequestContext(r.Context())
+	path := "/api/v1/books/" + id + "/metadata?mergeCategories=false&replaceMode=REPLACE_WHEN_PROVIDED"
+	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodPut, path, "application/json", payload)
+	if err != nil {
+		cancel()
+		writeLibraryError(w, http.StatusBadGateway, "Grimmory unavailable")
+		return
+	}
+	if !mapGrimmoryMutationStatus(w, resp) {
+		resp.Body.Close()
+		cancel()
+		return
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	cancel()
+	invalidateLibraryCache(r.Context())
+
+	reloadCtx, reloadCancel := upstreamRequestContext(r.Context())
+	defer reloadCancel()
+	book, err := fetchGrimmoryBook(reloadCtx, id)
+	if errors.Is(err, errGrimmoryBookNotFound) {
+		writeLibraryError(w, http.StatusNotFound, "book not found")
+		return
+	}
+	if err != nil {
+		writeLibraryError(w, http.StatusBadGateway, "could not reload updated book")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(book)
+}
+
+func normalizeCandidate(raw grimmoryMetadataCandidate) LibraryMetadataCandidate {
+	coverURL := raw.CoverURL
+	if coverURL == "" {
+		coverURL = raw.ThumbnailURL
+	}
+	return LibraryMetadataCandidate{
+		LibraryMetadata: raw.LibraryMetadata,
+		Provider:        raw.Provider,
+		CoverURL:        coverURL,
+	}
+}
+
+func decodeProspectiveMetadata(body io.Reader) ([]LibraryMetadataCandidate, error) {
+	raw, err := io.ReadAll(io.LimitReader(body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return []LibraryMetadataCandidate{}, nil
+	}
+
+	var upstream []grimmoryMetadataCandidate
+	if trimmed[0] == '[' {
+		if err := json.Unmarshal(trimmed, &upstream); err != nil {
+			return nil, err
+		}
+	} else if trimmed[0] == '{' {
+		var one grimmoryMetadataCandidate
+		if err := json.Unmarshal(trimmed, &one); err != nil {
+			return nil, err
+		}
+		upstream = append(upstream, one)
+	} else {
+		scanner := bufio.NewScanner(bytes.NewReader(trimmed))
+		scanner.Buffer(make([]byte, 64<<10), 1<<20)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+			var candidate grimmoryMetadataCandidate
+			if err := json.Unmarshal([]byte(data), &candidate); err != nil {
+				return nil, err
+			}
+			upstream = append(upstream, candidate)
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+	}
+
+	candidates := make([]LibraryMetadataCandidate, 0, len(upstream))
+	for _, candidate := range upstream {
+		candidates = append(candidates, normalizeCandidate(candidate))
+	}
+	return candidates, nil
+}
+
+func handleFetchLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+	// These are every MetadataProvider enum value in the deployed image.
+	payload, _ := json.Marshal(map[string]any{"providers": []string{
+		"Amazon", "GoodReads", "Google", "Hardcover", "Comicvine",
+		"Douban", "Lubimyczytac", "Ranobedb", "Audible",
+	}})
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	resp, err := grimmoryRequest(ctx, grimmoryMetadataHTTPClient, http.MethodPost,
+		"/api/v1/books/"+id+"/metadata/prospective", "application/json", payload)
+	if err != nil {
+		writeLibraryError(w, http.StatusBadGateway, "metadata providers unavailable")
+		return
+	}
+	defer resp.Body.Close()
+	if !mapGrimmoryMutationStatus(w, resp) {
+		return
+	}
+	candidates, err := decodeProspectiveMetadata(resp.Body)
+	if err != nil {
+		writeLibraryError(w, http.StatusBadGateway, "invalid metadata provider response")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"candidates": candidates})
+}
+
+func acceptedCoverType(data []byte) (string, bool) {
+	contentType := http.DetectContentType(data)
+	switch contentType {
+	case "image/jpeg", "image/png":
+		return contentType, true
+	default:
+		return "", false
+	}
+}
+
+func readUploadedCover(w http.ResponseWriter, r *http.Request) ([]byte, string, int, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxLibraryCoverBytes+(1<<20))
+	reader, err := r.MultipartReader()
+	if err != nil {
+		return nil, "", http.StatusBadRequest, err
+	}
+	for {
+		part, err := reader.NextPart()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, "", http.StatusBadRequest, err
+		}
+		if part.FormName() != "cover" {
+			part.Close()
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(part, maxLibraryCoverBytes+1))
+		part.Close()
+		if err != nil {
+			return nil, "", http.StatusBadRequest, err
+		}
+		if len(data) > maxLibraryCoverBytes {
+			return nil, "", http.StatusRequestEntityTooLarge, errors.New("cover exceeds 5 MB")
+		}
+		contentType, ok := acceptedCoverType(data)
+		if !ok {
+			return nil, "", http.StatusUnsupportedMediaType, errors.New("cover must be JPEG or PNG")
+		}
+		return data, contentType, 0, nil
+	}
+	return nil, "", http.StatusBadRequest, errors.New("missing cover file")
+}
+
+func publicURLIPs(ctx context.Context, rawURL *url.URL) ([]net.IPAddr, error) {
+	if rawURL.Scheme != "http" && rawURL.Scheme != "https" {
+		return nil, errors.New("cover URL must use HTTP or HTTPS")
+	}
+	if rawURL.User != nil || rawURL.Hostname() == "" {
+		return nil, errors.New("invalid cover URL")
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, rawURL.Hostname())
+	if err != nil || len(ips) == 0 {
+		return nil, errors.New("cover host could not be resolved")
+	}
+	for _, resolved := range ips {
+		ip := resolved.IP
+		if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() ||
+			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+			return nil, errors.New("cover URL resolves to a private address")
+		}
+	}
+	return ips, nil
+}
+
+func candidateCoverHTTPClient() *http.Client {
+	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	transport := upstreamTransport.Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		probe := &url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}
+		ips, err := publicURLIPs(ctx, probe)
+		if err != nil {
+			return nil, err
+		}
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+	}
+	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 5 {
+			return errors.New("too many cover redirects")
+		}
+		_, err := publicURLIPs(req.Context(), req.URL)
+		return err
+	}
+	return client
+}
+
+func downloadCandidateCover(ctx context.Context, raw string) ([]byte, string, int, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return nil, "", http.StatusBadRequest, errors.New("invalid cover URL")
+	}
+	if _, err := publicURLIPs(ctx, parsed); err != nil {
+		return nil, "", http.StatusBadRequest, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return nil, "", http.StatusBadRequest, err
+	}
+	resp, err := candidateCoverHTTPClient().Do(req)
+	if err != nil {
+		return nil, "", http.StatusBadGateway, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, "", http.StatusBadGateway, errors.New("cover source rejected request")
+	}
+	if resp.ContentLength > maxLibraryCoverBytes {
+		return nil, "", http.StatusRequestEntityTooLarge, errors.New("cover exceeds 5 MB")
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxLibraryCoverBytes+1))
+	if err != nil {
+		return nil, "", http.StatusBadGateway, err
+	}
+	if len(data) > maxLibraryCoverBytes {
+		return nil, "", http.StatusRequestEntityTooLarge, errors.New("cover exceeds 5 MB")
+	}
+	contentType, ok := acceptedCoverType(data)
+	if !ok {
+		return nil, "", http.StatusUnsupportedMediaType, errors.New("cover must be JPEG or PNG")
+	}
+	return data, contentType, 0, nil
+}
+
+func forwardCoverToGrimmory(ctx context.Context, id string, data []byte, contentType string) (*http.Response, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	headers := textproto.MIMEHeader{}
+	headers.Set("Content-Disposition", `form-data; name="file"; filename="cover"`)
+	headers.Set("Content-Type", contentType)
+	part, err := writer.CreatePart(headers)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	return grimmoryRequest(ctx, upstreamHTTPClient, http.MethodPost,
+		"/api/v1/books/"+id+"/metadata/cover/upload", writer.FormDataContentType(), body.Bytes())
+}
+
+func handleUpdateLibraryBookCover(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+	var data []byte
+	var contentType string
+	var status int
+	var err error
+	mediaType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
+	switch mediaType {
+	case "multipart/form-data":
+		data, contentType, status, err = readUploadedCover(w, r)
+	case "application/json":
+		var body struct {
+			CoverURL string `json:"coverUrl"`
+		}
+		decodeErr := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<10)).Decode(&body)
+		if decodeErr != nil || body.CoverURL == "" {
+			writeLibraryError(w, http.StatusBadRequest, "invalid cover URL")
+			return
+		}
+		data, contentType, status, err = downloadCandidateCover(r.Context(), body.CoverURL)
+	default:
+		writeLibraryError(w, http.StatusUnsupportedMediaType, "cover must be multipart or JSON")
+		return
+	}
+	if err != nil {
+		writeLibraryError(w, status, err.Error())
+		return
+	}
+	ctx, cancel := upstreamRequestContext(r.Context())
+	defer cancel()
+	resp, err := forwardCoverToGrimmory(ctx, id, data, contentType)
+	if err != nil {
+		writeLibraryError(w, http.StatusBadGateway, "Grimmory unavailable")
+		return
+	}
+	defer resp.Body.Close()
+	if !mapGrimmoryMutationStatus(w, resp) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
+	id, ok := libraryBookID(r)
+	if !ok {
+		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
+		return
+	}
+	ctx, cancel := upstreamRequestContext(r.Context())
+	defer cancel()
+	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodDelete,
+		"/api/v1/books?ids="+url.QueryEscape(id), "", nil)
+	if err != nil {
+		writeLibraryError(w, http.StatusBadGateway, "Grimmory unavailable")
+		return
+	}
+	defer resp.Body.Close()
+	if !mapGrimmoryMutationStatus(w, resp) {
+		return
+	}
+	invalidateLibraryCache(r.Context())
+	if dbPool != nil {
+		if _, err := dbPool.Exec(r.Context(), `DELETE FROM book_progress WHERE book_id = $1`, id); err != nil {
+			writeLibraryError(w, http.StatusInternalServerError, "book deleted but progress cleanup failed")
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Library — cover & content proxies
 // ═══════════════════════════════════════════════════════════════════════════
 
 func proxyGrimmoryBinary(w http.ResponseWriter, r *http.Request, path, forceContentType string) {
-	resp, err := grimmoryGET(r.Context(), path)
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	resp, err := grimmoryGET(ctx, path)
 	if err != nil {
 		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
 		return

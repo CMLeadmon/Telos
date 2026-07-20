@@ -77,7 +77,7 @@ interface ChatSessionState {
   fetchChannels: () => Promise<void>;
   connect: (channelId: string) => void;
   disconnect: () => void;
-  send: (content: string) => Promise<void>;
+  send: (content: string, embed?: { kind: string; ref: string }) => Promise<void>;
   editMessage: (id: string, content: string) => Promise<void>;
   deleteMessage: (id: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
@@ -215,12 +215,12 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
     set({ connection: "idle" });
   },
 
-  send: async (content) => {
+  send: async (content, embed) => {
     const channelId = get().activeChannelId;
-    if (!channelId || !content.trim()) return;
+    if (!channelId || (!content.trim() && !embed)) return;
     await api(`/api/v1/channels/${channelId}/messages`, {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, embed }),
     });
   },
 

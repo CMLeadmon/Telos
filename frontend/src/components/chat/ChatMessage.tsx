@@ -8,6 +8,7 @@ import { apiBase } from "@/lib/api";
 import { Reactions } from "./Reactions";
 import { MessageBody } from "./MessageBody";
 import { EmojiPicker } from "./EmojiPicker";
+import { ShareCard } from "./ShareCard";
 
 const AVATAR_HUES = ["--rose", "--cyan", "--violet", "--indigo", "--azure"];
 
@@ -141,7 +142,10 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
             </div>
           </div>
         ) : (
-          <MessageBody content={message.content} />
+          <>
+            {message.content && <MessageBody content={message.content} />}
+            {message.embed && <ShareCard embed={message.embed} />}
+          </>
         )}
 
         {/* Reactions list */}

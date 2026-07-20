@@ -1,6 +1,32 @@
 // Mic capture pipeline. LiveKit has no native input gain, so the published
 // microphone track is the output of getUserMedia -> GainNode -> destination.
 
+export const VOICE_HTTPS_REQUIRED_MESSAGE =
+  "Voice requires a secure HTTPS connection. Reopen Telos using its HTTPS address and try again.";
+
+export interface VoiceCaptureEnvironment {
+  isSecureContext: boolean;
+  hasGetUserMedia: boolean;
+}
+
+export function voiceCaptureEnvironmentError(
+  environment: VoiceCaptureEnvironment,
+): string | null {
+  if (!environment.isSecureContext || !environment.hasGetUserMedia) {
+    return VOICE_HTTPS_REQUIRED_MESSAGE;
+  }
+  return null;
+}
+
+export function currentVoiceCaptureEnvironmentError(): string | null {
+  return voiceCaptureEnvironmentError({
+    isSecureContext: globalThis.isSecureContext === true,
+    hasGetUserMedia:
+      typeof navigator !== "undefined" &&
+      typeof navigator.mediaDevices?.getUserMedia === "function",
+  });
+}
+
 export interface MicPipelineOptions {
   deviceId: string;
   gain: number;

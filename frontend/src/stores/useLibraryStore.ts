@@ -4,9 +4,17 @@ import { api } from "@/lib/api";
 export interface LibraryBook {
   id: number;
   title: string;
+  subtitle: string;
   authors: string[] | null;
   categories: string[] | null;
   language: string;
+  description: string;
+  seriesName: string;
+  seriesNumber: number | null;
+  publisher: string;
+  publishedDate: string;
+  isbn10: string;
+  isbn13: string;
   format: string; // "EPUB" | "PDF"
   fileSizeKb: number;
   addedOn: string;

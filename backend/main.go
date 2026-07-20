@@ -53,7 +53,31 @@ var (
 			return isAllowedWSOrigin(r.Header.Get("Origin"), r.Host, os.Getenv("TELOS_DOMAIN"))
 		},
 	}
+
+	// upstreamTransport bounds connection establishment and response headers
+	// without imposing a total duration on media streams. JSON/control requests
+	// add their own context deadline with upstreamRequestContext.
+	upstreamTransport = &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 10 * time.Second,
+	}
+	upstreamHTTPClient = &http.Client{Transport: upstreamTransport}
 )
+
+const upstreamRequestTimeout = 15 * time.Second
+
+var errUpstreamUnavailable = errors.New("upstream service unavailable")
+
+func upstreamRequestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, upstreamRequestTimeout)
+}
 
 //go:embed db/migrations/*.sql
 var migrationsFS embed.FS
@@ -94,20 +118,20 @@ type ReactionSummary struct {
 }
 
 type MessageEmbed struct {
-	Kind     string          `json:"kind"`     // library_book|stream_film|file
+	Kind     string          `json:"kind"` // library_book|stream_film|file
 	Ref      string          `json:"ref"`
 	Snapshot json.RawMessage `json:"snapshot"` // {title,subtitle,kicker,cover,duration}
 }
 
 type WSEvent struct {
-	Type      string          `json:"type"` // history|message|message.update|message.delete|reaction|pin|presence
-	Messages  []WSMessage     `json:"messages,omitempty"`  // history
-	Message   *WSMessage      `json:"message,omitempty"`   // message | message.update
-	MessageID string          `json:"messageId,omitempty"` // message.delete | reaction | pin
-	ChannelID string          `json:"channelId,omitempty"`
-	Reaction  *WSReaction     `json:"reaction,omitempty"`  // reaction
-	Pin       *WSPin          `json:"pin,omitempty"`       // pin
-	Presence  *WSPresence     `json:"presence,omitempty"`  // presence
+	Type      string      `json:"type"`                // history|message|message.update|message.delete|reaction|pin|presence
+	Messages  []WSMessage `json:"messages,omitempty"`  // history
+	Message   *WSMessage  `json:"message,omitempty"`   // message | message.update
+	MessageID string      `json:"messageId,omitempty"` // message.delete | reaction | pin
+	ChannelID string      `json:"channelId,omitempty"`
+	Reaction  *WSReaction `json:"reaction,omitempty"` // reaction
+	Pin       *WSPin      `json:"pin,omitempty"`      // pin
+	Presence  *WSPresence `json:"presence,omitempty"` // presence
 }
 
 type WSReaction struct {
@@ -145,6 +169,7 @@ type UserContext struct {
 	ID          string
 	Username    string
 	Roles       []string
+	Permissions []string
 	DisplayName string
 	HasAvatar   bool
 }
@@ -278,25 +303,30 @@ func main() {
 	mux.Handle("POST /api/v1/channels/{id}/pins", withAuth(http.HandlerFunc(handlePinMessage), "manage_messages"))
 	mux.Handle("DELETE /api/v1/channels/{id}/pins/{mid}", withAuth(http.HandlerFunc(handleUnpinMessage), "manage_messages"))
 	mux.Handle("GET /api/v1/users/search", withAuth(http.HandlerFunc(handleUserSearch), "view_channel"))
+	mux.Handle("GET /api/v1/search", withAuth(http.HandlerFunc(handleSearch), ""))
 
 	// Jellyfin Proxy routes (Require view_media)
 	mux.Handle("GET /api/v1/media", withAuth(http.HandlerFunc(handleMedia), "view_media"))
+	mux.Handle("POST /api/v1/media/refresh", withAuth(http.HandlerFunc(handleMediaRefresh), "manage_files"))
+	mux.Handle("GET /api/v1/media/refresh/status", withAuth(http.HandlerFunc(handleMediaRefreshStatus), "manage_files"))
 	mux.Handle("GET /api/v1/media/items", withAuth(http.HandlerFunc(handleMediaItems), "view_media"))
+	mux.Handle("GET /api/v1/media/items/{id}", withAuth(http.HandlerFunc(handleMediaItemByID), "view_media"))
+	mux.Handle("GET /api/v1/media/items/{id}/cover", withAuth(http.HandlerFunc(handleMediaItemCover), "view_media"))
 	mux.Handle("GET /api/v1/stream/audio/{id}", withAuth(http.HandlerFunc(handleStreamAudio), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}", withAuth(http.HandlerFunc(handleStreamVideo), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}/{path...}", withAuth(http.HandlerFunc(handleStreamVideoSubpath), "view_media"))
-	mux.Handle("/jellyfin/", withAuth(http.HandlerFunc(handleJellyfinDirectProxy), "view_media"))
-
-	// Grimmory Proxy route (Requires view_library)
-	mux.Handle("/grimmory/", withAuth(http.HandlerFunc(handleGrimmoryProxy), "view_library"))
-
 	// Library module routes (Grimmory-backed catalog)
 	mux.Handle("GET /api/v1/library/books", withAuth(http.HandlerFunc(handleLibraryBooks), "view_library"))
+	mux.Handle("GET /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleLibraryBookByID), "view_library"))
 	mux.Handle("GET /api/v1/library/facets", withAuth(http.HandlerFunc(handleLibraryFacets), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/cover", withAuth(http.HandlerFunc(handleLibraryBookCover), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/content", withAuth(http.HandlerFunc(handleLibraryBookContent), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handleGetBookProgress), "view_library"))
 	mux.Handle("PUT /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handlePutBookProgress), "view_library"))
+	mux.Handle("PUT /api/v1/library/books/{id}/metadata", withAuth(http.HandlerFunc(handleUpdateLibraryBookMetadata), "manage_library"))
+	mux.Handle("POST /api/v1/library/books/{id}/metadata/fetch", withAuth(http.HandlerFunc(handleFetchLibraryBookMetadata), "manage_library"))
+	mux.Handle("PUT /api/v1/library/books/{id}/cover", withAuth(http.HandlerFunc(handleUpdateLibraryBookCover), "manage_library"))
+	mux.Handle("DELETE /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleDeleteLibraryBook), "manage_library"))
 
 	// Voice Token (Requires join_voice)
 	mux.Handle("POST /api/v1/voice/channels/{id}/token", withAuth(http.HandlerFunc(handleVoiceToken), "join_voice"))
@@ -317,7 +347,7 @@ func main() {
 		Addr:         ":" + port,
 		Handler:      csrfMiddleware(corsMiddleware(mux)),
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 60 * time.Second,
 	}
 
 	log.Printf("Server listening on port %s", port)
@@ -331,7 +361,7 @@ func validateSecrets() {
 		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_BOOTSTRAP_TOKEN",
 		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_ADMIN_USER", "GRIMMORY_ADMIN_PASSWORD",
 	}
-	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder"}
+	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder", "generate-me"}
 	for _, v := range vars {
 		val := os.Getenv(v)
 		if val == "" {
@@ -342,6 +372,13 @@ func validateSecrets() {
 				log.Fatalf("Critical Configuration Error: Environment variable %s contains insecure placeholder value %q.", v, val)
 			}
 		}
+	}
+	if len(os.Getenv("TELOS_BOOTSTRAP_TOKEN")) < 32 {
+		log.Fatal("Critical Configuration Error: TELOS_BOOTSTRAP_TOKEN must be at least 32 characters.")
+	}
+	domain := strings.ToLower(strings.TrimSpace(os.Getenv("TELOS_DOMAIN")))
+	if strings.HasSuffix(domain, ".local") || strings.HasSuffix(domain, ".example") || strings.HasSuffix(domain, ".example.com") {
+		log.Fatal("Critical Configuration Error: TELOS_DOMAIN must be a real production domain.")
 	}
 }
 
@@ -682,6 +719,33 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 			roles = append(roles, rID)
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+
+	permissionRows, err := dbPool.Query(r.Context(), `
+		SELECT DISTINCT rp.permission_id
+		FROM role_permissions rp
+		JOIN user_roles ur ON ur.role_id = rp.role_id
+		WHERE ur.user_id = $1
+		ORDER BY rp.permission_id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer permissionRows.Close()
+	var permissions []string
+	for permissionRows.Next() {
+		var permission string
+		if err := permissionRows.Scan(&permission); err != nil {
+			return nil, err
+		}
+		permissions = append(permissions, permission)
+	}
+	if err := permissionRows.Err(); err != nil {
+		return nil, err
+	}
 
 	// Best-effort, throttled last-seen stamp; never blocks the request.
 	go func(hash string) {
@@ -694,9 +758,10 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	}(tokenHash)
 
 	uc := &UserContext{
-		ID:       userID,
-		Username: username,
-		Roles:    roles,
+		ID:          userID,
+		Username:    username,
+		Roles:       roles,
+		Permissions: permissions,
 	}
 	if displayName != nil {
 		uc.DisplayName = *displayName
@@ -1044,6 +1109,14 @@ func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad Request: unknown role", http.StatusBadRequest)
 		return
 	}
+	if err := ensureCanAssignRoles(r.Context(), user, []string{roleID}); err != nil {
+		status := http.StatusForbidden
+		if !errors.Is(err, errPermissionAmplification) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
+		return
+	}
 	rawToken, tokenHash := generateToken()
 	expiry := time.Now().Add(7 * 24 * time.Hour) // Invite valid for 7 days
 
@@ -1201,6 +1274,48 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	type probe struct {
+		name string
+		url  string
+	}
+	probes := []probe{
+		{name: "jellyfin", url: jellyfinBaseURL + "/System/Info/Public"},
+		{name: "grimmory", url: grimmoryBaseURL + "/api/v1/healthcheck"},
+	}
+	results := make(chan struct {
+		name   string
+		status string
+	}, len(probes))
+	for _, p := range probes {
+		go func(p probe) {
+			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
+			if err != nil {
+				results <- struct{ name, status string }{p.name, "degraded"}
+				return
+			}
+			resp, err := upstreamHTTPClient.Do(req)
+			if err != nil {
+				results <- struct{ name, status string }{p.name, "degraded"}
+				return
+			}
+			resp.Body.Close()
+			status := "healthy"
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				status = "degraded"
+			}
+			results <- struct{ name, status string }{p.name, status}
+		}(p)
+	}
+	for range probes {
+		result := <-results
+		services[result.name] = result.status
+		if result.status == "degraded" && overallStatus == "healthy" {
+			overallStatus = "degraded"
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if overallStatus == "unhealthy" {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -1235,6 +1350,12 @@ func (c *wsClient) writeMessage(messageType int, data []byte) error {
 	return c.conn.WriteMessage(messageType, data)
 }
 
+func (c *wsClient) writeControl(messageType int, data []byte, deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conn.WriteControl(messageType, data, deadline)
+}
+
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	channelIDStr := r.URL.Query().Get("channel")
 	if channelIDStr == "" {
@@ -1252,10 +1373,20 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	defer conn.Close()
 	client := &wsClient{conn: conn}
 
-	// Set connection limits
+	// Set connection limits and require timely pong replies so half-open
+	// connections release their Redis subscription and goroutines.
 	conn.SetReadLimit(8192) // 8 KiB message frame limit
+	const pongWait = 60 * time.Second
+	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		log.Printf("Failed to set WebSocket read deadline: %v", err)
+		return
+	}
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 
-	ctx := r.Context()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 
 	// Fetch & Send past 50 messages of the channel
 	msgs, err := getMessagesForChannel(ctx, channelIDStr)
@@ -1280,9 +1411,18 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// Read messages from Redis and send them to the client WebSocket
 	go func() {
 		ch := pubsub.Channel()
-		for redisMsg := range ch {
-			err := client.writeMessage(websocket.TextMessage, []byte(redisMsg.Payload))
-			if err != nil {
+		for {
+			select {
+			case redisMsg, ok := <-ch:
+				if !ok {
+					return
+				}
+				if err := client.writeMessage(websocket.TextMessage, []byte(redisMsg.Payload)); err != nil {
+					cancel()
+					_ = conn.Close()
+					return
+				}
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -1303,6 +1443,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		for {
 			select {
 			case <-ticker.C:
+				if err := client.writeControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					cancel()
+					_ = conn.Close()
+					return
+				}
 				redisClient.Set(ctx, "telos:presence:hb:"+userID, "1", 60*time.Second)
 			case <-done:
 				return
@@ -1701,6 +1846,24 @@ func buildWSMessage(ctx context.Context, msgID, userID, content string, ts time.
 		avatarURL = "/api/v1/users/" + userID + "/avatar"
 	}
 
+	var embedKind, embedRef *string
+	var embedSnapshot []byte
+	var pinned bool
+	_ = dbPool.QueryRow(ctx, `
+		SELECT embed_kind, embed_ref, embed_snapshot,
+			EXISTS(SELECT 1 FROM channel_pins cp WHERE cp.message_id = messages.id) AS pinned
+		FROM messages WHERE id = $1
+	`, msgID).Scan(&embedKind, &embedRef, &embedSnapshot, &pinned)
+
+	var embed *MessageEmbed
+	if embedKind != nil && embedRef != nil {
+		embed = &MessageEmbed{
+			Kind:     *embedKind,
+			Ref:      *embedRef,
+			Snapshot: embedSnapshot,
+		}
+	}
+
 	return WSMessage{
 		ID:          msgID,
 		Sender:      username,
@@ -1711,6 +1874,8 @@ func buildWSMessage(ctx context.Context, msgID, userID, content string, ts time.
 		Role:        role,
 		Content:     content,
 		Timestamp:   ts.Format("03:04 pm"),
+		Pinned:      pinned,
+		Embed:       embed,
 	}
 }
 
@@ -1724,6 +1889,145 @@ func publishChatEvent(ctx context.Context, channelID string, ev WSEvent) {
 	if err := redisClient.Publish(ctx, "telos:chat:"+channelID, payload).Err(); err != nil {
 		log.Printf("publish chat event: %v", err)
 	}
+}
+
+func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
+	var snapshot struct {
+		Title    string `json:"title"`
+		Subtitle string `json:"subtitle"`
+		Kicker   string `json:"kicker"`
+		Cover    string `json:"cover"`
+		Duration string `json:"duration"`
+	}
+
+	switch kind {
+	case "library_book":
+		id, err := strconv.ParseInt(ref, 10, 64)
+		if err != nil {
+			return nil, errors.New("invalid book id")
+		}
+		books, err := getLibraryBooks(ctx)
+		if err != nil {
+			return nil, err
+		}
+		found := false
+		for _, b := range books {
+			if b.ID == id {
+				snapshot.Title = b.Title
+				snapshot.Subtitle = strings.Join(b.Authors, ", ")
+				snapshot.Kicker = "Library Book"
+				snapshot.Cover = "/api/v1/library/books/" + ref + "/cover"
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, errors.New("book not found")
+		}
+
+	case "stream_film":
+		if !validJellyfinID(ref) {
+			return nil, errors.New("invalid media id")
+		}
+		userID, err := getJellyfinUserID(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
+		}
+
+		token := getJellyfinAdminToken()
+		reqURL := fmt.Sprintf("%s/Users/%s/Items/%s", jellyfinBaseURL, userID, ref)
+		requestCtx, cancel := upstreamRequestContext(ctx)
+		defer cancel()
+		req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("X-Emby-Token", token)
+		req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+		resp, err := upstreamHTTPClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("%w: jellyfin returned %s", errUpstreamUnavailable, resp.Status)
+		}
+
+		var rawItem struct {
+			ID             string `json:"Id"`
+			Name           string `json:"Name"`
+			Type           string `json:"Type"`
+			ProductionYear int    `json:"ProductionYear"`
+			RunTimeTicks   int64  `json:"RunTimeTicks"`
+			Studios        []struct {
+				Name string `json:"Name"`
+			} `json:"Studios"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&rawItem); err != nil {
+			return nil, err
+		}
+
+		durationSec := rawItem.RunTimeTicks / 10000000
+		h := durationSec / 3600
+		m := (durationSec % 3600) / 60
+		durationStr := ""
+		if h > 0 {
+			durationStr = fmt.Sprintf("%dh %dm", h, m)
+		} else {
+			durationStr = fmt.Sprintf("%dm", m)
+		}
+
+		snapshot.Title = rawItem.Name
+		snapshot.Kicker = "Stream Video"
+		if rawItem.Type == "Audio" || rawItem.Type == "Audiobook" {
+			snapshot.Kicker = "Stream Audio"
+		}
+		snapshot.Cover = "/api/v1/media/items/" + rawItem.ID + "/cover"
+		snapshot.Duration = durationStr
+
+		sub := ""
+		if len(rawItem.Studios) > 0 {
+			sub = rawItem.Studios[0].Name
+		}
+		if rawItem.ProductionYear > 0 {
+			if sub != "" {
+				sub += fmt.Sprintf(" (%d)", rawItem.ProductionYear)
+			} else {
+				sub = fmt.Sprintf("%d", rawItem.ProductionYear)
+			}
+		}
+		snapshot.Subtitle = sub
+
+	case "file":
+		var filename string
+		var size int64
+		var mime string
+		err := dbPool.QueryRow(ctx, `
+			SELECT filename, size_bytes, mime_type FROM files WHERE id = $1
+		`, ref).Scan(&filename, &size, &mime)
+		if err != nil {
+			return nil, errors.New("file not found")
+		}
+
+		snapshot.Title = filename
+		snapshot.Kicker = "Shared File"
+
+		var sizeStr string
+		if size >= 1024*1024 {
+			sizeStr = fmt.Sprintf("%.1f MB", float64(size)/(1024*1024))
+		} else if size >= 1024 {
+			sizeStr = fmt.Sprintf("%.1f KB", float64(size)/1024)
+		} else {
+			sizeStr = fmt.Sprintf("%d B", size)
+		}
+		snapshot.Subtitle = fmt.Sprintf("%s · %s", sizeStr, mime)
+
+	default:
+		return nil, errors.New("unsupported embed kind")
+	}
+
+	return json.Marshal(snapshot)
 }
 
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -1750,11 +2054,30 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var embedKind, embedRef *string
+	var embedSnapshot []byte
+	if body.Embed != nil {
+		k, ref := body.Embed.Kind, body.Embed.Ref
+		snap, err := buildEmbedSnapshot(r.Context(), k, ref)
+		if err != nil {
+			status := http.StatusBadRequest
+			if errors.Is(err, errUpstreamUnavailable) {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, "invalid embed: "+err.Error(), status)
+			return
+		}
+		embedKind = &k
+		embedRef = &ref
+		embedSnapshot = snap
+	}
+
 	var msgID string
 	var ts time.Time
 	err := dbPool.QueryRow(r.Context(), `
-		INSERT INTO messages (channel_id, user_id, content) VALUES ($1, $2, $3)
-		RETURNING id, created_at`, channelID, user.ID, body.Content).Scan(&msgID, &ts)
+		INSERT INTO messages (channel_id, user_id, content, embed_kind, embed_ref, embed_snapshot)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id, created_at`, channelID, user.ID, body.Content, embedKind, embedRef, embedSnapshot).Scan(&msgID, &ts)
 	if err != nil {
 		http.Error(w, "persist failed", 500)
 		return
@@ -2100,6 +2423,31 @@ var (
 	jellyfinBaseURL = "http://jellyfin:8096/jellyfin"
 )
 
+func validJellyfinID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func validUpstreamSubpath(subpath string) bool {
+	if subpath == "" || len(subpath) > 1024 || strings.ContainsAny(subpath, "\\\x00") {
+		return false
+	}
+	for _, segment := range strings.Split(subpath, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 func getJellyfinAdminToken() string {
 	return os.Getenv("JELLYFIN_ADMIN_TOKEN")
 }
@@ -2112,15 +2460,17 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 		}
 	}
 
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
 	token := getJellyfinAdminToken()
-	req, err := http.NewRequestWithContext(ctx, "GET", jellyfinBaseURL+"/Users", nil)
+	req, err := http.NewRequestWithContext(requestCtx, "GET", jellyfinBaseURL+"/Users", nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamHTTPClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -2193,7 +2543,9 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	token := getJellyfinAdminToken()
 	reqURL := fmt.Sprintf("%s/Users/%s/Views", jellyfinBaseURL, userID)
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2201,7 +2553,7 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamHTTPClient.Do(req)
 	if err != nil {
 		http.Error(w, "Jellyfin Views request failed: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -2255,6 +2607,270 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respJSON)
+}
+
+type jellyfinTaskResult struct {
+	Status       string `json:"Status"`
+	EndTimeUTC   string `json:"EndTimeUtc"`
+	ErrorMessage string `json:"ErrorMessage"`
+}
+
+type jellyfinTaskInfo struct {
+	ID                        string              `json:"Id"`
+	Key                       string              `json:"Key"`
+	State                     string              `json:"State"`
+	CurrentProgressPercentage *float64            `json:"CurrentProgressPercentage"`
+	LastExecutionResult       *jellyfinTaskResult `json:"LastExecutionResult"`
+}
+
+type mediaRefreshResponse struct {
+	Status    string   `json:"status"`
+	Message   string   `json:"message"`
+	Progress  *float64 `json:"progress,omitempty"`
+	UpdatedAt string   `json:"updatedAt"`
+}
+
+var (
+	mediaRefreshPollInterval = time.Second
+	mediaRefreshMaxDuration  = 5 * time.Minute
+	mediaRefreshState        = struct {
+		sync.Mutex
+		response mediaRefreshResponse
+	}{response: mediaRefreshResponse{
+		Status:    "idle",
+		Message:   "No Jellyfin scan is running.",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}}
+)
+
+func mediaRefreshIsActive(status string) bool {
+	return status == "starting" || status == "scanning" || status == "refreshing"
+}
+
+func getMediaRefreshResponse() mediaRefreshResponse {
+	mediaRefreshState.Lock()
+	defer mediaRefreshState.Unlock()
+	return mediaRefreshState.response
+}
+
+func setMediaRefreshResponse(status, message string, progress *float64) mediaRefreshResponse {
+	mediaRefreshState.Lock()
+	defer mediaRefreshState.Unlock()
+	mediaRefreshState.response = mediaRefreshResponse{
+		Status:    status,
+		Message:   message,
+		Progress:  progress,
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	return mediaRefreshState.response
+}
+
+func writeMediaRefreshResponse(w http.ResponseWriter, statusCode int, response mediaRefreshResponse) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("WARN: failed to encode media refresh response: %v", err)
+	}
+}
+
+func jellyfinControlRequest(ctx context.Context, method, path string) (*http.Response, context.CancelFunc, error) {
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	req, err := http.NewRequestWithContext(requestCtx, method, jellyfinBaseURL+path, nil)
+	if err != nil {
+		cancel()
+		return nil, func() {}, err
+	}
+	token := getJellyfinAdminToken()
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		cancel()
+		return nil, func() {}, err
+	}
+	return resp, cancel, nil
+}
+
+func getJellyfinRefreshTask(ctx context.Context) (jellyfinTaskInfo, error) {
+	resp, cancel, err := jellyfinControlRequest(ctx, http.MethodGet, "/ScheduledTasks")
+	if err != nil {
+		return jellyfinTaskInfo{}, err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return jellyfinTaskInfo{}, fmt.Errorf("scheduled tasks returned %s", resp.Status)
+	}
+
+	var tasks []jellyfinTaskInfo
+	if err := json.NewDecoder(resp.Body).Decode(&tasks); err != nil {
+		return jellyfinTaskInfo{}, fmt.Errorf("decode scheduled tasks: %w", err)
+	}
+	for _, task := range tasks {
+		if task.Key == "RefreshLibrary" {
+			return task, nil
+		}
+	}
+	return jellyfinTaskInfo{}, errors.New("Jellyfin library scan task not found")
+}
+
+func getJellyfinTask(ctx context.Context, id string) (jellyfinTaskInfo, error) {
+	resp, cancel, err := jellyfinControlRequest(ctx, http.MethodGet, "/ScheduledTasks/"+url.PathEscape(id))
+	if err != nil {
+		return jellyfinTaskInfo{}, err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return jellyfinTaskInfo{}, fmt.Errorf("scheduled task returned %s", resp.Status)
+	}
+	var task jellyfinTaskInfo
+	if err := json.NewDecoder(resp.Body).Decode(&task); err != nil {
+		return jellyfinTaskInfo{}, fmt.Errorf("decode scheduled task: %w", err)
+	}
+	return task, nil
+}
+
+func startJellyfinLibraryRefresh(ctx context.Context) error {
+	resp, cancel, err := jellyfinControlRequest(ctx, http.MethodPost, "/Library/Refresh")
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("library refresh returned %s", resp.Status)
+	}
+	return nil
+}
+
+func invalidateJellyfinCache(ctx context.Context) {
+	if redisClient == nil {
+		return
+	}
+	iter := redisClient.Scan(ctx, 0, "telos:jellyfin:*", 100).Iterator()
+	var keys []string
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
+	}
+	if err := iter.Err(); err != nil {
+		log.Printf("WARN: failed to scan jellyfin cache keys: %v", err)
+	}
+	if len(keys) > 0 {
+		if err := redisClient.Del(ctx, keys...).Err(); err != nil {
+			log.Printf("WARN: failed to drop jellyfin cache keys: %v", err)
+		}
+	}
+}
+
+// monitorJellyfinRefresh owns the asynchronous portion of a manual scan. It
+// waits for Jellyfin's RefreshLibrary scheduled task to finish before clearing
+// gateway caches; this ensures removed files cannot be repopulated from data
+// fetched while Jellyfin was still scanning.
+func monitorJellyfinRefresh(taskID, previousEndTime string, observedRunning bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), mediaRefreshMaxDuration)
+	defer cancel()
+	ticker := time.NewTicker(mediaRefreshPollInterval)
+	defer ticker.Stop()
+	lastErr := error(nil)
+
+	for {
+		select {
+		case <-ctx.Done():
+			message := "Jellyfin scan timed out after five minutes; the scan may still be running."
+			if lastErr != nil {
+				message = "Jellyfin scan status became unavailable and timed out."
+			}
+			setMediaRefreshResponse("timeout", message, nil)
+			return
+		case <-ticker.C:
+			task, err := getJellyfinTask(ctx, taskID)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			lastErr = nil
+			if strings.EqualFold(task.State, "Running") {
+				observedRunning = true
+				setMediaRefreshResponse("scanning", "Jellyfin is scanning the shared media libraries.", task.CurrentProgressPercentage)
+				continue
+			}
+
+			resultChanged := task.LastExecutionResult != nil &&
+				task.LastExecutionResult.EndTimeUTC != "" &&
+				task.LastExecutionResult.EndTimeUTC != previousEndTime
+			firstResultFinished := previousEndTime == "" && observedRunning &&
+				task.LastExecutionResult != nil && task.LastExecutionResult.EndTimeUTC != ""
+			if !resultChanged && !firstResultFinished {
+				continue
+			}
+			if task.LastExecutionResult == nil {
+				continue
+			}
+
+			if strings.EqualFold(task.LastExecutionResult.Status, "Completed") {
+				setMediaRefreshResponse("refreshing", "Refreshing the Telos media catalog.", nil)
+				cacheCtx, cacheCancel := context.WithTimeout(context.Background(), upstreamRequestTimeout)
+				invalidateJellyfinCache(cacheCtx)
+				cacheCancel()
+				setMediaRefreshResponse("complete", "Jellyfin scan complete.", nil)
+				return
+			}
+
+			message := "Jellyfin could not complete the library scan."
+			if task.LastExecutionResult.ErrorMessage != "" {
+				message = "Jellyfin scan failed: " + task.LastExecutionResult.ErrorMessage
+			}
+			setMediaRefreshResponse("failed", message, nil)
+			return
+		}
+	}
+}
+
+// handleMediaRefresh starts one manual Jellyfin scan. Concurrent requests join
+// the in-flight scan instead of queueing duplicate work.
+func handleMediaRefresh(w http.ResponseWriter, r *http.Request) {
+	mediaRefreshState.Lock()
+	if mediaRefreshIsActive(mediaRefreshState.response.Status) {
+		response := mediaRefreshState.response
+		mediaRefreshState.Unlock()
+		writeMediaRefreshResponse(w, http.StatusAccepted, response)
+		return
+	}
+	mediaRefreshState.response = mediaRefreshResponse{
+		Status:    "starting",
+		Message:   "Starting Jellyfin library scan.",
+		UpdatedAt: time.Now().UTC().Format(time.RFC3339),
+	}
+	mediaRefreshState.Unlock()
+
+	task, err := getJellyfinRefreshTask(r.Context())
+	if err != nil {
+		setMediaRefreshResponse("failed", "Jellyfin scan could not be started.", nil)
+		http.Error(w, "Jellyfin unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	previousEndTime := ""
+	if task.LastExecutionResult != nil {
+		previousEndTime = task.LastExecutionResult.EndTimeUTC
+	}
+	alreadyRunning := strings.EqualFold(task.State, "Running")
+	if !alreadyRunning {
+		if err := startJellyfinLibraryRefresh(r.Context()); err != nil {
+			setMediaRefreshResponse("failed", "Jellyfin scan could not be started.", nil)
+			http.Error(w, "Jellyfin unreachable: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+
+	response := setMediaRefreshResponse("scanning", "Jellyfin is scanning the shared media libraries.", task.CurrentProgressPercentage)
+	go monitorJellyfinRefresh(task.ID, previousEndTime, alreadyRunning)
+	writeMediaRefreshResponse(w, http.StatusAccepted, response)
+}
+
+func handleMediaRefreshStatus(w http.ResponseWriter, _ *http.Request) {
+	writeMediaRefreshResponse(w, http.StatusOK, getMediaRefreshResponse())
 }
 
 type MediaPlayableItem struct {
@@ -2314,7 +2930,7 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	if parentId == "" {
 		parentId = r.URL.Query().Get("libraryId")
 	}
-	if parentId == "" {
+	if !validJellyfinID(parentId) {
 		http.Error(w, "Missing parentId or libraryId parameter", http.StatusBadRequest)
 		return
 	}
@@ -2337,7 +2953,9 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 
 	token := getJellyfinAdminToken()
 	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&SortBy=IndexNumber,SortName&SortOrder=Ascending&Fields=ChildCount", jellyfinBaseURL, userID, parentId)
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2345,7 +2963,7 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamHTTPClient.Do(req)
 	if err != nil {
 		http.Error(w, "Jellyfin Items request failed: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -2381,6 +2999,109 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	w.Write(respJSON)
 }
 
+func handleMediaItemByID(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id := r.PathValue("id")
+	if !validJellyfinID(id) {
+		http.Error(w, "missing item id", 400)
+		return
+	}
+
+	cacheKey := fmt.Sprintf("telos:jellyfin:item:%s", id)
+	if redisClient != nil {
+		val, err := redisClient.Get(ctx, cacheKey).Result()
+		if err == nil && val != "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(val))
+			return
+		}
+	}
+
+	userID, err := getJellyfinUserID(ctx)
+	if err != nil {
+		http.Error(w, "Jellyfin unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	token := getJellyfinAdminToken()
+	reqURL := fmt.Sprintf("%s/Users/%s/Items/%s", jellyfinBaseURL, userID, id)
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		http.Error(w, "Jellyfin request failed: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		status := http.StatusBadGateway
+		if resp.StatusCode == http.StatusNotFound {
+			status = http.StatusNotFound
+		}
+		http.Error(w, "Jellyfin returned error: "+resp.Status, status)
+		return
+	}
+
+	var rawItem struct {
+		ID             string `json:"Id"`
+		Name           string `json:"Name"`
+		Type           string `json:"Type"`
+		ProductionYear int    `json:"ProductionYear"`
+		RunTimeTicks   int64  `json:"RunTimeTicks"`
+		Studios        []struct {
+			Name string `json:"Name"`
+		} `json:"Studios"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&rawItem); err != nil {
+		http.Error(w, "failed to decode jellyfin item response", 500)
+		return
+	}
+
+	durationSec := rawItem.RunTimeTicks / 10000000
+	result := map[string]interface{}{
+		"id":          rawItem.ID,
+		"title":       rawItem.Name,
+		"year":        rawItem.ProductionYear,
+		"director":    "",
+		"durationSec": durationSec,
+		"kind":        strings.ToLower(rawItem.Type),
+		"coverUrl":    "/api/v1/media/items/" + rawItem.ID + "/cover",
+	}
+	if len(rawItem.Studios) > 0 {
+		result["director"] = rawItem.Studios[0].Name
+	}
+
+	respJSON, _ := json.Marshal(result)
+	if redisClient != nil {
+		_ = redisClient.Set(ctx, cacheKey, string(respJSON), 5*time.Minute).Err()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(respJSON)
+}
+
+func handleMediaItemCover(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !validJellyfinID(id) {
+		http.Error(w, "missing item id", 400)
+		return
+	}
+
+	token := getJellyfinAdminToken()
+	targetURL := fmt.Sprintf("%s/Items/%s/Images/Primary", jellyfinBaseURL, id)
+	proxyRequest(w, r, targetURL, token)
+}
+
 func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, token string) {
 	targetURL, err := url.Parse(targetURLStr)
 	if err != nil {
@@ -2390,6 +3111,7 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, t
 	}
 
 	proxy := &httputil.ReverseProxy{
+		Transport: upstreamTransport,
 		Director: func(req *http.Request) {
 			req.URL.Scheme = targetURL.Scheme
 			req.URL.Host = targetURL.Host
@@ -2419,13 +3141,17 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, t
 			}
 			return nil
 		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			log.Printf("Upstream proxy failed: %v", err)
+			http.Error(w, "Upstream service unavailable", http.StatusBadGateway)
+		},
 	}
 	proxy.ServeHTTP(w, r)
 }
 
 func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
+	if !validJellyfinID(id) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
@@ -2436,7 +3162,7 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if id == "" {
+	if !validJellyfinID(id) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
@@ -2451,7 +3177,9 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	token := getJellyfinAdminToken()
 	playbackInfoURL := fmt.Sprintf("%s/Items/%s/PlaybackInfo?UserId=%s", jellyfinBaseURL, id, userID)
 
-	req, err := http.NewRequestWithContext(ctx, "POST", playbackInfoURL, strings.NewReader("{}"))
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, "POST", playbackInfoURL, strings.NewReader("{}"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -2460,7 +3188,7 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("X-Emby-Token", token)
 	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamHTTPClient.Do(req)
 	if err != nil {
 		http.Error(w, "PlaybackInfo request failed: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -2491,40 +3219,13 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	subpath := r.PathValue("path")
-	if id == "" || subpath == "" {
+	if !validJellyfinID(id) || !validUpstreamSubpath(subpath) {
 		http.Error(w, "Missing item ID or subpath", http.StatusBadRequest)
 		return
 	}
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, id, subpath)
 	proxyRequest(w, r, targetURL, token)
-}
-
-func handleJellyfinDirectProxy(w http.ResponseWriter, r *http.Request) {
-	token := getJellyfinAdminToken()
-	targetURL := fmt.Sprintf("http://jellyfin:8096%s", r.URL.Path)
-	proxyRequest(w, r, targetURL, token)
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Grimmory Proxy
-// ═══════════════════════════════════════════════════════════════════════════
-
-func handleGrimmoryProxy(w http.ResponseWriter, r *http.Request) {
-	grimmoryURL, _ := url.Parse(grimmoryBaseURL)
-	proxy := httputil.NewSingleHostReverseProxy(grimmoryURL)
-	// Grimmory rejects static tokens; inject a JWT minted via admin login.
-	tok, err := getGrimmoryToken(r.Context())
-	if err != nil {
-		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.Header.Set("Authorization", "Bearer "+tok)
-	}
-	proxy.ServeHTTP(w, r)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3220,4 +3921,248 @@ func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+type SearchFileItem struct {
+	ID        string    `json:"id"`
+	Filename  string    `json:"filename"`
+	SizeBytes int64     `json:"sizeBytes"`
+	MimeType  string    `json:"mimeType"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type SearchResults struct {
+	Channels []ChannelResponse    `json:"channels"`
+	Users    []SearchUserResponse `json:"users"`
+	Books    []LibraryBook        `json:"books"`
+	Media    []MediaPlayableItem  `json:"media"`
+	Files    []SearchFileItem     `json:"files"`
+}
+
+func handleSearch(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	user := ctx.Value(userContextKey).(*UserContext)
+	q := r.URL.Query().Get("q")
+	if len(q) < 2 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(SearchResults{
+			Channels: []ChannelResponse{},
+			Users:    []SearchUserResponse{},
+			Books:    []LibraryBook{},
+			Media:    []MediaPlayableItem{},
+			Files:    []SearchFileItem{},
+		})
+		return
+	}
+
+	var results SearchResults
+	results.Channels = []ChannelResponse{}
+	results.Users = []SearchUserResponse{}
+	results.Books = []LibraryBook{}
+	results.Media = []MediaPlayableItem{}
+	results.Files = []SearchFileItem{}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	// 1. Channels & Users (gated by view_channel)
+	canViewChannel, err := hasPermission(ctx, user, "view_channel", nil)
+	if err == nil && canViewChannel {
+		// Search Users
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryPattern := "%" + q + "%"
+			rows, err := dbPool.Query(ctx, `
+				SELECT id::text, username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
+				FROM users
+				WHERE active = TRUE AND (username ILIKE $1 OR display_name ILIKE $1)
+				LIMIT 10
+			`, queryPattern)
+			if err != nil {
+				log.Printf("WARN: search users query failed: %v", err)
+				return
+			}
+			defer rows.Close()
+
+			var users []SearchUserResponse
+			for rows.Next() {
+				var u SearchUserResponse
+				var hasAvatar bool
+				if err := rows.Scan(&u.ID, &u.Username, &u.DisplayName, &hasAvatar); err == nil {
+					if hasAvatar {
+						u.AvatarUrl = "/api/v1/users/" + u.ID + "/avatar"
+					}
+					users = append(users, u)
+				}
+			}
+			mu.Lock()
+			if len(users) > 0 {
+				results.Users = users
+			}
+			mu.Unlock()
+		}()
+
+		// Search Channels
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows, err := dbPool.Query(ctx, `
+				SELECT id::text, name, type FROM channels ORDER BY type, name
+			`)
+			if err != nil {
+				log.Printf("WARN: search channels query failed: %v", err)
+				return
+			}
+			defer rows.Close()
+
+			var chans []ChannelResponse
+			for rows.Next() {
+				var c ChannelResponse
+				if err := rows.Scan(&c.ID, &c.Name, &c.Type); err == nil {
+					allowed, err := hasPermission(ctx, user, "view_channel", &c.ID)
+					if err == nil && allowed {
+						if strings.Contains(strings.ToLower(c.Name), strings.ToLower(q)) {
+							chans = append(chans, c)
+						}
+					}
+				}
+			}
+			mu.Lock()
+			if len(chans) > 0 {
+				results.Channels = chans
+			}
+			mu.Unlock()
+		}()
+	}
+
+	// 2. Library Books (gated by view_library)
+	canViewLibrary, err := hasPermission(ctx, user, "view_library", nil)
+	if err == nil && canViewLibrary {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			books, err := getLibraryBooks(ctx)
+			if err != nil {
+				log.Printf("WARN: search library books failed: %v", err)
+				return
+			}
+			var matched []LibraryBook
+			lowerQ := strings.ToLower(q)
+			for _, b := range books {
+				match := strings.Contains(strings.ToLower(b.Title), lowerQ)
+				if !match {
+					for _, auth := range b.Authors {
+						if strings.Contains(strings.ToLower(auth), lowerQ) {
+							match = true
+							break
+						}
+					}
+				}
+				if !match {
+					for _, cat := range b.Categories {
+						if strings.Contains(strings.ToLower(cat), lowerQ) {
+							match = true
+							break
+						}
+					}
+				}
+				if match {
+					matched = append(matched, b)
+					if len(matched) >= 15 {
+						break
+					}
+				}
+			}
+			mu.Lock()
+			if len(matched) > 0 {
+				results.Books = matched
+			}
+			mu.Unlock()
+		}()
+	}
+
+	// 3. Stream Media (gated by view_media)
+	canViewMedia, err := hasPermission(ctx, user, "view_media", nil)
+	if err == nil && canViewMedia {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			userID, err := getJellyfinUserID(ctx)
+			if err != nil {
+				log.Printf("WARN: search jellyfin failed to get user ID: %v", err)
+				return
+			}
+			token := getJellyfinAdminToken()
+			reqURL := fmt.Sprintf("%s/Users/%s/Items?searchTerm=%s&Recursive=true&Fields=ChildCount,RunTimeTicks&Limit=15", jellyfinBaseURL, userID, url.QueryEscape(q))
+			requestCtx, cancel := upstreamRequestContext(ctx)
+			defer cancel()
+			req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
+			if err != nil {
+				return
+			}
+			req.Header.Set("X-Emby-Token", token)
+			req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+			resp, err := upstreamHTTPClient.Do(req)
+			if err != nil {
+				log.Printf("WARN: search jellyfin items failed: %v", err)
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode == http.StatusOK {
+				var jResp struct {
+					Items []jellyfinChildItem `json:"Items"`
+				}
+				if err := json.NewDecoder(resp.Body).Decode(&jResp); err == nil {
+					items := mapJellyfinChildren(jResp.Items)
+					mu.Lock()
+					if len(items) > 0 {
+						results.Media = items
+					}
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+
+	// 4. Shared Files (gated by view_files)
+	canViewFiles, err := hasPermission(ctx, user, "view_files", nil)
+	if err == nil && canViewFiles {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			queryPattern := "%" + q + "%"
+			rows, err := dbPool.Query(ctx, `
+				SELECT id::text, filename, size_bytes, mime_type, created_at
+				FROM files
+				WHERE filename ILIKE $1
+				LIMIT 15
+			`, queryPattern)
+			if err != nil {
+				log.Printf("WARN: search files failed: %v", err)
+				return
+			}
+			defer rows.Close()
+
+			var files []SearchFileItem
+			for rows.Next() {
+				var f SearchFileItem
+				if err := rows.Scan(&f.ID, &f.Filename, &f.SizeBytes, &f.MimeType, &f.CreatedAt); err == nil {
+					files = append(files, f)
+				}
+			}
+			mu.Lock()
+			if len(files) > 0 {
+				results.Files = files
+			}
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
 }

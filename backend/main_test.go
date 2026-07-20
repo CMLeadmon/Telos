@@ -12,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -382,6 +384,30 @@ func TestMapJellyfinChildren(t *testing.T) {
 	}
 }
 
+func TestJellyfinProxyPathValidation(t *testing.T) {
+	for _, id := range []string{"abc123", "item-id_42", strings.Repeat("a", 128)} {
+		if !validJellyfinID(id) {
+			t.Errorf("validJellyfinID(%q) = false", id)
+		}
+	}
+	for _, id := range []string{"", "../Users", "id/Users", "id?x=1", strings.Repeat("a", 129)} {
+		if validJellyfinID(id) {
+			t.Errorf("validJellyfinID(%q) = true", id)
+		}
+	}
+
+	for _, subpath := range []string{"main.m3u8", "hls1/main/0.ts", "subtitles/en.vtt"} {
+		if !validUpstreamSubpath(subpath) {
+			t.Errorf("validUpstreamSubpath(%q) = false", subpath)
+		}
+	}
+	for _, subpath := range []string{"", "../Users", "hls/../../Users", "/main.m3u8", "main\\evil"} {
+		if validUpstreamSubpath(subpath) {
+			t.Errorf("validUpstreamSubpath(%q) = true", subpath)
+		}
+	}
+}
+
 func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -430,6 +456,172 @@ func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
 	}
 	if !got[0].IsFolder || got[0].ChildCount != 13 || got[0].Title != "Season 1" {
 		t.Errorf("got %+v, want a Season 1 folder with ChildCount 13", got[0])
+	}
+}
+
+func TestHandleMediaItemReturnsUnavailableWithoutMock(t *testing.T) {
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = "http://127.0.0.1:1"
+	defer func() { jellyfinBaseURL = oldBase }()
+
+	oldRedis := redisClient
+	redisClient = nil
+	defer func() { redisClient = oldRedis }()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/missing", nil)
+	req.SetPathValue("id", "missing")
+	rr := httptest.NewRecorder()
+	handleMediaItemByID(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, body = %s; want 503", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "Mock Film") {
+		t.Fatal("unavailable upstream must never return fabricated media")
+	}
+}
+
+func configureMediaRefreshTest(t *testing.T) {
+	t.Helper()
+	oldPollInterval := mediaRefreshPollInterval
+	oldMaxDuration := mediaRefreshMaxDuration
+	oldResponse := getMediaRefreshResponse()
+	mediaRefreshPollInterval = 2 * time.Millisecond
+	mediaRefreshMaxDuration = 200 * time.Millisecond
+	setMediaRefreshResponse("idle", "No Jellyfin scan is running.", nil)
+	t.Cleanup(func() {
+		mediaRefreshPollInterval = oldPollInterval
+		mediaRefreshMaxDuration = oldMaxDuration
+		mediaRefreshState.Lock()
+		mediaRefreshState.response = oldResponse
+		mediaRefreshState.Unlock()
+	})
+}
+
+func waitForMediaRefreshStatus(t *testing.T, want string) mediaRefreshResponse {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response := getMediaRefreshResponse()
+		if response.Status == want {
+			return response
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("media refresh status = %q, want %q", getMediaRefreshResponse().Status, want)
+	return mediaRefreshResponse{}
+}
+
+func TestHandleMediaRefreshWaitsForJellyfinCompletion(t *testing.T) {
+	configureMediaRefreshTest(t)
+	var refreshPosts atomic.Int32
+	var taskPolls atomic.Int32
+	oldEnd := "2026-07-15T12:00:00Z"
+	newEnd := "2026-07-15T12:01:00Z"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/ScheduledTasks":
+			json.NewEncoder(w).Encode([]jellyfinTaskInfo{{
+				ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+				LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: oldEnd},
+			}})
+		case r.Method == http.MethodPost && r.URL.Path == "/Library/Refresh":
+			refreshPosts.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/ScheduledTasks/refresh-task":
+			if taskPolls.Add(1) == 1 {
+				progress := 50.0
+				json.NewEncoder(w).Encode(jellyfinTaskInfo{
+					ID: "refresh-task", Key: "RefreshLibrary", State: "Running",
+					CurrentProgressPercentage: &progress,
+					LastExecutionResult:       &jellyfinTaskResult{Status: "Completed", EndTimeUTC: oldEnd},
+				})
+				return
+			}
+			json.NewEncoder(w).Encode(jellyfinTaskInfo{
+				ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+				LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: newEnd},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = srv.URL
+	defer func() { jellyfinBaseURL = oldBase }()
+	oldRedis := redisClient
+	redisClient = nil
+	defer func() { redisClient = oldRedis }()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/media/refresh", nil)
+	rr := httptest.NewRecorder()
+	handleMediaRefresh(rr, req)
+	if rr.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if response := getMediaRefreshResponse(); response.Status != "scanning" {
+		t.Fatalf("initial media refresh status = %q, want scanning", response.Status)
+	}
+
+	completed := waitForMediaRefreshStatus(t, "complete")
+	if completed.Message != "Jellyfin scan complete." {
+		t.Errorf("completion message = %q", completed.Message)
+	}
+	if refreshPosts.Load() != 1 {
+		t.Errorf("refresh posts = %d, want 1", refreshPosts.Load())
+	}
+}
+
+func TestMonitorJellyfinRefreshReportsFailure(t *testing.T) {
+	configureMediaRefreshTest(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ScheduledTasks/refresh-task" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{
+				Status: "Failed", EndTimeUTC: "2026-07-15T12:01:00Z", ErrorMessage: "storage unavailable",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = srv.URL
+	defer func() { jellyfinBaseURL = oldBase }()
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	response := getMediaRefreshResponse()
+	if response.Status != "failed" || !strings.Contains(response.Message, "storage unavailable") {
+		t.Fatalf("failure response = %+v", response)
+	}
+}
+
+func TestMonitorJellyfinRefreshTimesOutWithoutNewResult(t *testing.T) {
+	configureMediaRefreshTest(t)
+	mediaRefreshMaxDuration = 12 * time.Millisecond
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{
+				Status: "Completed", EndTimeUTC: "2026-07-15T12:00:00Z",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = srv.URL
+	defer func() { jellyfinBaseURL = oldBase }()
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	if response := getMediaRefreshResponse(); response.Status != "timeout" {
+		t.Fatalf("timeout response = %+v", response)
 	}
 }
 
@@ -610,7 +802,6 @@ func TestIsEmoji(t *testing.T) {
 		}
 	}
 }
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Per-directory file listing
@@ -797,7 +988,3 @@ func TestMediaUploadTarget(t *testing.T) {
 		t.Fatal("expected error for escaping path")
 	}
 }
-
-
-
-

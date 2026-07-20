@@ -1,18 +1,36 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronRight, Play, Plus, Users, X } from "lucide-react";
+import {
+  AlertCircle,
+  CheckCircle2,
+  ChevronRight,
+  Play,
+  Plus,
+  RefreshCw,
+  Share2,
+  Users,
+  X,
+} from "lucide-react";
 import type Hls from "hls.js";
-import { apiBase } from "@/lib/api";
+import { api, ApiError, apiBase } from "@/lib/api";
 import {
   useMediaStore,
   type MediaItem,
   type MediaLibrary,
 } from "@/stores/useMediaStore";
+import { useAuthStore } from "@/stores/useAuthStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
+
+interface StreamItemResponse {
+  id: string;
+  title: string;
+  durationSec?: number;
+  kind: string;
+}
 
 function posterClass(id: string): string {
   let h = 0;
@@ -86,8 +104,7 @@ function MediaPlayer({ item, library }: { item: MediaItem; library: MediaLibrary
         return;
       }
       hls = new HlsCtor({
-        // Dev runs cross-origin (:3000 → :8080); the session cookie must ride
-        // along on manifest and segment requests.
+        // Include the session cookie on manifest and segment requests.
         xhrSetup: (xhr) => {
           xhr.withCredentials = true;
         },
@@ -146,16 +163,28 @@ function PosterGrid({
       {items.map((item) => {
         const cls = posterClass(item.id);
         return (
-          <button
-            key={item.id}
-            className={`poster ${cls}${DARK_TEXT.has(cls) ? " pdark" : ""}`}
-            data-testid={item.isFolder ? "poster-folder" : "poster-leaf"}
-            onClick={() => onOpen(item)}
-          >
-            <div className="motif" />
-            <span className="pt">{item.title}</span>
-            <span className="pm">{posterMeta(item)}</span>
-          </button>
+          <div key={item.id} className="posterwrap">
+            <button
+              className={`poster ${cls}${DARK_TEXT.has(cls) ? " pdark" : ""}`}
+              data-testid={item.isFolder ? "poster-folder" : "poster-leaf"}
+              onClick={() => onOpen(item)}
+              style={{ width: "100%" }}
+            >
+              <div className="motif" />
+              <span className="pt">{item.title}</span>
+              <span className="pm">{posterMeta(item)}</span>
+            </button>
+            {!item.isFolder && (
+              <a
+                className="poster-share"
+                href={`/chat?share_kind=stream_film&share_ref=${item.id}`}
+                title="Share to chat"
+                aria-label={`share ${item.title} to chat`}
+              >
+                <Share2 size={13} />
+              </a>
+            )}
+          </div>
         );
       })}
     </div>
@@ -163,6 +192,13 @@ function PosterGrid({
 }
 
 export default function StreamPage() {
+  const [sharedItemError, setSharedItemError] = useState<string | null>(null);
+  const canRefreshMedia = useAuthStore(
+    (s) =>
+      s.user?.Roles.some((role) =>
+        ["Owner", "Administrator", "Librarian"].includes(role),
+      ) ?? false,
+  );
   const {
     libraries,
     libraryStatus,
@@ -173,7 +209,13 @@ export default function StreamPage() {
     path,
     rootLibrary,
     nowPlaying,
+    refreshing,
+    refreshPhase,
+    refreshProgress,
+    refreshNotice,
     fetchLibraries,
+    refresh,
+    clearRefreshNotice,
     open,
     navigateTo,
     play,
@@ -184,11 +226,57 @@ export default function StreamPage() {
     if (libraryStatus === "idle") void fetchLibraries();
   }, [libraryStatus, fetchLibraries]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const playId = params.get("play");
+    if (playId) {
+      api<StreamItemResponse>(`/api/v1/media/items/${playId}`)
+        .then((item) => {
+          if (item) {
+            const mediaItem: MediaItem = {
+              id: item.id,
+              title: item.title,
+              duration: item.durationSec ? `${Math.round(item.durationSec / 60)}m` : "",
+              type: item.kind === "audio" || item.kind === "audiobook" ? "Audio" : "Movie",
+              isFolder: false,
+            };
+            const mediaLibrary: MediaLibrary = {
+              id: "root",
+              name: "Shared Stream",
+              type: item.kind === "audio" || item.kind === "audiobook" ? "audio" : "video",
+            };
+            play(mediaItem, mediaLibrary);
+          }
+        })
+        .catch((err) => {
+          setSharedItemError(
+            err instanceof ApiError && err.status === 404
+              ? "This media is no longer available. It may have been removed from shared storage."
+              : "The shared media item could not be loaded.",
+          );
+        });
+
+      const newUrl = window.location.pathname;
+      window.history.replaceState({}, "", newUrl);
+    }
+  }, [play]);
+
   const activeLibrary =
     libraries.find((l) => l.id === activeLibraryId) ?? libraries[0];
   const featured = activeLibrary
     ? (itemsByParent[activeLibrary.id] ?? [])[0]
     : undefined;
+  const refreshLabel = refreshing
+    ? refreshPhase === "starting"
+      ? "starting scan…"
+      : refreshPhase === "refreshing"
+        ? "refreshing catalog…"
+        : refreshProgress !== null
+          ? `scanning ${Math.round(refreshProgress)}%…`
+          : "rescanning…"
+    : refreshPhase === "complete"
+      ? "scan complete"
+      : "rescan jellyfin";
 
   if (nowPlaying) {
     return (
@@ -250,6 +338,19 @@ export default function StreamPage() {
   return (
     <div className="streammain" data-testid="stream-browse">
       <div className="streamscroll">
+        {sharedItemError && (
+          <div className="streamnotice error" role="alert">
+            <AlertCircle size={16} />
+            <span>{sharedItemError}</span>
+            <button
+              className="iconbtn"
+              aria-label="dismiss media notice"
+              onClick={() => setSharedItemError(null)}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
         <section className="hero2">
           <VaporwaveScene />
           <div className="scrim" />
@@ -300,6 +401,47 @@ export default function StreamPage() {
             )}
           </div>
         </section>
+
+        <div className="streamtools">
+          <span className="kicker">{`// on the node`}</span>
+          {canRefreshMedia && (
+            <button
+              className="btn-ghost btn-sm"
+              data-testid="stream-refresh"
+              disabled={refreshing}
+              onClick={() => void refresh()}
+            >
+              {refreshPhase === "complete" ? (
+                <CheckCircle2 size={13} />
+              ) : (
+                <RefreshCw size={13} className={refreshing ? "spin" : undefined} />
+              )}{" "}
+              {refreshLabel}
+            </button>
+          )}
+        </div>
+
+        {refreshNotice && (
+          <div
+            className={`streamnotice ${refreshNotice.kind}`}
+            data-testid="stream-refresh-notice"
+            role={refreshNotice.kind === "error" ? "alert" : "status"}
+          >
+            {refreshNotice.kind === "success" ? (
+              <CheckCircle2 size={16} />
+            ) : (
+              <AlertCircle size={16} />
+            )}
+            <span>{refreshNotice.text}</span>
+            <button
+              className="iconbtn"
+              aria-label="dismiss scan notice"
+              onClick={clearRefreshNotice}
+            >
+              <X size={15} />
+            </button>
+          </div>
+        )}
 
         {libraries.map((lib) => {
           const items = itemsByParent[lib.id] ?? [];

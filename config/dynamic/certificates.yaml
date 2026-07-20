@@ -1,9 +1,0 @@
-tls:
-  certificates:
-    - certFile: /certs/telos.crt
-      keyFile: /certs/telos.key
-  stores:
-    default:
-      defaultCertificate:
-        certFile: /certs/telos.crt
-        keyFile: /certs/telos.key

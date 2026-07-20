@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -19,11 +19,11 @@ import {
   Volume2,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
-import { useChatSessionStore } from "@/stores/useChatSessionStore";
+import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore";
 import { useVoiceSessionStore } from "@/stores/useVoiceSessionStore";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
-import { avatarUrl } from "@/lib/api";
+import { api, avatarUrl } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
@@ -46,6 +46,244 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
   const voice = useVoiceSessionStore();
+
+  interface SearchUser {
+    id: string;
+    username: string;
+    displayName: string;
+    avatarUrl?: string;
+  }
+
+  interface SearchBook {
+    id: number;
+    title: string;
+    authors: string[] | null;
+    categories: string[] | null;
+    format: string;
+  }
+
+  interface SearchMedia {
+    id: string;
+    title: string;
+    duration: string;
+    type: string;
+    isFolder: boolean;
+  }
+
+  interface SearchFileItem {
+    id: string;
+    filename: string;
+    sizeBytes: number;
+    mimeType: string;
+    createdAt: string;
+  }
+
+  interface SearchResults {
+    channels: Channel[];
+    users: SearchUser[];
+    books: SearchBook[];
+    media: SearchMedia[];
+    files: SearchFileItem[];
+  }
+
+  type FlatSearchItem =
+    | (Channel & { $type: "channel" })
+    | (SearchUser & { $type: "user" })
+    | (SearchBook & { $type: "book" })
+    | (SearchMedia & { $type: "media" })
+    | (SearchFileItem & { $type: "file" });
+
+  // Global search state
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(0);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
+  // Debounced search fetch
+  useEffect(() => {
+    if (searchQuery.trim().length < 2) {
+      return;
+    }
+
+    const controller = new AbortController();
+    const delay = setTimeout(() => {
+      api<SearchResults>(`/api/v1/search?q=${encodeURIComponent(searchQuery)}`, {
+        signal: controller.signal,
+      })
+        .then((res) => {
+          setSearchResults(res);
+          setSearchActiveIndex(0);
+        })
+        .catch((err) => {
+          if (err instanceof Error && err.name !== "AbortError") {
+            console.error("search failed", err);
+          }
+        })
+        .finally(() => {
+          setSearchLoading(false);
+        });
+    }, 250);
+
+    return () => {
+      clearTimeout(delay);
+      controller.abort();
+    };
+  }, [searchQuery]);
+
+  // Click outside to dismiss search results
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        setSearchFocused(false);
+      }
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", handleOutsideClick);
+    };
+  }, []);
+
+  const flatResults: FlatSearchItem[] = searchResults
+    ? [
+        ...(searchResults.channels || []).map((c) => ({ ...c, $type: "channel" as const })),
+        ...(searchResults.users || []).map((u) => ({ ...u, $type: "user" as const })),
+        ...(searchResults.books || []).map((b) => ({ ...b, $type: "book" as const })),
+        ...(searchResults.media || []).map((m) => ({ ...m, $type: "media" as const })),
+        ...(searchResults.files || []).map((f) => ({ ...f, $type: "file" as const })),
+      ]
+    : [];
+
+  const handleSelectItem = (item: FlatSearchItem) => {
+    setSearchFocused(false);
+    setSearchQuery("");
+
+    if (item.$type === "channel") {
+      if (!pathname.startsWith("/chat")) {
+        router.push("/chat/");
+      }
+      connect(item.id);
+    } else if (item.$type === "user") {
+      router.push("/chat/");
+    } else if (item.$type === "book") {
+      router.push(`/library?read=${item.id}`);
+    } else if (item.$type === "media") {
+      router.push(`/stream?play=${item.id}`);
+    } else if (item.$type === "file") {
+      window.open(`/api/v1/files/${item.id}/download`, "_blank");
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!searchFocused || flatResults.length === 0) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSearchActiveIndex((prev) => (prev + 1) % flatResults.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSearchActiveIndex((prev) =>
+        prev === 0 ? flatResults.length - 1 : prev - 1
+      );
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const item = flatResults[searchActiveIndex];
+      if (item) {
+        handleSelectItem(item);
+      }
+    } else if (e.key === "Escape") {
+      setSearchFocused(false);
+      e.currentTarget.blur();
+    }
+  };
+
+  const renderSearchSection = <T extends { id: string | number }>(
+    title: string,
+    items: T[] | undefined,
+    type: "channel" | "user" | "book" | "media" | "file"
+  ) => {
+    if (!items || items.length === 0) return null;
+    return (
+      <div className="search-section">
+        <div className="search-section-title">{title}</div>
+        {items.map((item) => {
+          const flatIndex = flatResults.findIndex(
+            (f) => String(f.id) === String(item.id) && f.$type === type
+          );
+          const isActive = flatIndex === searchActiveIndex;
+
+          return (
+            <div
+              key={`${type}-${item.id}`}
+              className={`search-item${isActive ? " active" : ""}`}
+              onClick={() => handleSelectItem(flatResults[flatIndex])}
+              onMouseEnter={() => setSearchActiveIndex(flatIndex)}
+            >
+              {type === "channel" && (
+                <>
+                  <Hash size={14} className="search-icon" />
+                  <span className="search-title">{(item as unknown as Channel).name}</span>
+                  <span className="search-meta">{(item as unknown as Channel).type} channel</span>
+                </>
+              )}
+              {type === "user" && (
+                <>
+                  <span className="search-avatar-wrapper">
+                    {(item as unknown as SearchUser).avatarUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={(item as unknown as SearchUser).avatarUrl} alt="" className="search-avatar" />
+                    ) : (
+                      <span className="search-avatar-placeholder" />
+                    )}
+                  </span>
+                  <span className="search-title">{(item as unknown as SearchUser).displayName || (item as unknown as SearchUser).username}</span>
+                  <span className="search-meta">@{(item as unknown as SearchUser).username}</span>
+                </>
+              )}
+              {type === "book" && (
+                <>
+                  <BookOpen size={14} className="search-icon" />
+                  <div className="search-text-group">
+                    <span className="search-title">{(item as unknown as SearchBook).title}</span>
+                    <span className="search-meta">
+                      {(item as unknown as SearchBook).authors?.join(", ") ||
+                        "Unknown Author"}
+                    </span>
+                  </div>
+                  <span className="search-badge">{(item as unknown as SearchBook).format}</span>
+                </>
+              )}
+              {type === "media" && (
+                <>
+                  <Tv size={14} className="search-icon" />
+                  <div className="search-text-group">
+                    <span className="search-title">{(item as unknown as SearchMedia).title}</span>
+                    <span className="search-meta">{(item as unknown as SearchMedia).type}</span>
+                  </div>
+                  {(item as unknown as SearchMedia).duration && <span className="search-badge">{(item as unknown as SearchMedia).duration}</span>}
+                </>
+              )}
+              {type === "file" && (
+                <>
+                  <Folder size={14} className="search-icon" />
+                  <div className="search-text-group">
+                    <span className="search-title">{(item as unknown as SearchFileItem).filename}</span>
+                    <span className="search-meta">
+                      {(((item as unknown as SearchFileItem).sizeBytes || 0) / 1024).toFixed(1)} KB · {(item as unknown as SearchFileItem).mimeType}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (status === "unknown") void fetchMe();
@@ -84,9 +322,47 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <BrandLogo size={62} />
           <span className="word">TELOS</span>
         </div>
-        <div className="searchbar">
+        <div className="searchbar" ref={searchContainerRef}>
           <Search size={16} style={{ position: "absolute", left: 14 }} />
-          <input placeholder="Title, Author, Series, Genre, or Tags…" />
+          <input
+            placeholder="Search channels, users, books, media, files…"
+            value={searchQuery}
+            onChange={(e) => {
+              const val = e.target.value;
+              setSearchQuery(val);
+              setSearchFocused(true);
+              if (val.trim().length < 2) {
+                setSearchResults(null);
+                setSearchLoading(false);
+              } else {
+                setSearchLoading(true);
+              }
+            }}
+            onFocus={() => setSearchFocused(true)}
+            onKeyDown={handleKeyDown}
+          />
+          {searchLoading && (
+            <span className="search-loader">
+              <span className="search-spinner" />
+            </span>
+          )}
+          {searchFocused && searchQuery.trim().length >= 2 && (
+            <div className="searchbar-results">
+              {flatResults.length === 0 ? (
+                <div className="search-empty">
+                  {searchLoading ? "Searching..." : "No results found"}
+                </div>
+              ) : (
+                <>
+                  {renderSearchSection("Channels", searchResults?.channels, "channel")}
+                  {renderSearchSection("Users", searchResults?.users, "user")}
+                  {renderSearchSection("Books", searchResults?.books, "book")}
+                  {renderSearchSection("Media", searchResults?.media, "media")}
+                  {renderSearchSection("Files", searchResults?.files, "file")}
+                </>
+              )}
+            </div>
+          )}
         </div>
         <div className="topacts">
           <span className="chip">

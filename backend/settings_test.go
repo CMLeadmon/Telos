@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -214,5 +215,18 @@ func TestRoleChangeError(t *testing.T) {
 	}
 	if err := roleChangeError("u1", false, "u2", false, []string{"Moderator"}); err != nil {
 		t.Errorf("plain change should pass: %v", err)
+	}
+}
+
+func TestPermissionAmplificationError(t *testing.T) {
+	actorPerms := []string{"manage_roles", "view_channel", "send_messages"}
+	if err := permissionAmplificationError(false, actorPerms, []string{"view_channel", "send_messages"}); err != nil {
+		t.Fatalf("subset should be grantable: %v", err)
+	}
+	if err := permissionAmplificationError(false, actorPerms, []string{"manage_members"}); !errors.Is(err, errPermissionAmplification) {
+		t.Fatalf("amplification should be rejected, got %v", err)
+	}
+	if err := permissionAmplificationError(true, nil, []string{"manage_members"}); err != nil {
+		t.Fatalf("Owner should be able to grant any valid permission: %v", err)
 	}
 }

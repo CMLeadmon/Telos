@@ -11,6 +11,7 @@ import {
 import { api, livekitUrl } from "@/lib/api";
 import {
   createMicPipeline,
+  currentVoiceCaptureEnvironmentError,
   voiceErrorMessage,
   type MicPipeline,
 } from "@/lib/voiceAudio";
@@ -134,6 +135,15 @@ export const useVoiceSessionStore = create<VoiceSessionState>()((set, get) => {
 
     join: async (channelId) => {
       await get().leave();
+      const environmentError = currentVoiceCaptureEnvironmentError();
+      if (environmentError) {
+        set({
+          status: "error",
+          channelId,
+          error: environmentError,
+        });
+        return;
+      }
       set({ status: "connecting", channelId, error: null });
       let room: Room | null = null;
       try {

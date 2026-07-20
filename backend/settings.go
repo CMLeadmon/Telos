@@ -328,6 +328,14 @@ func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden: "+err.Error(), http.StatusForbidden)
 		return
 	}
+	if err := ensureCanAssignRoles(ctx, actor, body.Roles); err != nil {
+		status := http.StatusForbidden
+		if !errors.Is(err, errPermissionAmplification) {
+			status = http.StatusBadRequest
+		}
+		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
+		return
+	}
 	// Last-Owner protection: demoting the only Owner bricks the instance.
 	if targetOwner && !containsRole(body.Roles, "Owner") {
 		if n, err := ownerCount(ctx); err != nil || n <= 1 {
@@ -560,7 +568,127 @@ func setRolePermissions(ctx context.Context, roleID string, perms []string) erro
 	return tx.Commit(ctx)
 }
 
+var errPermissionAmplification = errors.New("permission amplification is forbidden")
+
+func permissionAmplificationError(actorIsOwner bool, actorPerms, requested []string) error {
+	if actorIsOwner {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(actorPerms))
+	for _, permission := range actorPerms {
+		allowed[permission] = struct{}{}
+	}
+	for _, permission := range requested {
+		if _, ok := allowed[permission]; !ok {
+			return fmt.Errorf("%w: cannot grant %q", errPermissionAmplification, permission)
+		}
+	}
+	return nil
+}
+
+func effectivePermissions(ctx context.Context, actor *UserContext) ([]string, error) {
+	if containsRole(actor.Roles, "Owner") {
+		rows, err := dbPool.Query(ctx, `SELECT id FROM permissions ORDER BY id`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var permissions []string
+		for rows.Next() {
+			var permission string
+			if err := rows.Scan(&permission); err != nil {
+				return nil, err
+			}
+			permissions = append(permissions, permission)
+		}
+		return permissions, rows.Err()
+	}
+
+	rows, err := dbPool.Query(ctx, `
+		SELECT DISTINCT permission_id FROM role_permissions
+		WHERE role_id = ANY($1)
+	`, actor.Roles)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var permissions []string
+	for rows.Next() {
+		var permission string
+		if err := rows.Scan(&permission); err != nil {
+			return nil, err
+		}
+		permissions = append(permissions, permission)
+	}
+	return permissions, rows.Err()
+}
+
+func ensureCanGrantPermissions(ctx context.Context, actor *UserContext, requested []string) error {
+	unique := make(map[string]struct{}, len(requested))
+	for _, permission := range requested {
+		unique[permission] = struct{}{}
+	}
+	if len(unique) > 0 {
+		var count int
+		if err := dbPool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM permissions WHERE id = ANY($1)`, requested).Scan(&count); err != nil {
+			return err
+		}
+		if count != len(unique) {
+			return errors.New("one or more permissions are unknown")
+		}
+	}
+	actorPerms, err := effectivePermissions(ctx, actor)
+	if err != nil {
+		return err
+	}
+	return permissionAmplificationError(containsRole(actor.Roles, "Owner"), actorPerms, requested)
+}
+
+func ensureCanAssignRoles(ctx context.Context, actor *UserContext, requested []string) error {
+	unique := make(map[string]struct{}, len(requested))
+	for _, roleID := range requested {
+		unique[roleID] = struct{}{}
+	}
+	if len(unique) == 0 {
+		return nil
+	}
+	var count int
+	if err := dbPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM roles WHERE id = ANY($1)`, requested).Scan(&count); err != nil {
+		return err
+	}
+	if count != len(unique) {
+		return errors.New("one or more roles are unknown")
+	}
+	rows, err := dbPool.Query(ctx, `
+		SELECT DISTINCT permission_id FROM role_permissions
+		WHERE role_id = ANY($1)
+	`, requested)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var permissions []string
+	for rows.Next() {
+		var permission string
+		if err := rows.Scan(&permission); err != nil {
+			return err
+		}
+		permissions = append(permissions, permission)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	actorPerms, err := effectivePermissions(ctx, actor)
+	if err != nil {
+		return err
+	}
+	return permissionAmplificationError(containsRole(actor.Roles, "Owner"), actorPerms, permissions)
+}
+
 func handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
+	actor := r.Context().Value(userContextKey).(*UserContext)
 	var body struct {
 		Name        string   `json:"name"`
 		Permissions []string `json:"permissions"`
@@ -575,6 +703,14 @@ func handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	if err := ensureCanGrantPermissions(ctx, actor, body.Permissions); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errPermissionAmplification) {
+			status = http.StatusForbidden
+		}
+		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
+		return
+	}
 	if _, err := dbPool.Exec(ctx, `
 		INSERT INTO roles (id, name, builtin) VALUES ($1, $2, FALSE)
 	`, id, strings.TrimSpace(body.Name)); err != nil {
@@ -583,6 +719,7 @@ func handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Permissions) > 0 {
 		if err := setRolePermissions(ctx, id, body.Permissions); err != nil {
+			_, _ = dbPool.Exec(ctx, `DELETE FROM roles WHERE id = $1`, id)
 			http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -593,6 +730,7 @@ func handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAdminSetRolePermissions(w http.ResponseWriter, r *http.Request) {
+	actor := r.Context().Value(userContextKey).(*UserContext)
 	roleID := r.PathValue("id")
 	if roleID == "Owner" {
 		http.Error(w, "Forbidden: the Owner role is immutable", http.StatusForbidden)
@@ -605,10 +743,22 @@ func handleAdminSetRolePermissions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-	var exists bool
+	var builtin bool
 	if err := dbPool.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)`, roleID).Scan(&exists); err != nil || !exists {
+		`SELECT builtin FROM roles WHERE id = $1`, roleID).Scan(&builtin); err != nil {
 		http.Error(w, "Role not found", http.StatusNotFound)
+		return
+	}
+	if builtin && !containsRole(actor.Roles, "Owner") {
+		http.Error(w, "Forbidden: only an Owner can edit built-in roles", http.StatusForbidden)
+		return
+	}
+	if err := ensureCanGrantPermissions(r.Context(), actor, body.Permissions); err != nil {
+		status := http.StatusBadRequest
+		if errors.Is(err, errPermissionAmplification) {
+			status = http.StatusForbidden
+		}
+		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
 		return
 	}
 	if err := setRolePermissions(r.Context(), roleID, body.Permissions); err != nil {
@@ -720,7 +870,7 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateNewPassword(body.NewPassword); err != nil {
-		http.Error(w, "Bad Request: " + err.Error(), http.StatusBadRequest)
+		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx := r.Context()

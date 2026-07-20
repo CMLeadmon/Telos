@@ -28,8 +28,11 @@
 
 /* Message hover actions and deletion tombstone */
 .msg { position: relative; }
-.msgactions { position: absolute; top: -12px; right: 8px; display: none; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 4px; z-index: 10; }
-.msg:hover .msgactions { display: flex; }
+/* Sized so the bar hangs in the 22px gap above the message and the empty
+   right end of the header row — never over body text. */
+.msgactions { position: absolute; top: -14px; right: 16px; display: none; gap: 2px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 3px; z-index: 10; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18); }
+.msg:hover .msgactions, .msgactions:focus-within { display: flex; }
+.msgactions .action-btn { width: 26px; height: 26px; border-radius: var(--r-xs); }
 .mbody.deleted { font-style: italic; color: var(--faint); }
 .deleted-msg { background: rgba(0, 0, 0, 0.05); padding: 8px 12px; border-radius: var(--r-xs); }
 

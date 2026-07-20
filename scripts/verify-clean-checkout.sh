@@ -9,27 +9,36 @@
 #
 # Exit codes:
 #   0  all requested checks passed
-#   2  usage error / unimplemented mode
+#   2  usage error
 #   10 tracked/input inventory failed
 #   20 build or test failed
 #   30 compose boot/readiness failed
 #   40 teardown or artifact-integrity failed
 #
 # Inventory mode checks the current index and working tree by default; it
-# never silently substitutes a previous HEAD. Supplying --source-ref checks
-# that exact tree-ish instead.
+# never silently substitutes a previous HEAD. Full mode refuses to run
+# without --source-ref: it exports that exact tree-ish, generates a
+# noncommittable random test environment, validates Compose, builds from the
+# export, boots an isolated stack, runs smoke probes, writes sanitized
+# evidence outside the repository, and tears everything down.
+#
+# TELOS_VERIFY_FAULT=readiness|teardown is harness-only fault injection used
+# by scripts/tests/verify-clean-checkout-test.sh to prove exit codes 30/40.
 set -euo pipefail
 
 EXIT_OK=0
 EXIT_USAGE=2
 EXIT_INVENTORY=10
+EXIT_BUILD=20
+EXIT_BOOT=30
+EXIT_TEARDOWN=40
 
 MODE=""
 SOURCE_REF=""
 EVIDENCE_OUT=""
 
 usage() {
-	sed -n '2,16p' "$0" >&2
+	sed -n '2,18p' "$0" >&2
 	exit "$EXIT_USAGE"
 }
 
@@ -110,6 +119,14 @@ list_tree_paths() {
 	fi
 }
 
+tree_file() {
+	if [ -n "$SOURCE_REF" ]; then
+		git show "$SOURCE_REF:$1"
+	else
+		cat "$1"
+	fi
+}
+
 run_inventory() {
 	INVENTORY_FAILED=0
 
@@ -151,7 +168,7 @@ run_inventory() {
 	# published ports must be on the reviewed non-HTTP allowlist (LiveKit
 	# WebRTC/TURN media ports).
 	local port_report
-	port_report="$(awk '
+	port_report="$(tree_file docker-compose.yml | awk '
 		/^services:/ { in_services=1; next }
 		in_services && /^[a-zA-Z0-9_-]+:/ { in_services=0 }
 		/^  [a-zA-Z0-9_-]+:/ { service=$1; sub(":", "", service); in_ports=0 }
@@ -161,7 +178,7 @@ run_inventory() {
 			print service " " port; next
 		}
 		in_ports && !/^      / { in_ports=0 }
-	' docker-compose.yml)"
+	')"
 	while IFS=' ' read -r service port; do
 		[ -n "$service" ] || continue
 		case "$service:$port" in
@@ -172,9 +189,9 @@ run_inventory() {
 	done <<<"$port_report"
 
 	# Development overlay bindings must be loopback-only.
-	if [ -f docker-compose.dev.yml ]; then
+	if path_present docker-compose.dev.yml; then
 		local dev_ports
-		dev_ports="$(grep -E '^\s+- "' docker-compose.dev.yml | tr -d ' "-' || true)"
+		dev_ports="$(tree_file docker-compose.dev.yml | grep -E '^\s+- "' | tr -d ' "-' || true)"
 		while IFS= read -r p; do
 			[ -n "$p" ] || continue
 			case "$p" in
@@ -185,23 +202,23 @@ run_inventory() {
 	fi
 
 	# Pinned-toolchain assertions: no build input may float.
-	grep -qE '^go 1\.26\.5$' backend/go.mod ||
+	tree_file backend/go.mod | grep -qE '^go 1\.26\.5$' ||
 		fail_inventory "backend/go.mod does not pin go 1.26.5"
-	[ -f .nvmrc ] && [ "$(cat .nvmrc)" = "24.18.0" ] ||
+	[ "$(tree_file .nvmrc 2>/dev/null || true)" = "24.18.0" ] ||
 		fail_inventory ".nvmrc does not pin Node.js 24.18.0"
-	grep -q 'FROM node:24\.18\.0-alpine' backend/Dockerfile ||
+	tree_file backend/Dockerfile | grep -q 'FROM node:24\.18\.0-alpine' ||
 		fail_inventory "backend/Dockerfile does not pin node:24.18.0-alpine"
-	grep -q 'FROM golang:1\.26\.5-alpine' backend/Dockerfile ||
+	tree_file backend/Dockerfile | grep -q 'FROM golang:1\.26\.5-alpine' ||
 		fail_inventory "backend/Dockerfile does not pin golang:1.26.5-alpine"
-	grep -q 'image: postgres:16\.14-alpine' docker-compose.yml ||
+	tree_file docker-compose.yml | grep -q 'image: postgres:16\.14-alpine' ||
 		fail_inventory "docker-compose.yml does not pin postgres:16.14-alpine"
-	grep -q '"next": "16\.2\.10"' frontend/package.json ||
+	tree_file frontend/package.json | grep -q '"next": "16\.2\.10"' ||
 		fail_inventory "frontend/package.json does not pin next 16.2.10 exactly"
-	grep -q '"postcss": "8\.5\.10"' frontend/package.json ||
+	tree_file frontend/package.json | grep -q '"postcss": "8\.5\.10"' ||
 		fail_inventory "frontend/package.json does not pin the postcss 8.5.10 override"
-	grep -q '"epubjs": "0\.4\.2"' frontend/package.json ||
+	tree_file frontend/package.json | grep -q '"epubjs": "0\.4\.2"' ||
 		fail_inventory "frontend/package.json does not pin epubjs 0.4.2"
-	if grep -nE '"(dependencies|devDependencies)"' -A 40 frontend/package.json |
+	if tree_file frontend/package.json | grep -nE '"(dependencies|devDependencies)"' -A 40 |
 		grep -E '": "[\^~]' >/dev/null; then
 		fail_inventory "frontend/package.json contains floating (^/~) dependency ranges"
 	fi
@@ -212,14 +229,229 @@ run_inventory() {
 	echo "inventory: all required release inputs present ($count migrations, contiguous)"
 }
 
-case "$MODE" in
-inventory)
+if [ "$MODE" = "inventory" ]; then
 	run_inventory
 	exit "$EXIT_OK"
-	;;
-"")
-	# Full mode (build/boot/evidence) is completed in P1-T5.
-	echo "full verification mode is not implemented yet (P1-T5)" >&2
+fi
+
+# ---------------------------------------------------------------------------
+# Full mode: export, build, boot, probe, evidence, teardown.
+# ---------------------------------------------------------------------------
+[ -n "$SOURCE_REF" ] || usage
+[ -n "$EVIDENCE_OUT" ] || usage
+case "$EVIDENCE_OUT" in
+/*) ;;
+*)
+	echo "evidence path must be absolute: $EVIDENCE_OUT" >&2
 	exit "$EXIT_USAGE"
 	;;
 esac
+case "$EVIDENCE_OUT" in
+"$repo_root"/*)
+	echo "evidence path must be outside the repository: $EVIDENCE_OUT" >&2
+	exit "$EXIT_USAGE"
+	;;
+esac
+
+git rev-parse --verify --quiet "${SOURCE_REF}^{tree}" >/dev/null || {
+	echo "unknown --source-ref: $SOURCE_REF" >&2
+	exit "$EXIT_USAGE"
+}
+
+FAULT="${TELOS_VERIFY_FAULT:-}"
+
+run_inventory
+
+rand() { od -An -N"${1:-24}" -tx1 /dev/urandom | tr -d ' \n'; }
+
+proj="telosverify$(rand 3)"
+port="$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 9999))"
+tmp="$(mktemp -d "/tmp/${proj}.XXXXXX")"
+src="$tmp/src"
+final_exit="$EXIT_OK"
+
+teardown() {
+	set +e
+	podman compose -p "$proj" --env-file "$src/.env" \
+		-f "$src/docker-compose.yml" -f "$tmp/smoke-overlay.yml" \
+		down -v --timeout 10 >/dev/null 2>&1
+	if podman ps -a --format '{{.Names}}' | grep -q "^${proj}-"; then
+		echo "teardown: containers with prefix ${proj}- survived" >&2
+		[ "$final_exit" -eq "$EXIT_OK" ] && final_exit="$EXIT_TEARDOWN"
+		podman rm -f $(podman ps -a --format '{{.Names}}' | grep "^${proj}-") >/dev/null 2>&1
+	fi
+	podman network rm -f "${proj}-ingress" "${proj}-backend" "${proj}-db" >/dev/null 2>&1
+	podman volume ls --format '{{.Name}}' | grep "^${proj}_" | xargs -r podman volume rm -f >/dev/null 2>&1
+	podman rmi -f "localhost/${proj}-core" >/dev/null 2>&1
+	rm -rf "$tmp"
+}
+
+on_exit() {
+	teardown
+	exit "$final_exit"
+}
+trap on_exit EXIT
+
+step_fail() {
+	# $1 exit code, $2 message
+	echo "verify: $2" >&2
+	final_exit="$1"
+	exit "$1" # trap rewrites to final_exit
+}
+
+echo "verify: exporting $SOURCE_REF"
+mkdir -p "$src"
+git archive --format=tar "$SOURCE_REF" | tar -x -C "$src"
+[ ! -e "$src/.git" ] || step_fail "$EXIT_TEARDOWN" "export unexpectedly contains .git"
+[ ! -e "$src/.env" ] || step_fail "$EXIT_TEARDOWN" "export unexpectedly contains .env"
+for banned in config/certs backend/out backend/telos-core frontend/.next frontend/out frontend/node_modules; do
+	[ ! -e "$src/$banned" ] || step_fail "$EXIT_TEARDOWN" "export contains generated/local state: $banned"
+done
+
+echo "verify: generating disposable smoke environment"
+storage="$tmp/storage"
+mkdir -p "$storage/media" "$storage/staging" "$storage/bookdrop"
+bootstrap_token="$(rand 24)"
+smoke_password="telos-smoke-$(rand 12)"
+umask 077
+cat >"$src/.env" <<EOF
+TELOS_DOMAIN=localhost
+ACME_EMAIL=smoke@example.invalid
+APP_UID=$(id -u)
+APP_GID=$(id -g)
+TZ=Etc/UTC
+STORAGE_PATH=$storage
+POSTGRES_USER=telos
+POSTGRES_PASSWORD=$(rand 24)
+POSTGRES_DB=telos
+REDIS_PASSWORD=$(rand 24)
+LIVEKIT_API_KEY=lk$(rand 8)
+LIVEKIT_API_SECRET=$(rand 24)
+JELLYFIN_ADMIN_TOKEN=$(rand 16)
+JELLYFIN_USER_NAME=
+GRIMMORY_ADMIN_USER=telos-gateway
+GRIMMORY_ADMIN_PASSWORD=$(rand 16)
+GRIMMORY_DB_NAME=grimmory
+GRIMMORY_DB_USER=grimmory
+GRIMMORY_DB_PASSWORD=$(rand 16)
+MARIADB_ROOT_PASSWORD=$(rand 16)
+TELOS_ENV=production
+TELOS_BOOTSTRAP_TOKEN=$bootstrap_token
+EOF
+chmod 0600 "$src/.env"
+umask 022
+
+# The production compose file pins global network names; without overriding
+# them the smoke project would join the live stack's networks and resolve
+# service DNS names (postgres, redis) to production containers.
+cat >"$tmp/smoke-overlay.yml" <<EOF
+networks:
+  telos-ingress:
+    name: ${proj}-ingress
+  telos-backend:
+    name: ${proj}-backend
+    internal: true
+  telos-db:
+    name: ${proj}-db
+    internal: true
+services:
+  telos-core:
+    image: localhost/${proj}-core
+    container_name: ${proj}-core
+    restart: "no"
+    ports:
+      - "127.0.0.1:${port}:8080"
+  postgres:
+    container_name: ${proj}-postgres
+    restart: "no"
+  redis:
+    container_name: ${proj}-redis
+    restart: "no"
+EOF
+
+echo "verify: validating compose model"
+podman compose -p "$proj" --env-file "$src/.env" \
+	-f "$src/docker-compose.yml" -f "$tmp/smoke-overlay.yml" \
+	config --services >"$tmp/compose-services.txt" 2>"$tmp/compose-err.txt" ||
+	step_fail "$EXIT_BOOT" "compose validation failed: $(cat "$tmp/compose-err.txt")"
+
+echo "verify: building image from the export"
+podman build -f "$src/backend/Dockerfile" -t "localhost/${proj}-core" "$src" \
+	>"$tmp/build.log" 2>&1 ||
+	step_fail "$EXIT_BUILD" "image build failed (see last lines): $(tail -5 "$tmp/build.log")"
+
+echo "verify: booting isolated stack ($proj, port $port)"
+podman compose -p "$proj" --env-file "$src/.env" \
+	-f "$src/docker-compose.yml" -f "$tmp/smoke-overlay.yml" \
+	up -d --no-build telos-core >"$tmp/up.log" 2>&1 ||
+	step_fail "$EXIT_BOOT" "compose up failed: $(tail -5 "$tmp/up.log")"
+
+probe_base="http://127.0.0.1:${port}"
+if [ "$FAULT" = "readiness" ]; then
+	probe_base="http://127.0.0.1:1" # injected fault: unreachable probe target
+fi
+
+echo "verify: waiting for gateway liveness"
+health_status=""
+for _ in $(seq 1 "${TELOS_VERIFY_PROBE_ATTEMPTS:-60}"); do
+	health_status="$(curl -s -o "$tmp/health.json" -w '%{http_code}' \
+		--max-time 3 "$probe_base/api/v1/health" || true)"
+	case "$health_status" in 200 | 503) break ;; esac
+	sleep 2
+done
+case "$health_status" in
+200 | 503) ;;
+*) step_fail "$EXIT_BOOT" "gateway liveness probe failed (last status: ${health_status:-none})" ;;
+esac
+
+echo "verify: probing static assets"
+root_status="$(curl -s -o "$tmp/root.html" -w '%{http_code}' --max-time 5 "$probe_base/" || true)"
+[ "$root_status" = "200" ] && grep -qi "<html" "$tmp/root.html" ||
+	step_fail "$EXIT_BOOT" "static asset probe failed (status $root_status)"
+
+echo "verify: probing bootstrap and login"
+bs_status="$(curl -s -o "$tmp/bootstrap.out" -w '%{http_code}' --max-time 10 \
+	-H 'Content-Type: application/json' -H "Origin: http://127.0.0.1:${port}" \
+	-d "{\"username\":\"smokeowner\",\"password\":\"$smoke_password\",\"token\":\"$bootstrap_token\"}" \
+	"$probe_base/api/v1/auth/bootstrap" || true)"
+case "$bs_status" in
+200 | 201) ;;
+*) step_fail "$EXIT_BOOT" "bootstrap probe failed (status $bs_status)" ;;
+esac
+login_headers="$tmp/login-headers.txt"
+login_status="$(curl -s -o "$tmp/login.out" -D "$login_headers" -w '%{http_code}' --max-time 10 \
+	-H 'Content-Type: application/json' -H "Origin: http://127.0.0.1:${port}" \
+	-d "{\"username\":\"smokeowner\",\"password\":\"$smoke_password\"}" \
+	"$probe_base/api/v1/auth/login" || true)"
+[ "$login_status" = "200" ] && grep -qi '^set-cookie: telos_session=' "$login_headers" ||
+	step_fail "$EXIT_BOOT" "login probe failed (status $login_status)"
+
+echo "verify: writing sanitized evidence"
+cat >"$EVIDENCE_OUT" <<EOF
+{
+  "sourceRef": "$(git rev-parse "$SOURCE_REF")",
+  "sourceTree": "$(git rev-parse "${SOURCE_REF}^{tree}")",
+  "podman": "$(podman --version | tr -d '\n')",
+  "composeServices": $(python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().split()))' <"$tmp/compose-services.txt"),
+  "builderImages": $(grep '^FROM ' "$src/backend/Dockerfile" | awk '{print $2}' | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read().split()))'),
+  "checks": {
+    "inventory": "pass",
+    "composeValidate": "pass",
+    "imageBuild": "pass",
+    "gatewayLiveness": "$health_status",
+    "staticAssets": "$root_status",
+    "bootstrap": "$bs_status",
+    "login": "$login_status"
+  }
+}
+EOF
+chmod 0600 "$EVIDENCE_OUT"
+
+if [ "$FAULT" = "teardown" ]; then
+	echo "not-json" >"$EVIDENCE_OUT" # injected fault: corrupt evidence artifact
+fi
+
+python3 -m json.tool "$EVIDENCE_OUT" >/dev/null 2>&1 ||
+	step_fail "$EXIT_TEARDOWN" "evidence artifact failed integrity check"
+
+echo "verify: PASS ($proj) — evidence at $EVIDENCE_OUT"
