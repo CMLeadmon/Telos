@@ -1,13 +1,36 @@
+# Local environment files (only .env.example is tracked)
 .env
+.env.*
+!.env.example
+
+# Editor state
 .idea/
 .vscode/
 *.local
+
+# Dependency and build output
 node_modules/
 .next/
 out/
 dist/
 bin/
-config/certs/
 
+# Compiled binaries
+backend/telos-core
+
+# Local certificates and secret files
+config/certs/
+*.pem
+*.key
+
+# Backup output and restore staging
+backups/
+restore-staging/
+
+# Temporary upload staging
+uploads-tmp/
+
+# Test reports
 test-results/
 playwright-report/
+coverage/
