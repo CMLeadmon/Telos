@@ -55,3 +55,6 @@ scripts/verify-clean-checkout.sh
 documentation/operations/release-inputs.pathspec
 documentation/operations/clean-checkout-verification.md
 documentation/operations/dependency-security-baseline.md
+backend/errors.go
+backend/security.go
+backend/security_test.go

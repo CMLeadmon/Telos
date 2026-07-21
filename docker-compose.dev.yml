@@ -2,6 +2,13 @@
 # deploy this override as part of the production stack.
 services:
   telos-core:
+    environment:
+      - TELOS_ENV=development
+      # Finite dev-origin allowlist for the cross-origin split (frontend on
+      # :3000 calls the gateway on :8080). Never set in production.
+      - TELOS_PUBLIC_ORIGIN=${TELOS_PUBLIC_ORIGIN:-http://localhost:8080}
+      - TELOS_DEV_ORIGINS=${TELOS_DEV_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      - TELOS_TRUSTED_PROXY_CIDRS=${TELOS_TRUSTED_PROXY_CIDRS:-}
     ports:
       - "127.0.0.1:8080:8080"
   livekit:

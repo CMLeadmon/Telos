@@ -165,8 +165,7 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		DisplayName string `json:"displayName"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	name, err := validateDisplayName(body.DisplayName)
@@ -314,8 +313,7 @@ func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Roles []string `json:"roles"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	ctx := r.Context()
@@ -380,8 +378,7 @@ func handleAdminSetUserActive(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Active bool `json:"active"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	ctx := r.Context()
@@ -693,8 +690,7 @@ func handleAdminCreateRole(w http.ResponseWriter, r *http.Request) {
 		Name        string   `json:"name"`
 		Permissions []string `json:"permissions"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	id, err := slugifyRoleID(body.Name)
@@ -739,8 +735,7 @@ func handleAdminSetRolePermissions(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Permissions []string `json:"permissions"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	var builtin bool
@@ -865,8 +860,7 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		CurrentPassword string `json:"currentPassword"`
 		NewPassword     string `json:"newPassword"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	if err := validateNewPassword(body.NewPassword); err != nil {

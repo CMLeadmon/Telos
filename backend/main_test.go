@@ -626,73 +626,12 @@ func TestMonitorJellyfinRefreshTimesOutWithoutNewResult(t *testing.T) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WebSocket Origin Policy Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-func TestIsAllowedCSRFOrigin(t *testing.T) {
-	cases := []struct {
-		name             string
-		rawURL           string
-		requestHost      string
-		configuredDomain string
-		envMode          string
-		want             bool
-	}{
-		{"same origin exact", "http://100.64.1.5:8080", "100.64.1.5:8080", "telos.local", "", true},
-		{"tailscale magicdns same host", "https://node.tailnet.ts.net", "node.tailnet.ts.net", "telos.local", "", true},
-		{"configured domain", "https://telos.local", "10.0.0.2:8080", "telos.local", "", true},
-		{"foreign origin rejected", "https://evil.example", "100.64.1.5:8080", "telos.local", "", false},
-		{"dev localhost cross-port", "http://localhost:3000", "localhost:8080", "telos.local", "development", true},
-		{"dev same hostname cross-port", "http://100.64.1.5:3000", "100.64.1.5:8080", "telos.local", "development", true},
-		{"prod same hostname cross-port rejected", "http://100.64.1.5:3000", "100.64.1.5:8080", "telos.local", "", false},
-		{"empty origin rejected", "", "localhost:8080", "telos.local", "development", false},
-		{"garbage origin rejected", "::not-a-url::", "localhost:8080", "telos.local", "development", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := isAllowedCSRFOrigin(tc.rawURL, tc.requestHost, tc.configuredDomain, tc.envMode)
-			if got != tc.want {
-				t.Errorf("isAllowedCSRFOrigin(%q, %q, %q, %q) = %v, want %v",
-					tc.rawURL, tc.requestHost, tc.configuredDomain, tc.envMode, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestIsAllowedWSOrigin(t *testing.T) {
-	cases := []struct {
-		name    string
-		origin  string
-		host    string
-		domain  string
-		allowed bool
-	}{
-		{"no origin (non-browser client)", "", "telos.local", "telos.local", true},
-		{"same origin", "https://telos.local", "telos.local", "telos.local", true},
-		{"configured domain", "https://telos.local", "10.0.0.5:8080", "telos.local", true},
-		{"localhost dev", "http://localhost:3000", "localhost:8080", "telos.local", true},
-		{"loopback dev", "http://127.0.0.1:3000", "127.0.0.1:8080", "telos.local", true},
-		{"foreign origin", "https://evil.example.com", "telos.local", "telos.local", false},
-		{"malformed origin", "::not-a-url::", "telos.local", "telos.local", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := isAllowedWSOrigin(c.origin, c.host, c.domain); got != c.allowed {
-				t.Errorf("isAllowedWSOrigin(%q, %q, %q) = %v, want %v", c.origin, c.host, c.domain, got, c.allowed)
-			}
-		})
-	}
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Reverse-Proxy CORS Header Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-// The gateway's corsMiddleware is the single CORS authority. Upstream services
-// (Jellyfin) send their own Access-Control-Allow-Origin, and ReverseProxy
-// appends response headers — without stripping, browsers see the illegal
-// duplicate "http://localhost:3000, *" and block every proxied stream
-// response in the cross-origin dev split (:3000 → :8080).
+// Production is same-origin and emits no CORS headers. The proxy must strip
+// any upstream Access-Control-* headers so a browser never sees a reflected
+// or wildcard origin from Jellyfin.
 func TestProxyRequestStripsUpstreamCORSHeaders(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -702,24 +641,19 @@ func TestProxyRequestStripsUpstreamCORSHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		proxyRequest(w, r, upstream.URL+"/Videos/x/main.m3u8", "test-token")
-	}))
+	})
 
 	req := httptest.NewRequest("GET", "/api/v1/stream/video/x/main.m3u8", nil)
-	req.Header.Set("Origin", "http://localhost:3000")
 	rr := httptest.NewRecorder()
 	handler.ServeHTTP(rr, req)
 
-	acao := rr.Result().Header.Values("Access-Control-Allow-Origin")
-	if len(acao) != 1 {
-		t.Fatalf("Access-Control-Allow-Origin has %d values %v, want exactly 1", len(acao), acao)
+	if acao := rr.Result().Header.Values("Access-Control-Allow-Origin"); len(acao) != 0 {
+		t.Fatalf("Access-Control-Allow-Origin leaked from upstream: %v", acao)
 	}
-	if acao[0] != "http://localhost:3000" {
-		t.Errorf("Access-Control-Allow-Origin = %q, want the echoed request origin", acao[0])
-	}
-	if creds := rr.Result().Header.Values("Access-Control-Allow-Credentials"); len(creds) != 1 {
-		t.Errorf("Access-Control-Allow-Credentials has %d values %v, want exactly 1", len(creds), creds)
+	if creds := rr.Result().Header.Values("Access-Control-Allow-Credentials"); len(creds) != 0 {
+		t.Errorf("Access-Control-Allow-Credentials leaked from upstream: %v", creds)
 	}
 	if rr.Body.String() != "#EXTM3U" {
 		t.Errorf("proxied body = %q, want upstream body", rr.Body.String())

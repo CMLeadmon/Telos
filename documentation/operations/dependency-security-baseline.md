@@ -30,8 +30,8 @@ plus their minimal transitive requirements only):
 | github.com/jackc/pgx/v5 | v5.9.2 |
 | github.com/redis/go-redis/v9 | v9.6.3 |
 | github.com/go-jose/go-jose/v3 | v3.0.5 |
-| golang.org/x/net | v0.53.0 |
-| golang.org/x/crypto | v0.50.0 (pulled by x/net v0.53.0) |
+| golang.org/x/net | v0.55.0 (raised from the v0.53.0 floor in P2-T2: the new `idna` origin-normalization path made GO-2026-5026, fixed in v0.55.0, reachable) |
+| golang.org/x/crypto | v0.50.0 |
 | github.com/jackc/puddle/v2, pgservicefile | pgx v5.9.2 requirements |
 
 npm: `epubjs` stays at the pinned 0.4.2; the abandoned `xmldom` is overridden

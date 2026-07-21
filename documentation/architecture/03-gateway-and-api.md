@@ -125,3 +125,46 @@ scope and are not implemented in the current gateway; OIDC is not presented
 anywhere as an available integration. Any future implementation must add purpose-built setup
 or identity endpoints; it must not restore a public administrative catch-all
 proxy.
+
+## 5. Internet-facing HTTP security boundary
+
+The boundary is centralized in `backend/security.go` and configured once from
+the environment (`loadSecurityConfig`). All state-changing requests and
+WebSocket upgrades are validated against **one exact origin**,
+`TELOS_PUBLIC_ORIGIN` (scheme + IDNA-normalized host + effective port); a
+default-port alias matches, but sibling subdomains, scheme downgrades, and
+wrong ports do not. Production emits no CORS headers; development honors a
+finite `TELOS_DEV_ORIGINS` allowlist only.
+
+- **Request admission.** A bounded semaphore (128 in-flight) rejects excess
+  requests with `503 server_busy` before any authentication, database, Redis,
+  filesystem, or upstream work. Traefik applies a matching `inFlightReq`
+  ceiling at the edge.
+- **Body policy (`decodeJSON`).** The size limit is applied with
+  `http.MaxBytesReader` *before* decoding; auth JSON is 16 KiB and other JSON
+  64 KiB. Exactly one JSON document is accepted (trailing data is rejected),
+  under a 15-second absolute read deadline. Streaming uploads use
+  `withRenewedBodyReadDeadline` so an actively transferring client is not cut
+  off by a fixed total-body deadline while a stalled one still times out.
+  Traefik route classes mirror this: a 16 KiB auth-JSON class, a 64 KiB
+  other-JSON class, and streaming upload/media classes that never spool a
+  body at the edge (the route-wide 100 MiB buffering middleware is removed).
+- **Client address trust (`clientIP`).** `X-Forwarded-For` is honored only
+  when the direct peer is inside `TELOS_TRUSTED_PROXY_CIDRS` (the Traefik
+  ingress subnet); otherwise the direct peer address is authoritative.
+- **Response headers.** Production responses carry a strict CSP whose
+  `connect-src` names exactly the public origin's `wss://host[:port]` (never
+  bare `wss:`, wildcards, or a reflected origin), plus HSTS
+  (`max-age=31536000; includeSubDomains`), `X-Frame-Options: DENY`,
+  `nosniff`, `strict-origin-when-cross-origin`, and a restrictive
+  Permissions-Policy.
+- **SSRF-safe egress.** Outbound metadata/cover fetches resolve the host
+  once, reject the entire answer set if any address is non-public
+  (loopback/private/link-local/CGNAT/multicast, IPv4 or IPv6, including
+  IPv4-mapped forms), dial exactly one validated address while preserving the
+  original SNI so the transport cannot re-resolve, cap redirects at three, and
+  reject scheme downgrades.
+- **Error and log hygiene.** Public errors use the stable shape
+  `{ "error": { "code", "message", "requestId" } }` with no raw
+  database/Redis/filesystem/upstream text; health failures report only a
+  status word. Secret validation prints only the offending variable name.

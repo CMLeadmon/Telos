@@ -4,19 +4,57 @@ http:
       rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/livekit`)'
       entryPoints:
         - websecure
-      priority: 100
+      priority: 300
       middlewares:
+        - telos-inflight
         - livekit-strip
       service: livekit
       tls:
         certResolver: letsencrypt
+
+    # Auth JSON: strict 16 KiB edge limit before the gateway.
+    telos-auth:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/api/v1/auth`)'
+      entryPoints:
+        - websecure
+      priority: 250
+      middlewares:
+        - telos-inflight
+        - telos-auth-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Streaming media and uploads: never spool a request body at the edge —
+    # the gateway authorizes and admits first, then bounds the stream itself.
+    telos-streaming:
+      rule: >-
+        Host(`{{ env "TELOS_DOMAIN" }}`) && (
+          PathPrefix(`/api/v1/stream`) ||
+          PathPrefix(`/api/v1/media`) ||
+          PathPrefix(`/api/v1/files`) ||
+          PathRegexp(`^/api/v1/users/[^/]+/avatar$`) ||
+          Path(`/api/v1/users/me/avatar`) ||
+          PathRegexp(`^/api/v1/library/books/[^/]+/(content|cover)$`)
+        )
+      entryPoints:
+        - websecure
+      priority: 200
+      middlewares:
+        - telos-inflight
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Default: other JSON API and the static frontend, 64 KiB edge limit.
     telos-core:
       rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/`)'
       entryPoints:
         - websecure
       priority: 1
       middlewares:
-        - upload-limits
+        - telos-inflight
+        - telos-json-body
       service: telos-core
       tls:
         certResolver: letsencrypt
@@ -26,9 +64,20 @@ http:
       stripPrefix:
         prefixes:
           - /livekit
-    upload-limits:
+    # Edge in-flight ceiling matching the gateway's 128-request admission cap.
+    telos-inflight:
+      inFlightReq:
+        amount: 128
+    # 16 KiB auth JSON, held in memory (no disk spool).
+    telos-auth-body:
       buffering:
-        maxRequestBodyBytes: 104857600
+        maxRequestBodyBytes: 16384
+        memRequestBodyBytes: 16384
+    # 64 KiB other JSON, held in memory.
+    telos-json-body:
+      buffering:
+        maxRequestBodyBytes: 65536
+        memRequestBodyBytes: 65536
 
   services:
     livekit:

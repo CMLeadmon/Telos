@@ -617,27 +617,6 @@ func readUploadedCover(w http.ResponseWriter, r *http.Request) ([]byte, string, 
 	return nil, "", http.StatusBadRequest, errors.New("missing cover file")
 }
 
-func publicURLIPs(ctx context.Context, rawURL *url.URL) ([]net.IPAddr, error) {
-	if rawURL.Scheme != "http" && rawURL.Scheme != "https" {
-		return nil, errors.New("cover URL must use HTTP or HTTPS")
-	}
-	if rawURL.User != nil || rawURL.Hostname() == "" {
-		return nil, errors.New("invalid cover URL")
-	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, rawURL.Hostname())
-	if err != nil || len(ips) == 0 {
-		return nil, errors.New("cover host could not be resolved")
-	}
-	for _, resolved := range ips {
-		ip := resolved.IP
-		if ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() ||
-			ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
-			return nil, errors.New("cover URL resolves to a private address")
-		}
-	}
-	return ips, nil
-}
-
 func candidateCoverHTTPClient() *http.Client {
 	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
 	transport := upstreamTransport.Clone()
@@ -652,12 +631,15 @@ func candidateCoverHTTPClient() *http.Client {
 		if err != nil {
 			return nil, err
 		}
-		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].IP.String(), port))
+		return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	}
 	client := &http.Client{Transport: transport, Timeout: 30 * time.Second}
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
+		if len(via) >= 3 {
 			return errors.New("too many cover redirects")
+		}
+		if req.URL.Scheme != via[len(via)-1].URL.Scheme && req.URL.Scheme != "https" {
+			return errors.New("cover redirect downgrades the scheme")
 		}
 		_, err := publicURLIPs(req.Context(), req.URL)
 		return err

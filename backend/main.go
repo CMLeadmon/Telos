@@ -46,11 +46,11 @@ var (
 	// redisClient is the Redis connection used for pub/sub and caching.
 	redisClient *redis.Client
 
-	// upgrader negotiates WebSocket upgrades; origin is validated by
-	// isAllowedWSOrigin against the TELOS_DOMAIN env var.
+	// upgrader negotiates WebSocket upgrades; the origin is validated against
+	// the exact-origin security policy (same source of truth as HTTP).
 	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return isAllowedWSOrigin(r.Header.Get("Origin"), r.Host, os.Getenv("TELOS_DOMAIN"))
+			return originAllowed(securityConfig, r.Header.Get("Origin"))
 		},
 	}
 
@@ -194,6 +194,12 @@ func main() {
 	// Validate production secrets fast
 	if os.Getenv("TELOS_ENV") != "development" {
 		validateSecrets()
+	}
+
+	var cfgErr error
+	securityConfig, cfgErr = loadSecurityConfig()
+	if cfgErr != nil {
+		log.Fatalf("Critical Configuration Error: %v", cfgErr)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -343,11 +349,24 @@ func main() {
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
 
+	// Internet-facing boundary chain (outermost first): correlation ID,
+	// response security headers, bounded admission before any auth/DB/Redis
+	// work, development CORS, then the exact-origin policy for state-changing
+	// requests. requireTrustedOrigin replaces the old csrf/cors middlewares.
+	handler := requestIDMiddleware(
+		securityHeaders(
+			admissionMiddleware(
+				devCORS(
+					requireTrustedOrigin(mux, securityConfig),
+					securityConfig),
+				securityConfig.MaxInFlightHTTP),
+			securityConfig))
 	server := &http.Server{
-		Addr:         ":" + port,
-		Handler:      csrfMiddleware(corsMiddleware(mux)),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		MaxHeaderBytes:    securityConfig.MaxHeaderBytes,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	log.Printf("Server listening on port %s", port)
@@ -358,7 +377,7 @@ func main() {
 
 func validateSecrets() {
 	vars := []string{
-		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_BOOTSTRAP_TOKEN",
+		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_PUBLIC_ORIGIN", "TELOS_BOOTSTRAP_TOKEN",
 		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_ADMIN_USER", "GRIMMORY_ADMIN_PASSWORD",
 	}
 	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder", "generate-me"}
@@ -369,7 +388,7 @@ func validateSecrets() {
 		}
 		for _, ph := range placeholders {
 			if strings.Contains(strings.ToLower(val), ph) {
-				log.Fatalf("Critical Configuration Error: Environment variable %s contains insecure placeholder value %q.", v, val)
+				log.Fatalf("Critical Configuration Error: Environment variable %s contains an insecure placeholder value.", v)
 			}
 		}
 	}
@@ -564,98 +583,9 @@ func resetFailedLogins(ctx context.Context, username, clientIP string) {
 // Middlewares & Origin Policy
 // ═══════════════════════════════════════════════════════════════════════════
 
-func isAllowedWSOrigin(origin, requestHost, configuredDomain string) bool {
-	if origin == "" {
-		return true
-	}
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if u.Host == requestHost {
-		return true
-	}
-	hostname := u.Hostname()
-	if configuredDomain != "" && hostname == configuredDomain {
-		return true
-	}
-	return hostname == "localhost" || hostname == "127.0.0.1"
-}
-
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-		} else {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-		}
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
-// isAllowedCSRFOrigin reports whether a request's Origin/Referer URL is
-// trusted. Same-origin requests (URL host == request Host) are always
-// allowed, so the check works regardless of how the node is reached
-// (LAN IP, Tailscale MagicDNS, reverse proxy) without enumerating hosts.
-// In development mode a hostname-only match is also accepted, covering the
-// dev split where the frontend on :3000 calls the gateway on :8080.
-func isAllowedCSRFOrigin(rawURL, requestHost, configuredDomain, envMode string) bool {
-	if rawURL == "" {
-		return false
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if strings.EqualFold(u.Host, requestHost) {
-		return true
-	}
-	hostname := u.Hostname()
-	if configuredDomain != "" && strings.EqualFold(hostname, configuredDomain) {
-		return true
-	}
-	if envMode == "development" {
-		if strings.EqualFold(hostname, "localhost") || hostname == "127.0.0.1" {
-			return true
-		}
-		if reqHostname, _, err := net.SplitHostPort(requestHost); err == nil && strings.EqualFold(hostname, reqHostname) {
-			return true
-		}
-	}
-	return false
-}
-
-func csrfMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		origin := r.Header.Get("Origin")
-		referer := r.Header.Get("Referer")
-		configuredDomain := os.Getenv("TELOS_DOMAIN")
-		envMode := os.Getenv("TELOS_ENV")
-
-		isValid := isAllowedCSRFOrigin(origin, r.Host, configuredDomain, envMode) ||
-			isAllowedCSRFOrigin(referer, r.Host, configuredDomain, envMode)
-
-		if !isValid {
-			http.Error(w, "Forbidden: CSRF Validation Failed", http.StatusForbidden)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
-}
+// Origin policy, CORS, request admission, and body limits now live in
+// security.go (loadSecurityConfig, originAllowed, requireTrustedOrigin,
+// devCORS, admissionMiddleware, securityHeaders, decodeJSON, clientIP).
 
 func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	if dbPool == nil {
@@ -887,8 +817,7 @@ func handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 		Token    string `json:"token"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.AuthJSONBytes); err != nil {
 		return
 	}
 
@@ -971,12 +900,16 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.AuthJSONBytes); err != nil {
 		return
 	}
 
-	clientIP, _, _ := net.SplitHostPort(r.RemoteAddr)
+	clientAddr, ipErr := clientIP(r, securityConfig.TrustedProxyRanges)
+	if ipErr != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "bad_client_address", "The client address could not be determined.")
+		return
+	}
+	clientIP := clientAddr.String()
 	ctx := r.Context()
 
 	throttled, err := isThrottled(ctx, body.Username, clientIP)
@@ -1095,9 +1028,15 @@ func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RoleID string `json:"roleId"`
 	}
-	// Decode error ignored on purpose — older clients send no body.
-	if err := json.NewDecoder(r.Body).Decode(&body); err == nil && body.RoleID != "" {
-		roleID = body.RoleID
+	// The body is optional — older clients send none — but when present it is
+	// size-bounded and must be valid JSON.
+	if r.ContentLength != 0 {
+		if err := decodeJSON(w, r, &body, securityConfig.AuthJSONBytes); err != nil {
+			return
+		}
+		if body.RoleID != "" {
+			roleID = body.RoleID
+		}
 	}
 	if roleID == "Owner" && !containsRole(user.Roles, "Owner") {
 		http.Error(w, "Forbidden: only an Owner can create Owner invites", http.StatusForbidden)
@@ -1142,8 +1081,7 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.AuthJSONBytes); err != nil {
 		return
 	}
 
@@ -1253,7 +1191,9 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := dbPool.Ping(ctx); err != nil {
-			services["database"] = fmt.Sprintf("unhealthy: %v", err)
+			// Never surface raw driver/connection error text publicly.
+			log.Printf("health: database ping failed request_id=%s: %v", requestIDFrom(r.Context()), err)
+			services["database"] = "unhealthy"
 			overallStatus = "unhealthy"
 		} else {
 			services["database"] = "healthy"
@@ -1267,7 +1207,8 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
-			services["redis"] = fmt.Sprintf("unhealthy: %v", err)
+			log.Printf("health: redis ping failed request_id=%s: %v", requestIDFrom(r.Context()), err)
+			services["redis"] = "unhealthy"
 			overallStatus = "unhealthy"
 		} else {
 			services["redis"] = "healthy"
@@ -1590,8 +1531,7 @@ func handlePinMessage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		MessageID string `json:"messageId"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", 400)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 
@@ -2040,8 +1980,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			Ref  string `json:"ref"`
 		} `json:"embed"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", 400)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	body.Content = strings.TrimSpace(body.Content)
@@ -2099,8 +2038,7 @@ func handleEditMessage(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Content string `json:"content"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", 400)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	body.Content = strings.TrimSpace(body.Content)
@@ -2178,8 +2116,7 @@ func handleAddReaction(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Emoji string `json:"emoji"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad json", 400)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	if !isEmoji(body.Emoji) {
@@ -3846,8 +3783,7 @@ func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		Path string `json:"path"`
 		Name string `json:"name"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
