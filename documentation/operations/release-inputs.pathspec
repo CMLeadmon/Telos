@@ -124,3 +124,5 @@ documentation/operations/restore-drill.md
 backend/db/migrations/0012_file_catalog_audit.sql
 backend/files.go
 backend/files_integration_test.go
+backend/storage.go
+backend/storage_test.go

@@ -123,6 +123,19 @@ Rotate or remove `TELOS_BOOTSTRAP_TOKEN` from the runtime environment after the
 Owner exists; the endpoint also refuses a second Owner bootstrap at the database
 layer.
 
+### 4.0 Confined storage
+
+`telos-core` mounts one controlled `${STORAGE_PATH}` root at `/data/shared` and
+performs every physical file operation beneath it via `openat2` with
+`RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS` (`backend/storage.go`)
+— a user-supplied key can never escape its area through traversal, symlinks, or
+magic links, and startup fails on a kernel without `openat2`/`renameat2`
+support rather than falling back to lexical confinement. Uploads stage into
+exclusive mode-0600 files, are hashed/validated/scanned, then promoted with
+`renameat2(RENAME_NOREPLACE)` (or an exclusive copy+sync+no-replace rename
+across filesystems). Jellyfin and Grimmory keep only their own narrow config/
+data mounts.
+
 ### 4.1 Schema migrations
 
 Migrations live in `backend/db/migrations/NNNN_name.sql` with contiguous

@@ -100,9 +100,9 @@ services:
       - TELOS_ENV=${TELOS_ENV:-production}
       - TELOS_BOOTSTRAP_TOKEN=${TELOS_BOOTSTRAP_TOKEN}
     volumes:
-      - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/shared/media:z
-      - ${STORAGE_PATH:-/mnt/storage/shared}/staging:/data/shared/staging:z
-      - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/data/shared/bookdrop:z
+      # One controlled shared root; the gateway confines all physical I/O
+      # beneath it via openat2 (RESOLVE_BENEATH|NO_SYMLINKS|NO_MAGICLINKS).
+      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health"]
       interval: 30s
