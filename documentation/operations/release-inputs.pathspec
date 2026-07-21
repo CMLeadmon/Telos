@@ -116,3 +116,8 @@ scripts/verify-recovery-escrow.sh
 scripts/tests/backup_test.sh
 deploy/systemd/telos-backup.service
 deploy/systemd/telos-backup.timer
+scripts/verify-restore.sh
+scripts/restore-state.sh
+scripts/restore-drill.sh
+scripts/tests/restore_test.sh
+documentation/operations/restore-drill.md
