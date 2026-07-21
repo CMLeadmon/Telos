@@ -61,3 +61,8 @@ backend/security_test.go
 backend/proxy.go
 backend/proxy_test.go
 backend/media.go
+backend/auth.go
+backend/auth_test.go
+backend/testutil/integration.go
+docker-compose.test.yml
+scripts/test-backend.sh

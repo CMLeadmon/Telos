@@ -1,0 +1,25 @@
+# Disposable PostgreSQL + Redis for backend integration tests. Not part of the
+# production stack. scripts/test-backend.sh orchestrates ephemeral containers
+# directly; this file documents the same services for manual local runs:
+#
+#   podman compose -f docker-compose.test.yml up -d
+#   TELOS_TEST_DATABASE_URL=postgres://telos:testpw@127.0.0.1:55432/telos_test?sslmode=disable \
+#   TELOS_TEST_REDIS_URL=redis://127.0.0.1:56379/0 \
+#     podman run --rm --network host -v ./backend:/app:z -w /app \
+#     docker.io/library/golang:1.26.5 go test ./...
+#   podman compose -f docker-compose.test.yml down -v
+services:
+  postgres-test:
+    image: postgres:16.14-alpine
+    environment:
+      - POSTGRES_USER=telos
+      - POSTGRES_PASSWORD=testpw
+      - POSTGRES_DB=telos_test
+    ports:
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:56379:6379"

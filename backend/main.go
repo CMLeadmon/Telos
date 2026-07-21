@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/livekit/protocol/auth"
 	"github.com/redis/go-redis/v9"
@@ -224,6 +225,10 @@ func main() {
 	}
 	redisClient = redis.NewClient(opt)
 	defer redisClient.Close()
+
+	// Atomic login limiter (Redis Lua reservations with a degraded in-process
+	// fallback) replaces the old check-then-act throttle.
+	loginLimiter = newLoginLimiter(redisClient)
 
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
@@ -524,59 +529,28 @@ func verifyPassword(password, encodedHash string) (bool, error) {
 	return subtle.ConstantTimeCompare(hash, decodedHash) == 1, nil
 }
 
-func generateToken() (string, string) {
-	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	token := hex.EncodeToString(b)
+// generateToken returns (token, sha256hex(token)); a random-source failure is
+// surfaced so no zero/partial-entropy token is ever issued.
+func generateToken() (string, string, error) {
+	token, err := secureToken(32)
+	if err != nil {
+		return "", "", err
+	}
 	h := sha256.Sum256([]byte(token))
-	return token, hex.EncodeToString(h[:])
+	return token, hex.EncodeToString(h[:]), nil
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Rate Limiting
-// ═══════════════════════════════════════════════════════════════════════════
-
-func isThrottled(ctx context.Context, username, clientIP string) (bool, error) {
-	if redisClient == nil {
-		return false, nil
+// dummyPasswordHash is a valid argon2id hash used to equalize the timing of a
+// login for an unknown or malformed username. Computed once at startup.
+var dummyPasswordHash = func() string {
+	h, err := hashPassword("telos-dummy-verification-password")
+	if err != nil {
+		// hashPassword only fails on a random-source error; fall back to a
+		// well-formed constant so verifyPassword still does argon2 work.
+		return "$argon2id$v=19$m=19456,t=2,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	}
-	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
-	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
-
-	uVal, err := redisClient.Get(ctx, userKey).Int()
-	if err == nil && uVal >= 5 {
-		return true, nil
-	}
-	iVal, err := redisClient.Get(ctx, ipKey).Int()
-	if err == nil && iVal >= 10 {
-		return true, nil
-	}
-	return false, nil
-}
-
-func recordFailedLogin(ctx context.Context, username, clientIP string) {
-	if redisClient == nil {
-		return
-	}
-	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
-	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
-
-	pipe := redisClient.Pipeline()
-	pipe.Incr(ctx, userKey)
-	pipe.Expire(ctx, userKey, 15*time.Minute)
-	pipe.Incr(ctx, ipKey)
-	pipe.Expire(ctx, ipKey, 15*time.Minute)
-	_, _ = pipe.Exec(ctx)
-}
-
-func resetFailedLogins(ctx context.Context, username, clientIP string) {
-	if redisClient == nil {
-		return
-	}
-	userKey := fmt.Sprintf("telos:ratelimit:login:user:%s", strings.ToLower(username))
-	ipKey := fmt.Sprintf("telos:ratelimit:login:ip:%s", clientIP)
-	redisClient.Del(ctx, userKey, ipKey)
-}
+	return h
+}()
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Middlewares & Origin Policy
@@ -819,70 +793,68 @@ func handleBootstrap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate username length & character limits
-	body.Username = strings.ToLower(strings.TrimSpace(body.Username))
-	if len(body.Username) < 3 || len(body.Username) > 32 {
-		http.Error(w, "Bad Request: Username must be 3-32 characters", http.StatusBadRequest)
+	username, err := canonicalUsername(body.Username)
+	if err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_username", "Username must be 3-32 chars of a-z 0-9 . _ - and start alphanumeric.")
 		return
 	}
 	if len(body.Password) < 15 || len(body.Password) > 128 {
-		http.Error(w, "Bad Request: Password must be 15-128 characters", http.StatusBadRequest)
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_password", "Password must be 15-128 characters.")
 		return
 	}
 
 	ctx := r.Context()
-	var count int
-	err := dbPool.QueryRow(ctx, "SELECT COUNT(*) FROM user_roles WHERE role_id = 'Owner'").Scan(&count)
-	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
-
-	if count > 0 {
-		http.Error(w, "Forbidden: Owner already bootstrapped", http.StatusForbidden)
-		return
-	}
-
-	// Create user
 	hash, err := hashPassword(body.Password)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
 	tx, err := dbPool.Begin(ctx)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize concurrent bootstraps: only the first past the advisory lock
+	// observes zero Owners, so 20 simultaneous requests create exactly one.
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", bootstrapAdvisoryLock); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
+
+	var existing int
+	if err := tx.QueryRow(ctx, "SELECT COUNT(*) FROM user_roles WHERE role_id = 'Owner'").Scan(&existing); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
+	if existing > 0 {
+		writeAPIError(w, r, http.StatusForbidden, "already_bootstrapped", "An Owner already exists.")
 		return
 	}
 
 	var userID string
-	err = tx.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id
-	`, body.Username, hash).Scan(&userID)
-	if err != nil {
-		tx.Rollback(ctx)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	`, username, hash).Scan(&userID); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
-
-	_, err = tx.Exec(ctx, `
-		INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Owner')
-	`, userID)
-	if err != nil {
-		tx.Rollback(ctx)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	if _, err := tx.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Owner')`, userID); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
-
+	if err := securityEvents.Record(ctx, tx, SecurityEventIntent{Kind: "owner_bootstrapped", ActorID: userID, SubjectID: userID}); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
-	// Consume token in memory/logs (it will fail future boots as Owner exists in DB)
-	log.Printf("Owner %q bootstrapped successfully. Bootstrap token consumed.", body.Username)
-
+	log.Printf("Owner bootstrapped successfully request_id=%s. Bootstrap token consumed.", requestIDFrom(ctx))
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
 }
@@ -901,48 +873,78 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "bad_client_address", "The client address could not be determined.")
 		return
 	}
-	clientIP := clientAddr.String()
 	ctx := r.Context()
 
-	throttled, err := isThrottled(ctx, body.Username, clientIP)
+	// A malformed username can never match; still reserve so probing a bad
+	// username costs the same and is rate-limited identically.
+	canonUser, unameErr := canonicalUsername(body.Username)
+	limiterUser := canonUser
+	if unameErr != nil {
+		limiterUser = strings.ToLower(strings.TrimSpace(body.Username))
+	}
+
+	// Reserve an atomic login slot before any password work.
+	attempt, err := loginLimiter.Reserve(ctx, limiterUser, clientAddr)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		switch {
+		case errors.Is(err, errLoginThrottled):
+			writeAPIError(w, r, http.StatusTooManyRequests, "too_many_attempts", "Too many login attempts; try again later.")
+		case errors.Is(err, errAuthThrottleUnavailable):
+			writeAPIError(w, r, http.StatusServiceUnavailable, "auth_throttle_unavailable", "Login is temporarily unavailable; try again shortly.")
+		default:
+			writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		}
 		return
 	}
-	if throttled {
-		http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
-		return
+
+	failLogin := func() {
+		_ = attempt.Complete(ctx, LoginFailure)
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_credentials", "Invalid username or password.")
 	}
 
 	var userID string
 	var hash string
 	var active bool
 
-	err = dbPool.QueryRow(ctx, `
-		SELECT id, password_hash, active FROM users WHERE username = $1
-	`, strings.ToLower(body.Username)).Scan(&userID, &hash, &active)
-	if err != nil {
-		recordFailedLogin(ctx, body.Username, clientIP)
-		http.Error(w, "Unauthorized: Invalid credentials", http.StatusUnauthorized)
+	if unameErr != nil {
+		// Unknown-shaped username: run one dummy verification to equalize
+		// timing, then fail.
+		_, _ = verifyPassword(body.Password, dummyPasswordHash)
+		failLogin()
 		return
 	}
 
-	if !active {
-		http.Error(w, "Unauthorized: Account disabled", http.StatusUnauthorized)
+	err = dbPool.QueryRow(ctx, `
+		SELECT id, password_hash, active FROM users WHERE username = $1
+	`, canonUser).Scan(&userID, &hash, &active)
+	if err != nil {
+		_, _ = verifyPassword(body.Password, dummyPasswordHash)
+		failLogin()
 		return
 	}
 
 	ok, err := verifyPassword(body.Password, hash)
 	if err != nil || !ok {
-		recordFailedLogin(ctx, body.Username, clientIP)
-		http.Error(w, "Unauthorized: Invalid credentials", http.StatusUnauthorized)
+		failLogin()
 		return
 	}
 
-	// Successful login
-	resetFailedLogins(ctx, body.Username, clientIP)
+	if !active {
+		// Correct password but disabled: do not count as a failed attempt.
+		_ = attempt.Complete(ctx, LoginSuccess)
+		writeAPIError(w, r, http.StatusUnauthorized, "account_disabled", "This account is disabled.")
+		return
+	}
 
-	token, tokenHash := generateToken()
+	// Successful login: release the reservation and reset prior failures.
+	_ = attempt.Complete(ctx, LoginSuccess)
+	clientIP := clientAddr.String()
+
+	token, tokenHash, err := generateToken()
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
 	expiry := time.Now().Add(12 * time.Hour)
 
 	ua := r.Header.Get("User-Agent")
@@ -1048,10 +1050,14 @@ func handleCreateInvite(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
 		return
 	}
-	rawToken, tokenHash := generateToken()
+	rawToken, tokenHash, err := generateToken()
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
 	expiry := time.Now().Add(7 * 24 * time.Hour) // Invite valid for 7 days
 
-	_, err := dbPool.Exec(r.Context(), `
+	_, err = dbPool.Exec(r.Context(), `
 		INSERT INTO invites (token_hash, creator_id, expires_at, role_id) VALUES ($1, $2, $3, $4)
 	`, tokenHash, user.ID, expiry, roleID)
 	if err != nil {
@@ -1077,13 +1083,13 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body.Username = strings.ToLower(strings.TrimSpace(body.Username))
-	if len(body.Username) < 3 || len(body.Username) > 32 {
-		http.Error(w, "Bad Request: Username must be 3-32 characters", http.StatusBadRequest)
+	username, err := canonicalUsername(body.Username)
+	if err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_username", "Username must be 3-32 chars of a-z 0-9 . _ - and start alphanumeric.")
 		return
 	}
 	if len(body.Password) < 15 || len(body.Password) > 128 {
-		http.Error(w, "Bad Request: Password must be 15-128 characters", http.StatusBadRequest)
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_password", "Password must be 15-128 characters.")
 		return
 	}
 
@@ -1091,76 +1097,64 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	h := sha256.Sum256([]byte(body.Token))
 	tokenHash := hex.EncodeToString(h[:])
 
-	var expiresAt time.Time
-	var usedAt *time.Time
-	var inviteRole *string
-
-	err := dbPool.QueryRow(ctx, `
-		SELECT expires_at, used_at, role_id FROM invites WHERE token_hash = $1
-	`, tokenHash).Scan(&expiresAt, &usedAt, &inviteRole)
-	if err != nil {
-		http.Error(w, "Invalid or expired invite token", http.StatusBadRequest)
-		return
-	}
-
-	if usedAt != nil {
-		http.Error(w, "Invite token already used", http.StatusGone)
-		return
-	}
-
-	if time.Now().After(expiresAt) {
-		http.Error(w, "Invite token expired", http.StatusGone)
-		return
-	}
-
 	hash, err := hashPassword(body.Password)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
 	tx, err := dbPool.Begin(ctx)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Atomically consume the invite: only one concurrent accept wins the
+	// conditional UPDATE, so 20 simultaneous accepts create exactly one user.
+	var inviteRole *string
+	err = tx.QueryRow(ctx, `
+		UPDATE invites SET used_at = NOW()
+		WHERE token_hash = $1 AND used_at IS NULL AND expires_at > NOW()
+		RETURNING role_id
+	`, tokenHash).Scan(&inviteRole)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_invite", "The invite token is invalid, already used, or expired.")
+		return
+	}
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
 	var userID string
 	err = tx.QueryRow(ctx, `
 		INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id
-	`, body.Username, hash).Scan(&userID)
+	`, username, hash).Scan(&userID)
 	if err != nil {
-		tx.Rollback(ctx)
-		http.Error(w, "Internal Server Error or Username Taken", http.StatusInternalServerError)
+		if isUniqueViolation(err) {
+			writeAPIError(w, r, http.StatusConflict, "username_taken", "That username is already taken.")
+			return
+		}
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
-	// Assign the invite's role, defaulting to Member
 	assignRole := "Member"
 	if inviteRole != nil && *inviteRole != "" {
 		assignRole = *inviteRole
 	}
-	_, err = tx.Exec(ctx, `
-		INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)
-	`, userID, assignRole)
-	if err != nil {
-		tx.Rollback(ctx)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	if _, err = tx.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2)`, userID, assignRole); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
-
-	// Mark invite as used
-	_, err = tx.Exec(ctx, `
-		UPDATE invites SET used_at = NOW(), used_by = $1 WHERE token_hash = $2
-	`, userID, tokenHash)
-	if err != nil {
-		tx.Rollback(ctx)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	if _, err = tx.Exec(ctx, `UPDATE invites SET used_by = $1 WHERE token_hash = $2`, userID, tokenHash); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 

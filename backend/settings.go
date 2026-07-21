@@ -222,13 +222,6 @@ func handlePutPreferences(w http.ResponseWriter, r *http.Request) {
 // Settings — admin: members
 // ═══════════════════════════════════════════════════════════════════════════
 
-func ownerCount(ctx context.Context) (int, error) {
-	var n int
-	err := dbPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM user_roles WHERE role_id = 'Owner'`).Scan(&n)
-	return n, err
-}
-
 func userIsOwner(ctx context.Context, userID string) (bool, error) {
 	var is bool
 	err := dbPool.QueryRow(ctx, `
@@ -239,12 +232,29 @@ func userIsOwner(ctx context.Context, userID string) (bool, error) {
 
 // anonymizeUser is the "hard delete": the users row survives (messages keep
 // their FK and render as "Deleted User"), but the account becomes unusable.
+var errLastOwner = errors.New("last owner")
+
 func anonymizeUser(ctx context.Context, userID string) error {
 	tx, err := dbPool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+	// If the target is an Owner, lock Owner membership and refuse to delete
+	// the last one — atomically, so concurrent deletes cannot both proceed.
+	var targetIsOwner bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = 'Owner')`, userID).Scan(&targetIsOwner); err != nil {
+		return err
+	}
+	if targetIsOwner {
+		n, lockErr := lockOwnerMembership(ctx, tx)
+		if lockErr != nil {
+			return lockErr
+		}
+		if n <= 1 {
+			return errLastOwner
+		}
+	}
 	suffix := userID
 	if len(suffix) > 8 {
 		suffix = suffix[:8]
@@ -334,19 +344,21 @@ func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(status)+": "+err.Error(), status)
 		return
 	}
-	// Last-Owner protection: demoting the only Owner bricks the instance.
-	if targetOwner && !containsRole(body.Roles, "Owner") {
-		if n, err := ownerCount(ctx); err != nil || n <= 1 {
-			http.Error(w, "Forbidden: cannot remove the last Owner", http.StatusForbidden)
-			return
-		}
-	}
 	tx, err := dbPool.Begin(ctx)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	defer tx.Rollback(ctx)
+	// Last-Owner protection: lock Owner membership inside the tx so a
+	// concurrent demotion cannot interleave between the count and the delete.
+	if targetOwner && !containsRole(body.Roles, "Owner") {
+		n, lockErr := lockOwnerMembership(ctx, tx)
+		if lockErr != nil || n <= 1 {
+			writeAPIError(w, r, http.StatusConflict, "last_owner", "The last Owner cannot be demoted.")
+			return
+		}
+	}
 	if _, err := tx.Exec(ctx, `DELETE FROM user_roles WHERE user_id = $1`, targetID); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -382,25 +394,40 @@ func handleAdminSetUserActive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	if !body.Active {
 		if isOwner, _ := userIsOwner(ctx, targetID); isOwner {
 			if !containsRole(actor.Roles, "Owner") {
 				http.Error(w, "Forbidden: only an Owner can disable an Owner", http.StatusForbidden)
 				return
 			}
-			if n, _ := ownerCount(ctx); n <= 1 {
-				http.Error(w, "Forbidden: cannot disable the last Owner", http.StatusForbidden)
+			n, lockErr := lockOwnerMembership(ctx, tx)
+			if lockErr != nil || n <= 1 {
+				writeAPIError(w, r, http.StatusConflict, "last_owner", "The last Owner cannot be disabled.")
 				return
 			}
 		}
 	}
-	tag, err := dbPool.Exec(ctx, `UPDATE users SET active = $1 WHERE id = $2`, body.Active, targetID)
+	tag, err := tx.Exec(ctx, `UPDATE users SET active = $1 WHERE id = $2`, body.Active, targetID)
 	if err != nil || tag.RowsAffected() == 0 {
 		http.Error(w, "User not found", http.StatusNotFound)
 		return
 	}
 	if !body.Active {
-		dbPool.Exec(ctx, `UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, targetID)
+		if _, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, targetID); err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
@@ -414,17 +441,15 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	if isOwner, _ := userIsOwner(ctx, targetID); isOwner {
-		if !containsRole(actor.Roles, "Owner") {
-			http.Error(w, "Forbidden: only an Owner can delete an Owner", http.StatusForbidden)
-			return
-		}
-		if n, _ := ownerCount(ctx); n <= 1 {
-			http.Error(w, "Forbidden: cannot delete the last Owner", http.StatusForbidden)
-			return
-		}
+	if isOwner, _ := userIsOwner(ctx, targetID); isOwner && !containsRole(actor.Roles, "Owner") {
+		http.Error(w, "Forbidden: only an Owner can delete an Owner", http.StatusForbidden)
+		return
 	}
 	if err := anonymizeUser(ctx, targetID); err != nil {
+		if errors.Is(err, errLastOwner) {
+			writeAPIError(w, r, http.StatusConflict, "last_owner", "The last Owner cannot be deleted.")
+			return
+		}
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}

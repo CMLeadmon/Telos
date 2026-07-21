@@ -189,3 +189,36 @@ and `Content-Disposition`. Upstream `Set-Cookie`, CORS, `WWW-Authenticate`,
 `Location`, `Server`, and every hop-by-hop header are dropped, and an upstream
 redirect is refused rather than followed. `Range`/conditional headers pass
 only for routes whose policy enables them.
+
+### 5.2 Transactional authentication lifecycle
+
+Account-lifecycle mutations are serialized so concurrency cannot corrupt them
+(`backend/auth.go`):
+
+- **Bootstrap** takes a PostgreSQL advisory lock (`pg_advisory_xact_lock`) and
+  re-checks the Owner count inside the transaction, so any number of
+  simultaneous bootstrap requests create exactly one Owner.
+- **Invite acceptance** consumes the invite with a single conditional
+  `UPDATE ... WHERE used_at IS NULL AND expires_at > NOW() RETURNING role_id`;
+  only one concurrent accept wins, and the loser gets `400 invalid_invite`.
+- **Last-Owner protection** locks Owner membership rows (`FOR UPDATE`) inside
+  the mutation's transaction before counting, so demote/disable/delete return
+  `409 last_owner` rather than ever leaving zero Owners.
+- **Usernames** are canonicalized to `[a-z0-9][a-z0-9_.-]{2,31}` after ASCII
+  lowercasing; whitespace (including Unicode), control characters, and
+  non-ASCII runes are rejected, not trimmed. Display names remain Unicode.
+- **Login throttling** is two-layer. Traefik rate-limits `/api/v1/auth/login`
+  at 10/min per IP (burst 5). The gateway then reserves an atomic slot via a
+  Redis Lua script that checks all three scopes — 5 per username+IP pair, 10
+  per username, 20 per IP per 15 minutes — before any password verification,
+  converting the reservation to a failure or releasing it on success
+  (idempotently). If Redis is unavailable, a bounded in-process LRU (10k keys;
+  2/pair, 3/username, 5/IP) enforces a stricter policy and returns
+  `503 auth_throttle_unavailable` on exhaustion — never an unthrottled
+  attempt. Unknown or malformed usernames still run one dummy password
+  verification to equalize timing. Session tokens and any random material are
+  generated from a checked entropy source that fails the operation on a short
+  or errored read.
+
+Integration tests run against disposable PostgreSQL and Redis via
+`scripts/test-backend.sh` (they self-skip when the fixture is absent).

@@ -12,6 +12,20 @@ http:
       tls:
         certResolver: letsencrypt
 
+    # Login: edge rate limit (10/min per IP, burst 5) plus the auth-body class.
+    telos-login:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && Path(`/api/v1/auth/login`)'
+      entryPoints:
+        - websecure
+      priority: 260
+      middlewares:
+        - telos-inflight
+        - telos-login-rate
+        - telos-auth-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
     # Auth JSON: strict 16 KiB edge limit before the gateway.
     telos-auth:
       rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/api/v1/auth`)'
@@ -68,6 +82,16 @@ http:
     telos-inflight:
       inFlightReq:
         amount: 128
+    # Login throttle at the edge: 10 requests/minute per source IP, burst 5.
+    # The gateway's atomic Redis limiter is the authoritative second layer.
+    telos-login-rate:
+      rateLimit:
+        average: 10
+        period: 1m
+        burst: 5
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
     # 16 KiB auth JSON, held in memory (no disk spool).
     telos-auth-body:
       buffering:
