@@ -135,3 +135,5 @@ backend/clamav_test.go
 backend/quota.go
 backend/quota_test.go
 backend/quota_integration_test.go
+backend/upload.go
+backend/upload_integration_test.go
