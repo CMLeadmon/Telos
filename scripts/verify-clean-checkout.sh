@@ -335,7 +335,6 @@ GRIMMORY_DB_NAME=grimmory
 GRIMMORY_DB_USER=grimmory
 GRIMMORY_DB_PASSWORD=$(rand 16)
 MARIADB_ROOT_PASSWORD=$(rand 16)
-TELOS_ENV=production
 TELOS_BOOTSTRAP_TOKEN=$bootstrap_token
 EOF
 chmod 0600 "$src/.env"
@@ -359,6 +358,13 @@ services:
     image: localhost/${proj}-core
     container_name: ${proj}-core
     restart: "no"
+    # The smoke stack has no TLS edge and is reached over a loopback port, so
+    # it boots in development mode with the probe origin as the public origin;
+    # the exact-origin policy then accepts the smoke probes' Origin header.
+    environment:
+      - TELOS_ENV=development
+      - TELOS_PUBLIC_ORIGIN=http://127.0.0.1:${port}
+      - TELOS_DEV_ORIGINS=http://127.0.0.1:${port}
     ports:
       - "127.0.0.1:${port}:8080"
   postgres:
