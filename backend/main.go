@@ -1690,22 +1690,21 @@ type SearchUserResponse struct {
 }
 
 func handleUserSearch(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
-	limitStr := r.URL.Query().Get("limit")
-	limit := 8
-	if limitStr != "" {
-		if val, err := strconv.Atoi(limitStr); err == nil && val > 0 && val <= 50 {
-			limit = val
-		}
+	pattern, ok := normalizedSearchTerm(r.URL.Query().Get("q"))
+	if !ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode([]SearchUserResponse{})
+		return
 	}
 
-	queryPattern := "%" + q + "%"
+	// lower(col) LIKE matches the pg_trgm GIN index expressions; capped at 15.
 	rows, err := dbPool.Query(r.Context(), `
 		SELECT id::text, username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
 		FROM users
-		WHERE active = TRUE AND (username ILIKE $1 OR display_name ILIKE $1)
+		WHERE active = TRUE
+		  AND (lower(username) LIKE $1 OR lower(coalesce(display_name,'')) LIKE $1)
 		LIMIT $2
-	`, queryPattern, limit)
+	`, pattern, searchScopeLimit)
 	if err != nil {
 		http.Error(w, "query failed", 500)
 		return
@@ -3813,7 +3812,8 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	user := ctx.Value(userContextKey).(*UserContext)
 	q := r.URL.Query().Get("q")
-	if len(q) < 2 {
+	pattern, ok := normalizedSearchTerm(q)
+	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(SearchResults{
 			Channels: []ChannelResponse{},
@@ -3842,13 +3842,13 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			queryPattern := "%" + q + "%"
 			rows, err := dbPool.Query(ctx, `
 				SELECT id::text, username, COALESCE(display_name, ''), avatar_file_id IS NOT NULL
 				FROM users
-				WHERE active = TRUE AND (username ILIKE $1 OR display_name ILIKE $1)
-				LIMIT 10
-			`, queryPattern)
+				WHERE active = TRUE
+				  AND (lower(username) LIKE $1 OR lower(coalesce(display_name,'')) LIKE $1)
+				LIMIT 15
+			`, pattern)
 			if err != nil {
 				log.Printf("WARN: search users query failed: %v", err)
 				return
@@ -4003,13 +4003,13 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			queryPattern := "%" + q + "%"
 			rows, err := dbPool.Query(ctx, `
 				SELECT id::text, filename, size_bytes, mime_type, created_at
 				FROM files
-				WHERE filename ILIKE $1
+				WHERE lower(filename) LIKE $1
+				  AND scan_status = 'clean'
 				LIMIT 15
-			`, queryPattern)
+			`, pattern)
 			if err != nil {
 				log.Printf("WARN: search files failed: %v", err)
 				return

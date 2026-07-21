@@ -97,3 +97,7 @@ backend/pagination_integration_test.go
 frontend/src/lib/pagination.ts
 frontend/src/lib/pagination.test.ts
 documentation/operations/api-list-inventory.md
+backend/db/migrations/0009_search_indexes.sql
+backend/search.go
+backend/search_test.go
+backend/search_integration_test.go

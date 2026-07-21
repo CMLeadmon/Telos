@@ -214,9 +214,16 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("grimmory books returned %s", resp.Status)
 	}
+	// Bound the decoded catalog: at most 8 MiB of JSON and 5,000 records so a
+	// misbehaving or compromised upstream cannot exhaust memory.
+	const maxGrimmoryBytes = 8 << 20
+	const maxGrimmoryRecords = 5000
 	var raw []grimmoryBook
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGrimmoryBytes)).Decode(&raw); err != nil {
 		return nil, err
+	}
+	if len(raw) > maxGrimmoryRecords {
+		raw = raw[:maxGrimmoryRecords]
 	}
 	books := make([]LibraryBook, 0, len(raw))
 	for _, b := range raw {
