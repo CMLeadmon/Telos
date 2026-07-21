@@ -137,3 +137,7 @@ backend/quota_test.go
 backend/quota_integration_test.go
 backend/upload.go
 backend/upload_integration_test.go
+backend/media.go
+backend/media_test.go
+backend/library_authorization.go
+backend/library_authorization_test.go

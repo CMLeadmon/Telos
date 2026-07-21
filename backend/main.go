@@ -264,6 +264,30 @@ func main() {
 	// Atomic voice seat store enforcing the 25-participant beta ceiling.
 	voiceSeats = newVoiceSeatStore(redisClient)
 
+	// Jellyfin item authorizer: every media item must belong to a configured
+	// library. Disabled (allow-all) in development when JELLYFIN_LIBRARY_IDS is
+	// unset; required in production.
+	if libIDs := splitCSV(os.Getenv("JELLYFIN_LIBRARY_IDS")); len(libIDs) > 0 {
+		if ja, jerr := NewJellyfinAuthorizer(jellyfinAPIResolver{}, libIDs); jerr == nil {
+			jellyfinAuthorizer = ja
+		} else {
+			log.Fatalf("Critical Configuration Error: %v", jerr)
+		}
+	} else if securityConfig.Environment != "development" {
+		log.Fatal("Critical Configuration Error: JELLYFIN_LIBRARY_IDS is required in production")
+	}
+
+	// Grimmory book authorizer (library membership + view/manage permission).
+	if libIDs := splitCSV(os.Getenv("GRIMMORY_LIBRARY_IDS")); len(libIDs) > 0 {
+		if ga, gerr := NewGrimmoryAuthorizer(grimmoryAPIResolver{}, libIDs); gerr == nil {
+			grimmoryAuthorizer = ga
+		} else {
+			log.Fatalf("Critical Configuration Error: %v", gerr)
+		}
+	} else if securityConfig.Environment != "development" {
+		log.Fatal("Critical Configuration Error: GRIMMORY_LIBRARY_IDS is required in production")
+	}
+
 	// Bounded, coalescing session-touch worker (replaces per-request
 	// goroutines). Drained on shutdown.
 	touchCtx, touchCancel := context.WithCancel(context.Background())
@@ -3037,6 +3061,9 @@ func handleMediaItemCover(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !authorizeJellyfinItem(w, r, id) {
+		return
+	}
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Items/%s/Images/Primary", jellyfinBaseURL, id)
 	proxyRequest(w, r, targetURL, token, nil)
@@ -3048,6 +3075,9 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
+	if !authorizeJellyfinItem(w, r, id) {
+		return
+	}
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
 	proxyRequest(w, r, targetURL, token, nil)
@@ -3057,6 +3087,9 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !validJellyfinID(id) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
+		return
+	}
+	if !authorizeJellyfinItem(w, r, id) {
 		return
 	}
 
@@ -3114,6 +3147,9 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	subpath := r.PathValue("path")
 	if !validJellyfinID(id) || !validUpstreamSubpath(subpath) {
 		http.Error(w, "Missing item ID or subpath", http.StatusBadRequest)
+		return
+	}
+	if !authorizeJellyfinItem(w, r, id) {
 		return
 	}
 	token := getJellyfinAdminToken()

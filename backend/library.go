@@ -763,6 +763,9 @@ func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
 		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
 		return
 	}
+	if !authorizeBookHTTP(w, r, id, BookManage) {
+		return
+	}
 	ctx, cancel := upstreamRequestContext(r.Context())
 	defer cancel()
 	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodDelete,
@@ -839,6 +842,9 @@ func handleLibraryBookContent(w http.ResponseWriter, r *http.Request) {
 	id, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	if !authorizeBookHTTP(w, r, id, BookRead) {
 		return
 	}
 	proxyGrimmoryBinary(w, r, "/api/v1/books/"+id+"/content", "")
