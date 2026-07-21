@@ -252,3 +252,27 @@ The client reconnects with bounded exponential backoff plus jitter and
 reconciles durable state through the REST history/members/pins fetch; a 1008
 close is treated as a revocation (no reconnect; re-authenticate) rather than a
 transient drop.
+
+### 5.4 Voice grants and graceful shutdown
+
+Voice tokens (`backend/voice.go`) are minted only after `AuthorizeChannel`
+with the voice action and an atomic seat reservation. Each token is valid for
+90 seconds and grants room join, subscribe, and **microphone-only**
+publication — camera, screen share, arbitrary data, recording, ingress,
+room administration, and wildcard rooms are all denied. A single Redis ZSET
+(member = user ID) enforces one active seat per user and at most 25 seats
+total; `Reserve` fails closed with `503 voice_capacity_unavailable` on
+capacity or Redis error rather than issuing an unaccounted token. Signed
+LiveKit `participant_joined` / `participant_left` webhooks (verified against
+`LIVEKIT_API_SECRET`, exempt from the browser origin policy) commit and
+release seats, and a reconciliation pass prunes seats whose user is not in the
+authoritative active set. LiveKit itself caps the room at 25 participants.
+
+Shutdown is staged (`backend/server.go`): a SIGINT/SIGTERM flips an admission
+gate that rejects new work with `503 shutting_down`, then drains in-flight
+HTTP for 30s, closes WebSockets for 10s, drains the transactional outbox for
+15s (a no-op adapter until Phase 3), and closes upstream pools — exiting
+nonzero if any stage overran. Compose grants `telos-core` a
+`stop_grace_period` of 75s, comfortably above the 55s staged budget.
+`scripts/validate-compose.sh` asserts the ingress-only ports, the 75s grace,
+and the 25-participant LiveKit cap without printing any secret.

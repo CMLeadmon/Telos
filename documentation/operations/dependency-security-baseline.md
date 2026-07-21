@@ -33,6 +33,7 @@ plus their minimal transitive requirements only):
 | golang.org/x/net | v0.55.0 (raised from the v0.53.0 floor in P2-T2: the new `idna` origin-normalization path made GO-2026-5026, fixed in v0.55.0, reachable) |
 | golang.org/x/crypto | v0.50.0 |
 | github.com/jackc/puddle/v2, pgservicefile | pgx v5.9.2 requirements |
+| google.golang.org/protobuf | v1.36.5 (raised in P2-T6: the LiveKit webhook decoder made GO-2024-2611, fixed in v1.33.0, reachable) |
 
 npm: `epubjs` stays at the pinned 0.4.2; the abandoned `xmldom` is overridden
 to the maintained API-compatible fork `npm:@xmldom/xmldom@0.9.10` (epubjs

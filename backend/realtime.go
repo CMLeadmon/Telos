@@ -222,6 +222,21 @@ func (r *sessionRegistry) RevokeUser(userID string) {
 	}
 }
 
+// CloseAll closes every live socket (used during graceful shutdown).
+func (r *sessionRegistry) CloseAll(reason string) {
+	r.mu.Lock()
+	conns := make([]RevocableConnection, 0)
+	for _, set := range r.byUser {
+		for rc := range set {
+			conns = append(conns, rc.conn)
+		}
+	}
+	r.mu.Unlock()
+	for _, c := range conns {
+		c.CloseWithCode(websocket.CloseGoingAway, reason)
+	}
+}
+
 // LiveCount returns the number of live sockets a user currently holds. Used by
 // tests to wait for a handler to fully release before tearing down.
 func (r *sessionRegistry) LiveCount(userID string) int {

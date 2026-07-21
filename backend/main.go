@@ -30,7 +30,6 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/livekit/protocol/auth"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/argon2"
 )
@@ -229,6 +228,8 @@ func main() {
 	// Atomic login limiter (Redis Lua reservations with a degraded in-process
 	// fallback) replaces the old check-then-act throttle.
 	loginLimiter = newLoginLimiter(redisClient)
+	// Atomic voice seat store enforcing the 25-participant beta ceiling.
+	voiceSeats = newVoiceSeatStore(redisClient)
 
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
@@ -340,6 +341,9 @@ func main() {
 
 	// Voice Token (Requires join_voice)
 	mux.Handle("POST /api/v1/voice/channels/{id}/token", withAuth(http.HandlerFunc(handleVoiceToken), "join_voice"))
+	// Signed server-to-server webhook from LiveKit (verified by signature, not
+	// a user session); exempt from the browser origin policy.
+	mux.HandleFunc("POST /api/v1/voice/webhook", handleVoiceWebhook)
 
 	// File Library (Require view_files, upload_files, upload_books, manage_files)
 	mux.Handle("GET /api/v1/files", withAuth(http.HandlerFunc(handleListFiles), "view_files"))
@@ -359,11 +363,12 @@ func main() {
 	// requests. requireTrustedOrigin replaces the old csrf/cors middlewares.
 	handler := requestIDMiddleware(
 		securityHeaders(
-			admissionMiddleware(
-				devCORS(
-					requireTrustedOrigin(mux, securityConfig),
-					securityConfig),
-				securityConfig.MaxInFlightHTTP),
+			shuttingDownMiddleware(
+				admissionMiddleware(
+					devCORS(
+						requireTrustedOrigin(mux, securityConfig),
+						securityConfig),
+					securityConfig.MaxInFlightHTTP)),
 			securityConfig))
 	server := &http.Server{
 		Addr:              ":" + port,
@@ -373,10 +378,7 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	log.Printf("Server listening on port %s", port)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("Server failed: %v", err)
-	}
+	runServer(server)
 }
 
 func validateSecrets() {
@@ -3240,62 +3242,53 @@ type LiveKitClaims struct {
 	Video VideoGrant `json:"video"`
 }
 
+// GenerateLiveKitToken delegates to the hardened, microphone-only mint.
 func GenerateLiveKitToken(apiKey, apiSecret, roomName, identity string) (string, error) {
-	at := auth.NewAccessToken(apiKey, apiSecret)
-	at.SetIdentity(identity)
-	at.SetValidFor(5 * time.Minute) // 5 minutes room access bootstrap token
-
-	grant := &auth.VideoGrant{
-		Room:     roomName,
-		RoomJoin: true,
-	}
-	grant.SetCanPublish(true)
-	grant.SetCanSubscribe(true)
-	grant.SetCanPublishData(false)
-
-	at.AddGrant(grant)
-	return at.ToJWT()
+	return mintVoiceToken(apiKey, apiSecret, roomName, identity)
 }
 
 func handleVoiceToken(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
-	if channelID == "" {
-		http.Error(w, "Missing channel ID", http.StatusBadRequest)
-		return
-	}
-
 	user := r.Context().Value(userContextKey).(*UserContext)
 
-	// Validate channel type is voice
+	// The channel must exist, be viewable, and permit voice.
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelVoice)
+	if !ok {
+		return
+	}
 	var cType string
-	err := dbPool.QueryRow(r.Context(), "SELECT type FROM channels WHERE id = $1", channelID).Scan(&cType)
-	if err != nil {
-		http.Error(w, "Voice channel not found", http.StatusNotFound)
+	if err := dbPool.QueryRow(r.Context(), "SELECT type FROM channels WHERE id = $1", channelID).Scan(&cType); err != nil {
+		writeAPIError(w, r, http.StatusNotFound, "channel_not_found", "Channel not found.")
 		return
 	}
 	if cType != "voice" {
-		http.Error(w, "Channel is not a voice channel", http.StatusBadRequest)
+		writeAPIError(w, r, http.StatusBadRequest, "not_voice_channel", "This channel does not support voice.")
 		return
 	}
 
 	apiKey := os.Getenv("LIVEKIT_API_KEY")
 	apiSecret := os.Getenv("LIVEKIT_API_SECRET")
 	if apiKey == "" || apiSecret == "" {
-		http.Error(w, "LiveKit credentials are not configured", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "voice_unconfigured", "Voice is not configured.")
 		return
 	}
 
-	// Fetch token (room name matches channel ID UUID)
-	token, err := GenerateLiveKitToken(apiKey, apiSecret, channelID, user.ID)
+	// Reserve a seat atomically before signing; fail closed on capacity or a
+	// Redis error rather than issuing an unaccounted token.
+	if _, err := voiceSeats.Reserve(r.Context(), user.ID, channelID); err != nil {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "voice_capacity_unavailable", "Voice is at capacity; try again shortly.")
+		return
+	}
+
+	token, err := mintVoiceToken(apiKey, apiSecret, channelID, user.ID)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to generate voice token: %v", err), http.StatusInternalServerError)
+		// Release the reservation we just took if signing failed.
+		_ = voiceSeats.(*redisVoiceSeatStore).release(r.Context(), user.ID)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"token": token,
-	})
+	json.NewEncoder(w).Encode(map[string]string{"token": token})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

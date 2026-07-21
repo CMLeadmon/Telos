@@ -70,3 +70,10 @@ backend/chat.go
 backend/chat_test.go
 backend/realtime.go
 backend/realtime_test.go
+backend/voice.go
+backend/voice_test.go
+backend/server.go
+backend/server_test.go
+scripts/validate-compose.sh
+tests/fixtures/compose.env
+config/livekit.yaml

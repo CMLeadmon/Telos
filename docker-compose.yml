@@ -50,6 +50,9 @@ services:
       dockerfile: backend/Dockerfile
     container_name: telos-core
     restart: unless-stopped
+    # Exceeds the 55s staged shutdown budget (30s HTTP + 10s sockets + 15s
+    # outbox) plus cleanup margin.
+    stop_grace_period: 75s
     depends_on:
       postgres:
         condition: service_healthy
