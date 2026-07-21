@@ -215,9 +215,14 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Initialize Postgres Pool
+	// Initialize the Postgres pool with bounded connections and per-connection
+	// statement/lock/idle-in-transaction timeouts.
+	getenv = os.Getenv
+	dbCfg := defaultDatabaseConfig(databaseURL)
+	dbCfg.StatementTimeout = envDuration("TELOS_DB_STATEMENT_TIMEOUT_MS", dbCfg.StatementTimeout)
+	dbCfg.LockTimeout = envDuration("TELOS_DB_LOCK_TIMEOUT_MS", dbCfg.LockTimeout)
 	var err error
-	dbPool, err = pgxpool.New(ctx, databaseURL)
+	dbPool, err = NewDatabasePool(ctx, dbCfg)
 	if err != nil {
 		log.Fatalf("Critical: Failed to connect to database: %v", err)
 	}
@@ -251,6 +256,13 @@ func main() {
 	loginLimiter = newLoginLimiter(redisClient)
 	// Atomic voice seat store enforcing the 25-participant beta ceiling.
 	voiceSeats = newVoiceSeatStore(redisClient)
+
+	// Bounded, coalescing session-touch worker (replaces per-request
+	// goroutines). Drained on shutdown.
+	touchCtx, touchCancel := context.WithCancel(context.Background())
+	sessionTouches = newSessionTouchWorker(dbPool)
+	sessionTouches.Run(touchCtx)
+	defer func() { touchCancel(); sessionTouches.Wait() }()
 
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
@@ -522,94 +534,16 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	h := sha256.Sum256([]byte(token))
 	tokenHash := hex.EncodeToString(h[:])
 
-	var userID string
-	var username string
-	var active bool
-	var expiresAt time.Time
-	var displayName *string
-	var avatarFileID *string
-
-	err = dbPool.QueryRow(r.Context(), `
-		SELECT s.user_id, u.username, u.active, s.expires_at, u.display_name, u.avatar_file_id
-		FROM sessions s
-		JOIN users u ON s.user_id = u.id
-		WHERE s.token_hash = $1 AND s.revoked_at IS NULL
-	`, tokenHash).Scan(&userID, &username, &active, &expiresAt, &displayName, &avatarFileID)
+	// Single aggregate query for identity + roles + sorted permissions.
+	uc, err := LoadAuthenticatedUser(r.Context(), dbPool, tokenHash)
 	if err != nil {
 		return nil, err
 	}
 
-	if !active {
-		return nil, errors.New("account disabled")
+	// Coalesced, bounded last-seen stamp — never blocks or spawns a goroutine.
+	if sessionTouches != nil {
+		sessionTouches.Touch(tokenHash)
 	}
-
-	if time.Now().After(expiresAt) {
-		return nil, errors.New("session expired")
-	}
-
-	rows, err := dbPool.Query(r.Context(), `
-		SELECT role_id FROM user_roles WHERE user_id = $1
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var roles []string
-	for rows.Next() {
-		var rID string
-		if err := rows.Scan(&rID); err == nil {
-			roles = append(roles, rID)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	rows.Close()
-
-	permissionRows, err := dbPool.Query(r.Context(), `
-		SELECT DISTINCT rp.permission_id
-		FROM role_permissions rp
-		JOIN user_roles ur ON ur.role_id = rp.role_id
-		WHERE ur.user_id = $1
-		ORDER BY rp.permission_id
-	`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer permissionRows.Close()
-	var permissions []string
-	for permissionRows.Next() {
-		var permission string
-		if err := permissionRows.Scan(&permission); err != nil {
-			return nil, err
-		}
-		permissions = append(permissions, permission)
-	}
-	if err := permissionRows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Best-effort, throttled last-seen stamp; never blocks the request.
-	go func(hash string) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		dbPool.Exec(ctx, `
-			UPDATE sessions SET last_seen_at = NOW()
-			WHERE token_hash = $1 AND (last_seen_at IS NULL OR last_seen_at < NOW() - INTERVAL '60 seconds')
-		`, hash)
-	}(tokenHash)
-
-	uc := &UserContext{
-		ID:          userID,
-		Username:    username,
-		Roles:       roles,
-		Permissions: permissions,
-	}
-	if displayName != nil {
-		uc.DisplayName = *displayName
-	}
-	uc.HasAvatar = avatarFileID != nil
 	return uc, nil
 }
 

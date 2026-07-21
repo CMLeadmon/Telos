@@ -88,3 +88,6 @@ backend/db/migrations/0008_database_invariants.sql
 backend/database_invariants_integration_test.go
 deploy/postgres/init/002-create-telos-observer.sh
 scripts/provision-db-observer.sh
+backend/database.go
+backend/database_test.go
+backend/auth_store_test.go
