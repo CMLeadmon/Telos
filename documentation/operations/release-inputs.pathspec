@@ -130,3 +130,5 @@ backend/content_validation.go
 backend/content_validation_test.go
 backend/epub.go
 backend/epub_test.go
+backend/clamav.go
+backend/clamav_test.go

@@ -3194,60 +3194,11 @@ func handleVoiceToken(w http.ResponseWriter, r *http.Request) {
 // Shared File Library & ClamAV Integration
 // ═══════════════════════════════════════════════════════════════════════════
 
+// scanFileWithClamAV streams r to the deadline-bounded scanner (backend/clamav.go).
 func scanFileWithClamAV(r io.Reader) (bool, string, error) {
-	conn, err := net.DialTimeout("tcp", "telos-clamav:3310", 5*time.Second)
-	if err != nil {
-		return false, "unreachable", fmt.Errorf("failed to connect to ClamAV: %v", err)
-	}
-	defer conn.Close()
-
-	if _, err := conn.Write([]byte("zINSTREAM\000")); err != nil {
-		return false, "error", fmt.Errorf("failed to initiate scan: %v", err)
-	}
-
-	buf := make([]byte, 8192)
-	for {
-		n, err := r.Read(buf)
-		if n > 0 {
-			lengthBytes := []byte{
-				byte(n >> 24),
-				byte(n >> 16),
-				byte(n >> 8),
-				byte(n),
-			}
-			if _, err := conn.Write(lengthBytes); err != nil {
-				return false, "error", fmt.Errorf("failed to write chunk size: %v", err)
-			}
-			if _, err := conn.Write(buf[:n]); err != nil {
-				return false, "error", fmt.Errorf("failed to write chunk: %v", err)
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return false, "error", fmt.Errorf("failed to read upload stream: %v", err)
-		}
-	}
-
-	if _, err := conn.Write([]byte{0, 0, 0, 0}); err != nil {
-		return false, "error", fmt.Errorf("failed to terminate scan stream: %v", err)
-	}
-
-	resp, err := io.ReadAll(conn)
-	if err != nil {
-		return false, "error", fmt.Errorf("failed to read Scan response: %v", err)
-	}
-
-	respStr := string(resp)
-	log.Printf("ClamAV response: %s", respStr)
-	if strings.Contains(respStr, "OK") {
-		return true, "clean", nil
-	}
-	if strings.Contains(respStr, "FOUND") {
-		return false, "infected", nil
-	}
-	return false, "failed", fmt.Errorf("unexpected scan response: %s", respStr)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	return clamScanner.Scan(ctx, r)
 }
 
 // mediaRoot is the shared file library's on-disk root. It is a package var so
