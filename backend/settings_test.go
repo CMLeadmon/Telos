@@ -186,8 +186,8 @@ func TestAnonymizeUserPreservesRow(t *testing.T) {
 	}
 	defer dbPool.Exec(ctx, "DELETE FROM users WHERE id = $1", userID)
 
-	if err := anonymizeUser(ctx, userID); err != nil {
-		t.Fatalf("anonymize: %v", err)
+	if _, err := DeleteAccount(ctx, userID); err != nil {
+		t.Fatalf("delete: %v", err)
 	}
 	var username string
 	var active bool

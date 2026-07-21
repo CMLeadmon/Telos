@@ -231,53 +231,9 @@ func userIsOwner(ctx context.Context, userID string) (bool, error) {
 	return is, err
 }
 
-// anonymizeUser is the "hard delete": the users row survives (messages keep
-// their FK and render as "Deleted User"), but the account becomes unusable.
+// errLastOwner guards deletion/demotion of the final Owner. Complete account
+// deletion is implemented by DeleteAccount in account_lifecycle.go.
 var errLastOwner = errors.New("last owner")
-
-func anonymizeUser(ctx context.Context, userID string) error {
-	tx, err := dbPool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx)
-	// If the target is an Owner, lock Owner membership and refuse to delete
-	// the last one — atomically, so concurrent deletes cannot both proceed.
-	var targetIsOwner bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = 'Owner')`, userID).Scan(&targetIsOwner); err != nil {
-		return err
-	}
-	if targetIsOwner {
-		n, lockErr := lockOwnerMembership(ctx, tx)
-		if lockErr != nil {
-			return lockErr
-		}
-		if n <= 1 {
-			return errLastOwner
-		}
-	}
-	suffix := userID
-	if len(suffix) > 8 {
-		suffix = suffix[:8]
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE users SET username = 'deleted-' || $2, display_name = 'Deleted User',
-			password_hash = '!', active = FALSE, avatar_file_id = NULL
-		WHERE id = $1
-	`, userID, suffix); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM user_roles WHERE user_id = $1`, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL`, userID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM user_preferences WHERE user_id = $1`, userID); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
 
 type AdminUserResponse struct {
 	ID          string   `json:"id"`
@@ -529,7 +485,8 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Forbidden: only an Owner can delete an Owner", http.StatusForbidden)
 		return
 	}
-	if err := anonymizeUser(ctx, targetID); err != nil {
+	receipt, err := DeleteAccount(ctx, targetID)
+	if err != nil {
 		if errors.Is(err, errLastOwner) {
 			writeAPIError(w, r, http.StatusConflict, "last_owner", "The last Owner cannot be deleted.")
 			return
@@ -537,9 +494,8 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	revokeUserSockets(targetID)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "requestId": receipt.RequestID})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

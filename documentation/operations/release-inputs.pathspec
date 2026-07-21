@@ -104,3 +104,7 @@ backend/search_integration_test.go
 backend/db/migrations/0010_transactional_outbox.sql
 backend/outbox.go
 backend/outbox_integration_test.go
+backend/db/migrations/0011_account_lifecycle.sql
+backend/account_lifecycle.go
+backend/account_lifecycle_integration_test.go
+documentation/operations/data-retention.md
