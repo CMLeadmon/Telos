@@ -126,3 +126,7 @@ backend/files.go
 backend/files_integration_test.go
 backend/storage.go
 backend/storage_test.go
+backend/content_validation.go
+backend/content_validation_test.go
+backend/epub.go
+backend/epub_test.go
