@@ -63,4 +63,21 @@ else
 	report runtime-no-create OK
 fi
 
+# 4. The observer role is provisioned separately and never mounted into an app
+#    service; no rendered application service may carry an observer URL/file.
+if grep -qiE 'DATABASE_OBSERVER_URL' "$rendered"; then
+	report observer-isolation "FAIL (an application service carries the observer URL)"
+	fail=1
+else
+	report observer-isolation OK
+fi
+for f in deploy/postgres/init/002-create-telos-observer.sh scripts/provision-db-observer.sh; do
+	if [ -x "$f" ]; then
+		report "exists:$(basename "$f")" OK
+	else
+		report "exists:$(basename "$f")" "FAIL (missing or non-executable)"
+		fail=1
+	fi
+done
+
 exit "$fail"

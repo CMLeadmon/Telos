@@ -253,6 +253,27 @@ reconciles durable state through the REST history/members/pins fetch; a 1008
 close is treated as a revocation (no reconnect; re-authenticate) rather than a
 transient drop.
 
+### 5.5 Database invariants and query statistics
+
+Migration `0008` backs security/lifecycle assumptions with named CHECK
+constraints (canonical username, channel type, non-negative override masks,
+message length, session/invite date ordering, file size/scan-status, book
+progress range, JSON-object preferences, notification kind) and adds a leading
+index for every foreign-key join/delete path (an automated audit asserts none
+is missing). It also seeds the `manage_messages` permission — which gates
+pin/moderation routes — and grants it to Owner/Administrator/Moderator, and
+corrects the `manage_members` description to the shipped disable/enable
+behavior (no administrative password replacement).
+
+Query statistics use `pg_stat_statements` with `compute_query_id=on`,
+`log_statement=none`, and parameter redaction. A NOLOGIN `telos_observer` role
+(created by `deploy/postgres/init/002-create-telos-observer.sh` or
+`scripts/provision-db-observer.sh`) receives only `pg_read_all_stats` and
+read access to the statistics views; that access and the reset function are
+revoked from `PUBLIC` and `telos_runtime`. The observer login
+(`DATABASE_OBSERVER_URL_FILE`) is an operator credential and is never mounted
+into `telos-core`, the frontend, Jellyfin, or Grimmory.
+
 ### 5.4 Voice grants and graceful shutdown
 
 Voice tokens (`backend/voice.go`) are minted only after `AuthorizeChannel`

@@ -17,7 +17,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 env_file=""
-checks="core-ingress,stop-grace,voice-cap"
+checks="core-ingress,stop-grace,voice-cap,database-observer"
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--env-file)
@@ -106,6 +106,23 @@ PY
 		report stop-grace "FAIL (${secs}s < 75s)"
 		fail=1
 	fi
+fi
+
+if want database-observer; then
+	obs_ok=1
+	# pg_stat_statements must be preloaded with parameter redaction.
+	if ! grep -q 'shared_preload_libraries=pg_stat_statements' "$rendered"; then
+		report database-observer "FAIL (pg_stat_statements not preloaded)"
+		obs_ok=0
+		fail=1
+	fi
+	# No application service may carry the observer credential.
+	if grep -qiE 'DATABASE_OBSERVER_URL' "$rendered"; then
+		report database-observer "FAIL (an application service has the observer URL)"
+		obs_ok=0
+		fail=1
+	fi
+	[ "$obs_ok" -eq 1 ] && report database-observer "OK"
 fi
 
 if want voice-cap; then
