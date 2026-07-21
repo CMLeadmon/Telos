@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -189,6 +191,13 @@ func ensureMigrationTable(ctx context.Context, q DBTX) error {
 		);
 		ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS name TEXT;
 		ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT;
+		-- Migration history is read-only for the runtime role: strip any write
+		-- privilege that default privileges may have granted at table creation.
+		DO $$ BEGIN
+			IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'telos_runtime') THEN
+				REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON schema_migrations FROM telos_runtime;
+			END IF;
+		END $$;
 	`)
 	return err
 }
@@ -314,6 +323,32 @@ func RunMigrations(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS) (Migrati
 		ExpectedVersion: len(local),
 		ChecksumSet:     checksumSet(local),
 	}, nil
+}
+
+// runMigrateCommand is the one-shot `telos-core migrate` entrypoint. It
+// connects with the schema-owner URL (DATABASE_OWNER_URL, falling back to
+// DATABASE_URL for single-role development), applies pending migrations under
+// the advisory lock, and exits.
+func runMigrateCommand() {
+	url := os.Getenv("DATABASE_OWNER_URL")
+	if url == "" {
+		url = os.Getenv("DATABASE_URL")
+	}
+	if url == "" {
+		log.Fatal("migrate: DATABASE_OWNER_URL (or DATABASE_URL) is not set")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, url)
+	if err != nil {
+		log.Fatalf("migrate: connect failed: %v", err)
+	}
+	defer pool.Close()
+	state, err := RunMigrations(ctx, pool, migrationsFS)
+	if err != nil {
+		log.Fatalf("migrate: %v", err)
+	}
+	log.Printf("migrate: applied through version %d (checksum set %s)", state.CurrentVersion, state.ChecksumSet[:12])
 }
 
 // VerifyMigrations confirms the applied history exactly matches the local set

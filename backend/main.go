@@ -182,6 +182,17 @@ const userContextKey contextKey = "user"
 // ═══════════════════════════════════════════════════════════════════════════
 
 func main() {
+	// Subcommands: "migrate" applies migrations with the schema-owner URL and
+	// exits; the default ("serve") verifies migrations and runs the gateway.
+	mode := "serve"
+	if len(os.Args) > 1 {
+		mode = os.Args[1]
+	}
+	if mode == "migrate" {
+		runMigrateCommand()
+		return
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -212,12 +223,18 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	// Apply schema migrations under a bounded startup context distinct from
-	// request contexts.
+	// Serve path only verifies migration state; the one-shot telos-migrate
+	// service (schema owner) is responsible for applying. In a single-role
+	// development setup (TELOS_MIGRATE_ON_SERVE=1), apply here for convenience.
 	migrateCtx, migrateCancel := context.WithTimeout(context.Background(), 60*time.Second)
-	if _, err := RunMigrations(migrateCtx, dbPool, migrationsFS); err != nil {
+	if os.Getenv("TELOS_MIGRATE_ON_SERVE") == "1" {
+		if _, err := RunMigrations(migrateCtx, dbPool, migrationsFS); err != nil {
+			migrateCancel()
+			log.Fatalf("Critical: Database migration failed: %v", err)
+		}
+	} else if _, err := VerifyMigrations(migrateCtx, dbPool, migrationsFS); err != nil {
 		migrateCancel()
-		log.Fatalf("Critical: Database migration failed: %v", err)
+		log.Fatalf("Critical: Database migration state is not current: %v", err)
 	}
 	migrateCancel()
 

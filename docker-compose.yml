@@ -44,6 +44,23 @@ services:
       - ./config/dynamic:/etc/traefik/dynamic:ro,z
       - traefik_acme:/letsencrypt
 
+  # One-shot schema-owner migrator. Applies migrations, then exits; telos-core
+  # only starts (as the least-privilege runtime role) after it succeeds.
+  telos-migrate:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: telos-migrate
+    command: ["./telos-core", "migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - telos-db
+    environment:
+      - DATABASE_OWNER_URL=postgres://telos_owner:${TELOS_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
   telos-core:
     build:
       context: .
@@ -58,12 +75,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      telos-migrate:
+        condition: service_completed_successfully
     networks:
       - telos-ingress
       - telos-backend
       - telos-db
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      # Least-privilege runtime role — no DDL, ownership, grants, or migration
+      # writes. The one-shot telos-migrate service owns schema changes.
+      - DATABASE_URL=postgres://telos_runtime:${TELOS_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
@@ -99,8 +120,13 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - POSTGRES_DB=${POSTGRES_DB}
+      # Consumed by the clean-volume init script to create the owner/runtime
+      # role split. Ignored on an existing volume (use provision-db-roles.sh).
+      - TELOS_OWNER_PASSWORD=${TELOS_OWNER_PASSWORD}
+      - TELOS_RUNTIME_PASSWORD=${TELOS_RUNTIME_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro,z
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s

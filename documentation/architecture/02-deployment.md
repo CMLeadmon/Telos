@@ -13,7 +13,17 @@ do not duplicate it into documentation because the copy will drift.
 | --- | --- | --- |
 | `telos-ingress` | edge bridge | `traefik`, `telos-core`, `livekit` |
 | `telos-backend` | internal | `telos-core`, `redis`, `clamav`, `jellyfin`, `grimmory`, `livekit` |
-| `telos-db` | internal | `telos-core`, `postgres`, `grimmory`, `grimmory-db` |
+| `telos-db` | internal | `telos-core`, `telos-migrate`, `postgres`, `grimmory`, `grimmory-db` |
+
+**Database role split.** `telos_owner` owns every Telos schema object and is
+used only by the one-shot `telos-migrate` service (`DATABASE_OWNER_URL`).
+`telos-core` connects as the least-privilege `telos_runtime` role
+(`DATABASE_URL`) — schema usage, table DML, sequence usage, and read-only
+migration-state access, but no DDL, ownership, grants, or migration writes.
+On a fresh volume, `deploy/postgres/init/001-create-telos-roles.sh` creates
+both roles; on a pre-split existing volume, run `scripts/provision-db-roles.sh`
+once (it takes a verified pre-change backup and transfers ownership).
+`telos-core` starts only after `telos-migrate` completes successfully.
 
 Only Traefik publishes HTTP ports 80 and 443. `telos-core:8080`,
 `livekit:7880`, Jellyfin, Grimmory, PostgreSQL, Redis, MariaDB, and ClamAV must

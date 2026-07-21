@@ -80,3 +80,7 @@ config/livekit.yaml
 backend/migrations.go
 backend/migrations_test.go
 backend/migrations_integration_test.go
+deploy/postgres/init/001-create-telos-roles.sh
+scripts/provision-db-roles.sh
+scripts/tests/database_roles_test.sh
+backend/database_roles_integration_test.go
