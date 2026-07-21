@@ -31,11 +31,11 @@ export function AdminUsersSection() {
 
   const load = useCallback(() => {
     Promise.all([
-      api<AdminUser[]>("/api/v1/admin/users"),
+      api<{ items: AdminUser[]; nextCursor?: string }>("/api/v1/admin/users"),
       api<RoleInfo[]>("/api/v1/admin/roles"),
     ])
       .then(([u, r]) => {
-        setUsers(u);
+        setUsers(u.items);
         setRoles(r);
       })
       .catch((err) => {

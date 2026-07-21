@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -289,21 +290,50 @@ type AdminUserResponse struct {
 }
 
 func handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
+	req, _, err := resolvePageRequest("admin.users", r.URL.Query().Get("sort"),
+		r.URL.Query().Get("cursor"), atoiDefault(r.URL.Query().Get("limit"), 50))
+	if err != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The list request is invalid.")
+		return
+	}
+
+	// Descending (created_at, id) seek. The seek predicate is empty on the
+	// first page.
+	var seekTime time.Time
+	var seekID string
+	haveSeek := false
+	if req.After != "" {
+		c, derr := cursorCodec.Decode("admin.users", req.After)
+		if derr != nil || len(c.Values) != 2 {
+			writeAPIError(w, r, http.StatusBadRequest, "invalid_cursor", "The pagination cursor is invalid.")
+			return
+		}
+		if t, terr := time.Parse(time.RFC3339Nano, c.Values[0].Value); terr == nil {
+			seekTime = t
+			seekID = c.Values[1].Value
+			haveSeek = true
+		}
+	}
+
 	rows, err := dbPool.Query(r.Context(), `
 		SELECT u.id, u.username, COALESCE(u.display_name, ''), u.active, u.created_at,
-			COALESCE(array_agg(ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}'),
+			COALESCE(array_agg(ur.role_id ORDER BY ur.role_id) FILTER (WHERE ur.role_id IS NOT NULL), '{}'),
 			u.avatar_file_id IS NOT NULL
 		FROM users u
 		LEFT JOIN user_roles ur ON ur.user_id = u.id
+		WHERE ($1::boolean IS FALSE) OR (u.created_at, u.id) < ($2::timestamptz, $3::uuid)
 		GROUP BY u.id
-		ORDER BY u.created_at ASC
-	`)
+		ORDER BY u.created_at DESC, u.id DESC
+		LIMIT $4
+	`, haveSeek, seekTime, seekIDArg(seekID), req.Limit+1)
 	if err != nil {
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
 	defer rows.Close()
+
 	users := []AdminUserResponse{}
+	createdTimes := []time.Time{}
 	for rows.Next() {
 		var u AdminUserResponse
 		var created time.Time
@@ -312,9 +342,45 @@ func handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		u.CreatedAt = created.Format(time.RFC3339)
 		users = append(users, u)
+		createdTimes = append(createdTimes, created)
+	}
+
+	page := Page[AdminUserResponse]{Items: users}
+	if len(users) > req.Limit {
+		page.Items = users[:req.Limit]
+		// Seek tuple from the last kept row, at full timestamp precision.
+		lastCreated := createdTimes[req.Limit-1]
+		lastID := page.Items[req.Limit-1].ID
+		next, encErr := cursorCodec.Encode("admin.users", PageCursor{
+			Sort:     req.Sort,
+			Values:   []CursorValue{{Kind: "time", Value: lastCreated.Format(time.RFC3339Nano)}, {Kind: "uuid", Value: lastID}},
+			ID:       lastID,
+			IssuedAt: time.Now(),
+		})
+		if encErr == nil {
+			page.NextCursor = next
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(users)
+	json.NewEncoder(w).Encode(page)
+}
+
+// seekIDArg returns nil for an empty seek id so the NULL comparison is valid.
+func seekIDArg(id string) any {
+	if id == "" {
+		return "00000000-0000-0000-0000-000000000000"
+	}
+	return id
+}
+
+func atoiDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n
+	}
+	return def
 }
 
 func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {

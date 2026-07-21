@@ -91,3 +91,9 @@ scripts/provision-db-observer.sh
 backend/database.go
 backend/database_test.go
 backend/auth_store_test.go
+backend/pagination.go
+backend/pagination_test.go
+backend/pagination_integration_test.go
+frontend/src/lib/pagination.ts
+frontend/src/lib/pagination.test.ts
+documentation/operations/api-list-inventory.md

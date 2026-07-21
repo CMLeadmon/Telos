@@ -212,6 +212,13 @@ func main() {
 		log.Fatalf("Critical Configuration Error: %v", cfgErr)
 	}
 
+	// Cursor-signing keyring for stable pagination.
+	ring, ringErr := loadCursorKeyring(os.Getenv("TELOS_CURSOR_KEYS_FILE"), securityConfig.Environment)
+	if ringErr != nil {
+		log.Fatalf("Critical Configuration Error: %v", ringErr)
+	}
+	cursorCodec = &hmacCursorCodec{ring: ring}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 

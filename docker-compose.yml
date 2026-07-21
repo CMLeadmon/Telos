@@ -95,6 +95,8 @@ services:
       - TELOS_DOMAIN=${TELOS_DOMAIN}
       - TELOS_PUBLIC_ORIGIN=${TELOS_PUBLIC_ORIGIN:-https://${TELOS_DOMAIN}}
       - TELOS_TRUSTED_PROXY_CIDRS=${TELOS_TRUSTED_PROXY_CIDRS:-10.201.0.0/24}
+      # Mount the mode-0600 cursor keyring at this path in production.
+      - TELOS_CURSOR_KEYS_FILE=${TELOS_CURSOR_KEYS_FILE:-}
       - TELOS_ENV=${TELOS_ENV:-production}
       - TELOS_BOOTSTRAP_TOKEN=${TELOS_BOOTSTRAP_TOKEN}
     volumes:
