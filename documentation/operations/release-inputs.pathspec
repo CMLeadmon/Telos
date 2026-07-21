@@ -121,3 +121,6 @@ scripts/restore-state.sh
 scripts/restore-drill.sh
 scripts/tests/restore_test.sh
 documentation/operations/restore-drill.md
+backend/db/migrations/0012_file_catalog_audit.sql
+backend/files.go
+backend/files_integration_test.go

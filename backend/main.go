@@ -4021,7 +4021,8 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 				SELECT id::text, filename, size_bytes, mime_type, created_at
 				FROM files
 				WHERE lower(filename) LIKE $1
-				  AND scan_status = 'clean'
+				  AND purpose = 'shared' AND state = 'available'
+				  AND scan_status = 'clean' AND visibility = 'community'
 				LIMIT 15
 			`, pattern)
 			if err != nil {

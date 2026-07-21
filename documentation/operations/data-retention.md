@@ -38,5 +38,19 @@ Account deletion enqueues an `account_deleted` security event in the same
 transaction (transactional outbox), which Phase 5 materializes for
 administrators.
 
+## File catalog
+
+Every file row (migration 0012) carries a `purpose` (`shared`/`avatar`/
+`book_ingest`), a `visibility` (`private`/`community`), and a lifecycle `state`
+(`staged` → `validating` → `scanning` → `promoting` → `available`, plus
+`quarantined`, `missing`, `deleting`, `deleted`, `consumed`, and the book
+handoff states). General listing, search, and download expose only
+`purpose='shared'`, `state='available'`, `scan_status='clean'` rows that are
+`community` or owned by the viewer (`FileStore.FindAvailable`/`ListVisible`).
+Infected, avatar, book-ingestion, nonterminal, and other users' private rows
+never leak. Logical folders are database-only nodes with normalized sibling
+uniqueness; physical storage stays content-addressed. Every file/folder action
+writes an immutable `file_audit` row.
+
 Later phases extend this matrix (annotations, My List, Watch Party membership)
 by extending the same deletion fixture before passing.
