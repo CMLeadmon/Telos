@@ -271,6 +271,16 @@ func main() {
 	sessionTouches.Run(touchCtx)
 	defer func() { touchCancel(); sessionTouches.Wait() }()
 
+	// Transactional outbox: durable real-time delivery for chat and security
+	// mutations. The dispatcher replaces the Phase 2 no-op OutboxDrainer, and
+	// the sink replaces the no-op SecurityEventSink.
+	securityEvents = OutboxSecurityEventSink{}
+	outboxDispatcher = newOutboxDispatcher(dbPool, redisClient)
+	outboxDrainer = outboxDispatcher
+	outboxCtx, outboxCancel := context.WithCancel(context.Background())
+	outboxDispatcher.Run(outboxCtx)
+	defer outboxCancel()
+
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging dir: %v", err)
@@ -1089,6 +1099,10 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, err = tx.Exec(ctx, `UPDATE invites SET used_by = $1 WHERE token_hash = $2`, userID, tokenHash); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err := securityEvents.Record(ctx, tx, SecurityEventIntent{Kind: "invite_accepted", ActorID: userID, SubjectID: userID}); err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}

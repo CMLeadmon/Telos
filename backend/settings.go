@@ -438,6 +438,10 @@ func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := securityEvents.Record(ctx, tx, SecurityEventIntent{Kind: "roles_changed", ActorID: actor.ID, SubjectID: targetID}); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	if err := tx.Commit(ctx); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -493,6 +497,14 @@ func handleAdminSetUserActive(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 			return
 		}
+	}
+	kind := "account_enabled"
+	if !body.Active {
+		kind = "account_disabled"
+	}
+	if err := securityEvents.Record(ctx, tx, SecurityEventIntent{Kind: kind, ActorID: actor.ID, SubjectID: targetID}); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
 	}
 	if err := tx.Commit(ctx); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)

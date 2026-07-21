@@ -101,3 +101,6 @@ backend/db/migrations/0009_search_indexes.sql
 backend/search.go
 backend/search_test.go
 backend/search_integration_test.go
+backend/db/migrations/0010_transactional_outbox.sql
+backend/outbox.go
+backend/outbox_integration_test.go

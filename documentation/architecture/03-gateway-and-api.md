@@ -253,6 +253,21 @@ reconciles durable state through the REST history/members/pins fetch; a 1008
 close is treated as a revocation (no reconnect; re-authenticate) rather than a
 transient drop.
 
+### 5.6 Transactional outbox
+
+Durable mutations that also need real-time delivery write an `outbox_events`
+row (migration 0010) in the same transaction as the mutation (`EnqueueOutbox`).
+A bounded dispatcher (`backend/outbox.go`) claims batches of 100 with
+`FOR UPDATE SKIP LOCKED`, publishes each through Redis, marks it published, and
+retries failures with capped exponential backoff (max 1 min); published rows
+are pruned after 7 days. Unique idempotency keys make replay safe, and a
+rolled-back mutation publishes nothing. The dispatcher replaces the Phase 2
+no-op `OutboxDrainer` (drained during graceful shutdown) and
+`OutboxSecurityEventSink` replaces the no-op `SecurityEventSink`, so every
+current security mutation — owner bootstrap, invite acceptance, account
+enable/disable, and role change — records exactly one durable event within its
+transaction. Phase 5 materializes these events as notifications.
+
 ### 5.5 Database invariants and query statistics
 
 Migration `0008` backs security/lifecycle assumptions with named CHECK
