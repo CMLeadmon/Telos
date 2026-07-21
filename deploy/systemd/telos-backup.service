@@ -1,0 +1,18 @@
+[Unit]
+Description=Telos encrypted off-node backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Four-hour watchdog; unconditional plaintext-stage cleanup happens in the
+# script's exit trap regardless of outcome.
+TimeoutStartSec=4h
+User=telos
+EnvironmentFile=/etc/telos/backup.env
+ExecStart=/opt/telos/scripts/backup.sh
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

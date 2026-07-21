@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly Telos backup check (performs a snapshot only when the last
+ verified success is at least 12 hours old; a failure leaves the operation due
+ so the next firing retries automatically).
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target
