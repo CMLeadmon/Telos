@@ -136,6 +136,18 @@ exclusive mode-0600 files, are hashed/validated/scanned, then promoted with
 across filesystems). Jellyfin and Grimmory keep only their own narrow config/
 data mounts.
 
+### 4.0.1 Storage quotas
+
+Uploads are admitted through a `QuotaGuard` (`backend/quota.go`) that, under a
+PostgreSQL advisory lock, charges **physical** bytes — every user-owned
+non-terminal lifecycle asset plus that user's live reservations — against a
+per-user limit (`TELOS_USER_QUOTA_BYTES`, default 1 GiB), and checks `statfs`
+free space minus all live reservations and unowned orphan/quarantine bytes
+against a node reserve (`TELOS_NODE_RESERVE_BYTES`, default 5 GiB) before
+staging or promotion. A zero or unparseable production value is invalid.
+Reservations expire (15 min) and are released idempotently, so concurrent
+uploads cannot overbook user or node capacity.
+
 ### 4.1 Schema migrations
 
 Migrations live in `backend/db/migrations/NNNN_name.sql` with contiguous
