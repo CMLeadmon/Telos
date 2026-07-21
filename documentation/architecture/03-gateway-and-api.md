@@ -222,3 +222,33 @@ Account-lifecycle mutations are serialized so concurrency cannot corrupt them
 
 Integration tests run against disposable PostgreSQL and Redis via
 `scripts/test-backend.sh` (they self-skip when the fixture is absent).
+
+### 5.3 Live channel authorization and bounded WebSockets
+
+Channel access is authorized on every operation, not just at connect
+(`backend/chat.go`, `backend/realtime.go`):
+
+- **`AuthorizeChannel`** requires the channel ID to parse as a UUID, to exist,
+  and to pass `view_channel` before any action-specific permission. A
+  malformed, nonexistent, or view-denied channel is reported identically as
+  `404` so channel existence never leaks. The WebSocket upgrade calls it
+  before allocating any subscription or presence state — there is no
+  default-channel bypass — and the HTTP send/history/pins/members/reaction
+  handlers call it too.
+- **Live revocation.** Every socket registers in an in-memory
+  `SessionRegistry` keyed by session hash and user ID. Logout, password
+  change, session revoke, account disable/delete, and role/override change
+  close the affected sockets immediately (WebSocket close 1008). A
+  30-second revalidation loop is the fallback: it re-checks session validity,
+  account status, and channel view, and closes the socket if any no longer
+  holds.
+- **Bounds.** At most 3 sockets per user and 100 subscribers per channel;
+  inbound frames are capped at 16 KiB; each socket has a single writer
+  draining a 128-deep queue with a 10-second write deadline, and a full queue
+  (slow consumer) closes the socket deterministically. Session tokens are
+  never read from the WebSocket URL — the cookie carries them.
+
+The client reconnects with bounded exponential backoff plus jitter and
+reconciles durable state through the REST history/members/pins fetch; a 1008
+close is treated as a revocation (no reconnect; re-authenticate) rather than a
+transient drop.

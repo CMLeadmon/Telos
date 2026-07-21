@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,9 +52,15 @@ func Setup(t *testing.T) *Fixture {
 	rdb := redis.NewClient(ropt)
 
 	f := &Fixture{DB: pool, Redis: rdb}
-	if err := f.applyMigrations(ctx); err != nil {
+	// Schema + default seeds are applied once per test binary; every Setup
+	// then Resets data so tests start clean without re-running (and colliding
+	// with) the seed INSERTs.
+	migrateOnce.Do(func() {
+		migrateErr = f.applyMigrations(ctx)
+	})
+	if migrateErr != nil {
 		f.close()
-		t.Fatalf("apply migrations: %v", err)
+		t.Fatalf("apply migrations: %v", migrateErr)
 	}
 	if err := f.Reset(ctx); err != nil {
 		f.close()
@@ -62,6 +69,11 @@ func Setup(t *testing.T) *Fixture {
 	t.Cleanup(f.close)
 	return f
 }
+
+var (
+	migrateOnce sync.Once
+	migrateErr  error
+)
 
 func migrationsDir() string {
 	_, self, _, _ := runtime.Caller(0)

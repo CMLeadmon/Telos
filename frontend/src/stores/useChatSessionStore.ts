@@ -85,6 +85,26 @@ interface ChatSessionState {
 }
 
 let socket: WebSocket | null = null;
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+
+// Bounded exponential backoff with jitter for WebSocket reconnection.
+const RECONNECT_BASE_MS = 500;
+const RECONNECT_MAX_MS = 15_000;
+
+function nextReconnectDelay(): number {
+  const exp = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts);
+  reconnectAttempts += 1;
+  return exp / 2 + Math.random() * (exp / 2); // full-range jitter over [exp/2, exp]
+}
+
+function clearReconnect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+}
 
 export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
   channels: [],
@@ -102,6 +122,7 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
 
   connect: (channelId) => {
     get().disconnect();
+    clearReconnect();
     set({ activeChannelId: channelId, messages: [], connection: "connecting" });
 
     api<{ online: PresenceUser[]; count: number }>(`/api/v1/channels/${channelId}/members`)
@@ -126,7 +147,10 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
     socket = ws;
 
     ws.onopen = () => {
-      if (socket === ws) set({ connection: "open" });
+      if (socket === ws) {
+        reconnectAttempts = 0;
+        set({ connection: "open" });
+      }
     };
     ws.onmessage = (event) => {
       if (socket !== ws) return;
@@ -201,16 +225,38 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
         }
       }
     };
-    ws.onclose = () => {
-      if (socket === ws) set({ connection: "closed" });
+    ws.onclose = (event) => {
+      if (socket !== ws) return;
+      socket = null;
+      set({ connection: "closed" });
+      // A policy-violation close (1008) means the server revoked access
+      // (session invalidated, account disabled, permission removed). Do not
+      // reconnect; surface it to the auth layer to re-authenticate.
+      if (event.code === 1008) {
+        void useAuthStore.getState().fetchMe();
+        return;
+      }
+      // Otherwise reconnect with bounded exponential backoff + jitter, then
+      // reconcile durable state via the REST history/members/pins fetch that
+      // connect() performs.
+      const active = get().activeChannelId;
+      if (active === channelId) {
+        reconnectTimer = setTimeout(() => {
+          if (get().activeChannelId === channelId) {
+            get().connect(channelId);
+          }
+        }, nextReconnectDelay());
+      }
     };
   },
 
   disconnect: () => {
+    clearReconnect();
     if (socket) {
       const ws = socket;
       socket = null;
-      ws.close();
+      ws.onclose = null;
+      ws.close(1000, "client disconnect");
     }
     set({ connection: "idle" });
   },

@@ -376,6 +376,9 @@ func handleAdminSetUserRoles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	// A role/override change may reduce permissions; close the user's sockets
+	// so they reconnect and re-authorize with the new grants.
+	revokeUserSockets(targetID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -429,6 +432,9 @@ func handleAdminSetUserActive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	if !body.Active {
+		revokeUserSockets(targetID)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -453,6 +459,7 @@ func handleAdminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	revokeUserSockets(targetID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -917,6 +924,9 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		UPDATE sessions SET revoked_at = NOW()
 		WHERE user_id = $1 AND revoked_at IS NULL AND token_hash <> $2
 	`, user.ID, currentTokenHash(r))
+	// Close the user's live sockets; the current tab reconnects with its
+	// still-valid session.
+	revokeUserSockets(user.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -975,6 +985,7 @@ func handleRevokeSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Session not found", http.StatusNotFound)
 		return
 	}
+	revokeSessionHash(id)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -989,6 +1000,9 @@ func handleRevokeOtherSessions(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	// Close other sockets; the current session's socket is preserved by the
+	// revalidation check (its DB row is untouched).
+	revokeUserSockets(user.ID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]int64{"revoked": tag.RowsAffected()})
 }

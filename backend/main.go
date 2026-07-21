@@ -666,6 +666,56 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	return uc, nil
 }
 
+// loadUserContext loads a user's identity, roles, and sorted effective
+// permissions by user ID (used by socket revalidation, which has no request).
+func loadUserContext(ctx context.Context, userID string) (*UserContext, error) {
+	uc := &UserContext{ID: userID}
+	var displayName *string
+	var avatarFileID *string
+	if err := dbPool.QueryRow(ctx, `
+		SELECT username, display_name, avatar_file_id FROM users WHERE id = $1
+	`, userID).Scan(&uc.Username, &displayName, &avatarFileID); err != nil {
+		return nil, err
+	}
+	if displayName != nil {
+		uc.DisplayName = *displayName
+	}
+	uc.HasAvatar = avatarFileID != nil
+
+	rows, err := dbPool.Query(ctx, `SELECT role_id FROM user_roles WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var rID string
+		if err := rows.Scan(&rID); err == nil {
+			uc.Roles = append(uc.Roles, rID)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	permRows, err := dbPool.Query(ctx, `
+		SELECT DISTINCT rp.permission_id
+		FROM role_permissions rp JOIN user_roles ur ON ur.role_id = rp.role_id
+		WHERE ur.user_id = $1 ORDER BY rp.permission_id
+	`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer permRows.Close()
+	for permRows.Next() {
+		var p string
+		if err := permRows.Scan(&p); err != nil {
+			return nil, err
+		}
+		uc.Permissions = append(uc.Permissions, p)
+	}
+	return uc, permRows.Err()
+}
+
 func hasPermission(ctx context.Context, user *UserContext, perm string, channelID *string) (bool, error) {
 	for _, r := range user.Roles {
 		if r == "Owner" {
@@ -993,6 +1043,8 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	// Immediately close any live socket for this session.
+	revokeSessionHash(tokenHash)
 
 	// Delete cookie
 	http.SetCookie(w, &http.Cookie{
@@ -1260,52 +1312,59 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 // Handler — Chat / WebSocket
 // ═══════════════════════════════════════════════════════════════════════════
 
-type wsClient struct {
-	conn *websocket.Conn
-	mu   sync.Mutex
-}
-
-func (c *wsClient) writeJSON(v interface{}) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn.WriteJSON(v)
-}
-
-func (c *wsClient) writeMessage(messageType int, data []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn.WriteMessage(messageType, data)
-}
-
-func (c *wsClient) writeControl(messageType int, data []byte, deadline time.Time) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.conn.WriteControl(messageType, data, deadline)
-}
+// wsClient (bounded single-writer socket, RevocableConnection) lives in
+// realtime.go.
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	channelIDStr := r.URL.Query().Get("channel")
-	if channelIDStr == "" {
-		channelIDStr = "00000000-0000-0000-0000-000000000001" // Default general
-	}
-
 	user := r.Context().Value(userContextKey).(*UserContext)
 	userID := user.ID
 
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Printf("WebSocket upgrade failed: %v", err)
+	// A channel is mandatory and must be a real channel the user may view.
+	// No default-channel bypass: an absent/invalid/hidden channel is refused
+	// before any socket, subscription, or presence state is allocated.
+	channelIDStr := r.URL.Query().Get("channel")
+	if err := AuthorizeChannel(r.Context(), user, channelIDStr, ChannelView); err != nil {
+		if errors.Is(err, errChannelForbidden) {
+			writeAPIError(w, r, http.StatusForbidden, "forbidden", "You cannot access this channel.")
+		} else {
+			writeAPIError(w, r, http.StatusNotFound, "channel_not_found", "Channel not found.")
+		}
 		return
 	}
-	defer conn.Close()
-	client := &wsClient{conn: conn}
 
-	// Set connection limits and require timely pong replies so half-open
-	// connections release their Redis subscription and goroutines.
-	conn.SetReadLimit(8192) // 8 KiB message frame limit
+	// Per-channel subscriber cap.
+	if n, err := redisClient.HLen(r.Context(), "telos:presence:chan:"+channelIDStr).Result(); err == nil && n >= maxSubscribersPerChan {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "channel_full", "This channel is at capacity.")
+		return
+	}
+
+	// Session hash keys the socket for targeted revocation.
+	rawToken, tokErr := sessionTokenFromRequest(r)
+	if tokErr != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required.")
+		return
+	}
+	sessionHash := sha256Hex(rawToken)
+
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Printf("WebSocket upgrade failed request_id=%s: %v", requestIDFrom(r.Context()), err)
+		return
+	}
+	client := newWSClient(conn)
+	defer client.close()
+
+	release, ok := sessionRegistryInstance.Register(sessionHash, userID, client)
+	if !ok {
+		// Per-user socket cap reached.
+		client.CloseWithCode(websocket.ClosePolicyViolation, "too many connections")
+		return
+	}
+	defer release()
+
+	conn.SetReadLimit(wsInboundLimitBytes)
 	const pongWait = 60 * time.Second
 	if err := conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
-		log.Printf("Failed to set WebSocket read deadline: %v", err)
 		return
 	}
 	conn.SetPongHandler(func(string) error {
@@ -1315,28 +1374,21 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// Fetch & Send past 50 messages of the channel
-	msgs, err := getMessagesForChannel(ctx, channelIDStr)
-	if err != nil {
-		log.Printf("Failed to fetch message history: %v", err)
-	} else {
-		historyNotification := WSNotification{
-			Type:     "history",
-			Messages: msgs,
-		}
-		if err := client.writeJSON(historyNotification); err != nil {
-			log.Printf("Failed to send history: %v", err)
-			return
-		}
+	// Join the fan-out goroutines before returning so no background goroutine
+	// touches shared state after the handler exits.
+	var wg sync.WaitGroup
+
+	if msgs, err := getMessagesForChannel(ctx, channelIDStr); err == nil {
+		client.sendJSON(WSNotification{Type: "history", Messages: msgs})
 	}
 
-	// Subscribe to Redis pub/sub channel for this chat room
 	redisChanName := fmt.Sprintf("telos:chat:%s", channelIDStr)
 	pubsub := redisClient.Subscribe(ctx, redisChanName)
 	defer pubsub.Close()
 
-	// Read messages from Redis and send them to the client WebSocket
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		ch := pubsub.Channel()
 		for {
 			select {
@@ -1344,9 +1396,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return
 				}
-				if err := client.writeMessage(websocket.TextMessage, []byte(redisMsg.Payload)); err != nil {
+				if !client.sendText([]byte(redisMsg.Payload)) {
 					cancel()
-					_ = conn.Close()
 					return
 				}
 			case <-ctx.Done():
@@ -1355,40 +1406,89 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	log.Printf("Client '%s' connected to channel '%s' via WebSocket", userID, channelIDStr)
-
-	// Set initial heartbeat and presence join
 	presenceJoin(ctx, channelIDStr, userID)
 	defer presenceLeave(ctx, channelIDStr, userID)
 
+	// Heartbeat plus a 30-second authorization-revalidation fallback: if the
+	// session expired, the account was disabled, or channel view was revoked,
+	// close the socket even if the direct revocation signal was missed.
 	ticker := time.NewTicker(25 * time.Second)
 	defer ticker.Stop()
-	done := make(chan struct{})
-	defer close(done)
+	revalidate := time.NewTicker(30 * time.Second)
+	defer revalidate.Stop()
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		for {
 			select {
 			case <-ticker.C:
-				if err := client.writeControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+				if err := client.ping(); err != nil {
 					cancel()
-					_ = conn.Close()
+					client.close()
 					return
 				}
 				redisClient.Set(ctx, "telos:presence:hb:"+userID, "1", 60*time.Second)
-			case <-done:
+			case <-revalidate.C:
+				fresh, err := revalidateSocket(ctx, sessionHash, channelIDStr)
+				if err != nil || !fresh {
+					client.CloseWithCode(websocket.ClosePolicyViolation, "session no longer valid")
+					cancel()
+					return
+				}
+			case <-ctx.Done():
+				return
+			case <-client.done:
+				cancel()
 				return
 			}
 		}
 	}()
 
-	// Keep the connection open; we no longer accept inbound messages.
+	log.Printf("client connected request_id=%s channel=%s", requestIDFrom(r.Context()), channelIDStr)
+
+	// Inbound frames are not accepted; reading only detects disconnects and
+	// enforces the read deadline/limit.
 	for {
 		if _, _, err := conn.ReadMessage(); err != nil {
-			log.Printf("WebSocket connection closed for '%s': %v", userID, err)
 			break
 		}
 	}
+	// Stop the fan-out goroutines and wait for them before the deferred
+	// presenceLeave/release run.
+	cancel()
+	wg.Wait()
+}
+
+// revalidateSocket re-checks that the session is still live (not
+// revoked/expired), the account is active, and the user still holds view on
+// the channel. It is the 30-second fallback behind direct revocation.
+func revalidateSocket(ctx context.Context, sessionHash, channelID string) (bool, error) {
+	var userID string
+	var active bool
+	var expiresAt time.Time
+	err := dbPool.QueryRow(ctx, `
+		SELECT s.user_id, u.active, s.expires_at
+		FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token_hash = $1 AND s.revoked_at IS NULL
+	`, sessionHash).Scan(&userID, &active, &expiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !active || time.Now().After(expiresAt) {
+		return false, nil
+	}
+	user, err := loadUserContext(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if err := AuthorizeChannel(ctx, user, channelID, ChannelView); err != nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 func presenceJoin(ctx context.Context, cid, uid string) {
@@ -1497,7 +1597,10 @@ func channelRoster(ctx context.Context, cid string) ([]PresenceUser, int, error)
 }
 
 func handleChannelMembers(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelView)
+	if !ok {
+		return
+	}
 	roster, count, err := channelRoster(r.Context(), channelID)
 	if err != nil {
 		http.Error(w, "failed to get roster", 500)
@@ -1511,9 +1614,13 @@ func handleChannelMembers(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePinMessage(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
+	// withAuth already gated this route on the moderation permission; here we
+	// additionally require the channel to exist and be viewable.
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelView)
+	if !ok {
+		return
+	}
 	user := r.Context().Value(userContextKey).(*UserContext)
-
 	var body struct {
 		MessageID string `json:"messageId"`
 	}
@@ -1578,7 +1685,10 @@ func handleUnpinMessage(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleListPins(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelView)
+	if !ok {
+		return
+	}
 
 	rows, err := dbPool.Query(r.Context(), `
 		SELECT m.id::text, u.id::text, u.username, COALESCE(u.display_name, ''),
@@ -1957,7 +2067,10 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 }
 
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelSend)
+	if !ok {
+		return
+	}
 	user := r.Context().Value(userContextKey).(*UserContext)
 	var body struct {
 		Content string `json:"content"`
@@ -2095,7 +2208,10 @@ func isEmoji(s string) bool {
 }
 
 func handleAddReaction(w http.ResponseWriter, r *http.Request) {
-	channelID := r.PathValue("id")
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelSend)
+	if !ok {
+		return
+	}
 	mid := r.PathValue("mid")
 	user := r.Context().Value(userContextKey).(*UserContext)
 

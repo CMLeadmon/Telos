@@ -66,3 +66,7 @@ backend/auth_test.go
 backend/testutil/integration.go
 docker-compose.test.yml
 scripts/test-backend.sh
+backend/chat.go
+backend/chat_test.go
+backend/realtime.go
+backend/realtime_test.go
