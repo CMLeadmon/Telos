@@ -642,7 +642,7 @@ func TestProxyRequestStripsUpstreamCORSHeaders(t *testing.T) {
 	defer upstream.Close()
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		proxyRequest(w, r, upstream.URL+"/Videos/x/main.m3u8", "test-token")
+		proxyRequest(w, r, upstream.URL+"/Videos/x/main.m3u8", "test-token", jellyfinStreamQueryKeys)
 	})
 
 	req := httptest.NewRequest("GET", "/api/v1/stream/video/x/main.m3u8", nil)

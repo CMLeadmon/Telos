@@ -168,3 +168,24 @@ finite `TELOS_DEV_ORIGINS` allowlist only.
   `{ "error": { "code", "message", "requestId" } }` with no raw
   database/Redis/filesystem/upstream text; health failures report only a
   status word. Secret validation prints only the offending variable name.
+
+### 5.1 Session and upstream-proxy isolation
+
+Session tokens are accepted from **exactly** the secure `telos_session`
+cookie (`sessionTokenFromRequest`); a token supplied in a query string,
+fragment, header, or as a duplicate/empty/malformed cookie is rejected, so a
+credential can never be relayed to an upstream. The old `?token=` WebSocket
+fallback is removed — browsers send the cookie on the same-origin upgrade.
+
+Every Jellyfin/Grimmory relay goes through `proxyUpstream` (`backend/proxy.go`)
+under an allowlist `ProxyPolicy`: it builds a brand-new upstream request from
+the approved method/path, a per-route `BuildQuery` that emits only named,
+validated parameters (the raw browser query and unknown/duplicate keys are
+never forwarded), and injects Jellyfin/Grimmory credentials solely from server
+configuration. Only explicitly allowlisted response headers return to the
+browser — the media allowlist is `Content-Type`, `Content-Length`,
+`Content-Range`, `Accept-Ranges`, `ETag`, `Last-Modified`, `Cache-Control`,
+and `Content-Disposition`. Upstream `Set-Cookie`, CORS, `WWW-Authenticate`,
+`Location`, `Server`, and every hop-by-hop header are dropped, and an upstream
+redirect is refused rather than followed. `Range`/conditional headers pass
+only for routes whose policy enables them.

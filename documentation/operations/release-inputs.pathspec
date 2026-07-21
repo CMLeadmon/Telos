@@ -58,3 +58,6 @@ documentation/operations/dependency-security-baseline.md
 backend/errors.go
 backend/security.go
 backend/security_test.go
+backend/proxy.go
+backend/proxy_test.go
+backend/media.go

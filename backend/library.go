@@ -787,12 +787,14 @@ func proxyGrimmoryBinary(w http.ResponseWriter, r *http.Request, path, forceCont
 	defer cancel()
 	resp, err := grimmoryGET(ctx, path)
 	if err != nil {
-		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		log.Printf("library: grimmory binary fetch failed request_id=%s: %v", requestIDFrom(r.Context()), err)
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "The book service is unavailable.")
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Grimmory returned "+resp.Status, http.StatusBadGateway)
+		log.Printf("library: grimmory binary status request_id=%s: %s", requestIDFrom(r.Context()), resp.Status)
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_error", "The book service returned an error.")
 		return
 	}
 	ct := resp.Header.Get("Content-Type")

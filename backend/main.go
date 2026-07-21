@@ -18,7 +18,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -592,17 +591,10 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 		return nil, errors.New("db uninitialized")
 	}
 
-	var token string
-	// Check cookie
-	cookie, err := r.Cookie("telos_session")
-	if err == nil {
-		token = cookie.Value
-	} else {
-		// Fallback for WS connection upgrades that might supply ticket in query string
-		token = r.URL.Query().Get("token")
-	}
-
-	if token == "" {
+	// Cookie-only: a session token is never accepted from a query string,
+	// fragment, or header, so it can never be relayed to an upstream proxy.
+	token, err := sessionTokenFromRequest(r)
+	if err != nil {
 		return nil, errors.New("missing session token")
 	}
 
@@ -3036,54 +3028,7 @@ func handleMediaItemCover(w http.ResponseWriter, r *http.Request) {
 
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Items/%s/Images/Primary", jellyfinBaseURL, id)
-	proxyRequest(w, r, targetURL, token)
-}
-
-func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr string, token string) {
-	targetURL, err := url.Parse(targetURLStr)
-	if err != nil {
-		log.Printf("Failed to parse target URL %s: %v", targetURLStr, err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
-
-	proxy := &httputil.ReverseProxy{
-		Transport: upstreamTransport,
-		Director: func(req *http.Request) {
-			req.URL.Scheme = targetURL.Scheme
-			req.URL.Host = targetURL.Host
-			req.URL.Path = targetURL.Path
-			if req.URL.RawQuery != "" && targetURL.RawQuery != "" {
-				req.URL.RawQuery = targetURL.RawQuery + "&" + req.URL.RawQuery
-			} else if targetURL.RawQuery != "" {
-				req.URL.RawQuery = targetURL.RawQuery
-			}
-			req.Host = targetURL.Host
-			if token != "" {
-				req.Header.Set("X-Emby-Token", token)
-				req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
-			}
-		},
-		ModifyResponse: func(resp *http.Response) error {
-			// corsMiddleware is the single CORS authority; upstream CORS
-			// headers would merge into illegal duplicates (browsers reject
-			// "origin, *" on credentialed cross-origin dev requests).
-			for _, h := range []string{
-				"Access-Control-Allow-Origin",
-				"Access-Control-Allow-Credentials",
-				"Access-Control-Allow-Methods",
-				"Access-Control-Allow-Headers",
-			} {
-				resp.Header.Del(h)
-			}
-			return nil
-		},
-		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
-			log.Printf("Upstream proxy failed: %v", err)
-			http.Error(w, "Upstream service unavailable", http.StatusBadGateway)
-		},
-	}
-	proxy.ServeHTTP(w, r)
+	proxyRequest(w, r, targetURL, token, nil)
 }
 
 func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
@@ -3094,7 +3039,7 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	}
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
-	proxyRequest(w, r, targetURL, token)
+	proxyRequest(w, r, targetURL, token, nil)
 }
 
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
@@ -3162,7 +3107,7 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	}
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, id, subpath)
-	proxyRequest(w, r, targetURL, token)
+	proxyRequest(w, r, targetURL, token, jellyfinStreamQueryKeys)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
