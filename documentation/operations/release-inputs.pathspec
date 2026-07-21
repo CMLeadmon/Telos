@@ -77,3 +77,6 @@ backend/server_test.go
 scripts/validate-compose.sh
 tests/fixtures/compose.env
 config/livekit.yaml
+backend/migrations.go
+backend/migrations_test.go
+backend/migrations_integration_test.go

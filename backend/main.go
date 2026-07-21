@@ -212,10 +212,14 @@ func main() {
 	}
 	defer dbPool.Close()
 
-	// Initialize tables via migrations
-	if err := initDatabase(ctx); err != nil {
+	// Apply schema migrations under a bounded startup context distinct from
+	// request contexts.
+	migrateCtx, migrateCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	if _, err := RunMigrations(migrateCtx, dbPool, migrationsFS); err != nil {
+		migrateCancel()
 		log.Fatalf("Critical: Database migration failed: %v", err)
 	}
+	migrateCancel()
 
 	// Initialize Redis Client
 	opt, err := redis.ParseURL(redisURL)
@@ -405,82 +409,6 @@ func validateSecrets() {
 	if strings.HasSuffix(domain, ".local") || strings.HasSuffix(domain, ".example") || strings.HasSuffix(domain, ".example.com") {
 		log.Fatal("Critical Configuration Error: TELOS_DOMAIN must be a real production domain.")
 	}
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Database Initialization & Migrations
-// ═══════════════════════════════════════════════════════════════════════════
-
-func initDatabase(ctx context.Context) error {
-	log.Println("Checking database schema migrations...")
-
-	_, err := dbPool.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version INT PRIMARY KEY,
-			applied_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-		);
-	`)
-	if err != nil {
-		return fmt.Errorf("failed to ensure schema_migrations table: %v", err)
-	}
-
-	entries, err := fs.ReadDir(migrationsFS, "db/migrations")
-	if err != nil {
-		return fmt.Errorf("failed to read migrations: %v", err)
-	}
-
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-
-		parts := strings.SplitN(entry.Name(), "_", 2)
-		if len(parts) < 2 {
-			continue
-		}
-		version, err := strconv.Atoi(parts[0])
-		if err != nil {
-			return fmt.Errorf("invalid migration name %q: %v", entry.Name(), err)
-		}
-
-		var exists bool
-		err = dbPool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)", version).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("failed to check migration state: %v", err)
-		}
-
-		if exists {
-			continue
-		}
-
-		log.Printf("Applying database migration version %d (%s)...", version, entry.Name())
-		sqlBytes, err := fs.ReadFile(migrationsFS, "db/migrations/"+entry.Name())
-		if err != nil {
-			return fmt.Errorf("failed to read migration file: %v", err)
-		}
-
-		tx, err := dbPool.Begin(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to start migration transaction: %v", err)
-		}
-
-		if _, err := tx.Exec(ctx, string(sqlBytes)); err != nil {
-			tx.Rollback(ctx)
-			return fmt.Errorf("migration run failed: %v", err)
-		}
-
-		if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version) VALUES ($1)", version); err != nil {
-			tx.Rollback(ctx)
-			return fmt.Errorf("failed to insert migration version: %v", err)
-		}
-
-		if err := tx.Commit(ctx); err != nil {
-			return fmt.Errorf("failed to commit migration transaction: %v", err)
-		}
-		log.Printf("Migration version %d applied successfully", version)
-	}
-
-	return nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

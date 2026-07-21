@@ -7,11 +7,14 @@ package testutil
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,6 +77,63 @@ var (
 	migrateOnce sync.Once
 	migrateErr  error
 )
+
+// FreshDatabase creates a uniquely named empty database on the test server and
+// returns a pool to it plus a cleanup that drops it. Used by migration-engine
+// tests that need full control over schema_migrations. It skips when the
+// fixture env is absent.
+func FreshDatabase(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	dbURL := os.Getenv("TELOS_TEST_DATABASE_URL")
+	if dbURL == "" {
+		t.Skip("integration fixture unavailable (TELOS_TEST_DATABASE_URL)")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	admin, err := pgxpool.New(ctx, dbURL)
+	if err != nil {
+		t.Fatalf("admin connect: %v", err)
+	}
+	defer admin.Close()
+
+	name := fmt.Sprintf("telos_mig_%d", freshCounter.Add(1))
+	if _, err := admin.Exec(ctx, `DROP DATABASE IF EXISTS `+name); err != nil {
+		t.Fatalf("drop stale db: %v", err)
+	}
+	if _, err := admin.Exec(ctx, `CREATE DATABASE `+name); err != nil {
+		t.Fatalf("create db: %v", err)
+	}
+
+	freshURL := replaceDBName(dbURL, name)
+	pool, err := pgxpool.New(ctx, freshURL)
+	if err != nil {
+		t.Fatalf("connect fresh db: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer dropCancel()
+		a, err := pgxpool.New(dropCtx, dbURL)
+		if err == nil {
+			a.Exec(dropCtx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`)
+			a.Close()
+		}
+	})
+	return pool
+}
+
+var freshCounter atomic.Int64
+
+// replaceDBName swaps the database path segment of a postgres URL.
+func replaceDBName(rawurl, name string) string {
+	i := strings.LastIndex(rawurl, "/")
+	q := strings.Index(rawurl, "?")
+	if q < 0 {
+		return rawurl[:i+1] + name
+	}
+	return rawurl[:i+1] + name + rawurl[q:]
+}
 
 func migrationsDir() string {
 	_, self, _, _ := runtime.Caller(0)

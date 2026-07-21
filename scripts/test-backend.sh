@@ -28,6 +28,7 @@ case "$suite" in
 auth) run_filter="-run Test(Bootstrap|InviteAcceptance|LastOwner|LoginLimiter|CanonicalUsername|SessionMutation|SecurityEvent)"; shift ;;
 realtime) run_filter="-run Test(Channel|Realtime|Socket|Revocation|Subscription)"; shift ;;
 security) run_filter="-run Test(Voice|Server|Shutdown|Slow|HTTPAdmission|Security)"; shift ;;
+db) run_filter="-run Test(Migration|Migrations|Migrator|Database|ForeignKey|QueryStatistics|MessageManagement|Cursor|ListPolicy|MyList|Search|Outbox|AccountDeletion|RetentionMatrix|AssetDeletion|SchemaOwner|RuntimeRole|LoadAuthenticatedUser|HistoryQueryCount|BuildListQuery|SessionTouchWorker|DatabaseTimeouts|DatabaseConstraints|FailedMigration|ConcurrentMigrators|DiscoverMigrations|PlanMigrations|ChecksumSet)"; shift ;;
 all) shift || true ;;
 -*) : ;; # first arg is already a go-test flag
 *) shift || true ;;

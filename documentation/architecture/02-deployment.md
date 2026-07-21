@@ -113,6 +113,22 @@ Rotate or remove `TELOS_BOOTSTRAP_TOKEN` from the runtime environment after the
 Owner exists; the endpoint also refuses a second Owner bootstrap at the database
 layer.
 
+### 4.1 Schema migrations
+
+Migrations live in `backend/db/migrations/NNNN_name.sql` with contiguous
+four-digit versions from `0001`. On startup the migration engine
+(`backend/migrations.go`) computes a SHA-256 per file, takes a PostgreSQL
+advisory lock (bounded by a 30s lock timeout), applies each pending migration
+in its own transaction, and records `(version, name, checksum)`. Applied
+history is immutable: a changed checksum or name, a version gap, or an unknown
+future version aborts startup rather than proceeding. A legacy version-only
+`schema_migrations` table is upgraded in place only when its versions are
+exactly contiguous from `0001`; otherwise the engine refuses to bless an
+unknown history. Concurrent migrators serialize on the advisory lock so each
+version applies exactly once. Phase 3's P3-T2 splits this into a one-shot
+`telos-migrate` service (which applies) and `telos-core serve` (which only
+verifies and fails readiness on a mismatch).
+
 ## 5. Storage
 
 The default shared tree is `/mnt/storage/shared` and can be moved with
