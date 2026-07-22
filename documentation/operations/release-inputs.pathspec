@@ -178,3 +178,8 @@ backend/annotations_integration_test.go
 backend/db/migrations/0016_my_list.sql
 backend/mylist.go
 backend/mylist_test.go
+backend/db/migrations/0017_watch_parties.sql
+backend/watchparty.go
+backend/watchparty_handlers.go
+backend/watchparty_test.go
+backend/watchparty_integration_test.go

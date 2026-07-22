@@ -19,6 +19,7 @@ invalidated before success is reported.
 | User-event stream (`user_events` where `recipient_id`) | Deleted |
 | Private annotations (`annotations` where `visibility = 'private'`) | Deleted |
 | My List entries + revision (`media_list_entries`, `media_lists`) | Deleted |
+| Watch Party membership/invitations/host offers | Deleted; hosted parties are ended |
 | Community annotations and replies | Retained, authored by the anonymized user |
 | Private uploads and avatars (`files` where `purpose <> 'shared'`) | Row deleted; physical asset queued for removal |
 | Shared community files (`files` where `purpose = 'shared'`) | Retained |

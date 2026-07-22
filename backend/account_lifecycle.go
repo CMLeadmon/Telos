@@ -105,6 +105,11 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 		}
 	}
 
+	// End hosted Watch Parties and purge the user's party references.
+	if err := PurgeUserWatchParties(ctx, tx, userID); err != nil {
+		return DeletionReceipt{}, err
+	}
+
 	// Anonymize the user row; public chat authorship is retained as
 	// "Deleted User" via the surviving (anonymized) users row.
 	suffix := userID
