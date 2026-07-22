@@ -148,6 +148,31 @@ staging or promotion. A zero or unparseable production value is invalid.
 Reservations expire (15 min) and are released idempotently, so concurrent
 uploads cannot overbook user or node capacity.
 
+### 4.0.2 File lifecycle and reconciliation
+
+Logical file and folder mutations (`backend/file_mutations.go`) run under
+per-row `FOR UPDATE` locks: rename and move change only the database logical
+name/parent, never the immutable content key; folder create/rename/move rejects
+normalized sibling collisions and parent cycles; a folder deletes only when
+empty (`409 folder_not_empty`); and a file delete atomically moves
+`available → deleting` and hides the row immediately. The mutation actor must
+own the resource or hold `manage_files`. Every mutation writes an immutable
+`file_audit` row; the log is exposed as a stable cursor-paginated list at
+`GET /api/v1/files/audit` (requires `manage_files`).
+
+A single per-node `FileReconciler` (`backend/reconciliation.go`) converges the
+database with physical and catalog state under a session advisory lock, so a
+second walker on the node yields. Each bounded pass (≤100 rows per category,
+30s deadline) finalizes `deleting → deleted` only after **proving physical
+absence**, repairs an expired-lease `promoting` row to `available` only when the
+staged asset's hash and size prove identity (otherwise marks it `missing`), and
+acknowledges a delivered Grimmory handoff as `consumed` only once the catalog
+confirms the import — unobserved absence is never assumed to be success. Passes
+are idempotent: a second identical pass makes no new mutation or audit row.
+Until confined physical storage and the book catalog are wired, the reconciler
+is a deliberate no-op — it never marks a row `deleted` or `missing` without a
+way to verify physical state.
+
 ### 4.1 Schema migrations
 
 Migrations live in `backend/db/migrations/NNNN_name.sql` with contiguous

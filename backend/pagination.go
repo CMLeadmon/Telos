@@ -221,6 +221,7 @@ func init() {
 		{"admin.invites", "created_desc"},
 		{"admin.sessions", "created_desc"},
 		{"channel.members", "joined_desc"},
+		{"files.audit", "created_desc"},
 	} {
 		registerList(ListPolicy{
 			Scope: s.scope, Mode: ListCursor, DefaultSort: s.sort,

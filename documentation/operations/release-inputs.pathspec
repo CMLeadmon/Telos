@@ -141,3 +141,8 @@ backend/media.go
 backend/media_test.go
 backend/library_authorization.go
 backend/library_authorization_test.go
+backend/file_mutations.go
+backend/file_mutations_test.go
+backend/reconciliation.go
+backend/reconciliation_test.go
+backend/reconciliation_integration_test.go

@@ -305,6 +305,16 @@ func main() {
 	outboxDispatcher.Run(outboxCtx)
 	defer outboxCancel()
 
+	// Logical file/folder mutation state machine and the filesystem/database
+	// reconciler. Physical storage and the book catalog are wired in later; the
+	// reconciler is a bounded no-op until then and never marks a row deleted or
+	// missing without a way to prove physical state.
+	fileService = newFileService(dbPool)
+	fileReconciler = newFileReconciler(dbPool, nil, nil)
+	reconcileCtx, reconcileCancel := context.WithCancel(context.Background())
+	StartFileReconciler(reconcileCtx, fileReconciler)
+	defer reconcileCancel()
+
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging dir: %v", err)
@@ -427,6 +437,7 @@ func main() {
 	mux.Handle("DELETE /api/v1/files/{id}", withAuth(http.HandlerFunc(handleDeleteFile), "manage_files"))
 	mux.Handle("POST /api/v1/folders", withAuth(http.HandlerFunc(handleCreateFolder), "upload_files"))
 	mux.Handle("DELETE /api/v1/folders/{id}", withAuth(http.HandlerFunc(handleDeleteFolder), "manage_files"))
+	mux.Handle("GET /api/v1/files/audit", withAuth(http.HandlerFunc(handleListFileAudit), "manage_files"))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
