@@ -44,6 +44,14 @@ integrations: ACME issuance, ClamAV signature updates, metadata providers,
 and encrypted operator-selected off-node backup targets. Telos does not claim
 that nothing ever leaves the node.
 
+ClamAV, Jellyfin, and Grimmory have **no direct Internet path**: they sit on an
+internal network and reach the outside world only through a deny-by-default
+egress proxy (`telos-egress-proxy`) that permits only a small reviewed list of
+provider hostnames on TCP 443 (see
+[controlled-egress](../operations/controlled-egress.md)). Enrichment fails
+closed — a metadata lookup that cannot reach an approved provider degrades that
+feature rather than opening an uncontrolled path.
+
 ## Support targets
 
 100 registered members, 25 concurrent authenticated users, 10 chat/annotation

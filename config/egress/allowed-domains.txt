@@ -1,0 +1,19 @@
+# Reviewed external egress destinations (Squid dstdomain allowlist).
+#
+# Every hostname here has been reviewed for purpose and privacy. Adding a domain
+# is an operator change: append the exact host, record why in
+# documentation/operations/controlled-egress.md, and run scripts/tests/egress_test.sh.
+# A leading dot matches subdomains; no leading dot means an exact host.
+#
+# ClamAV signature updates (FreshClam). A leading dot also matches the apex.
+.database.clamav.net
+
+# Jellyfin/Grimmory metadata + cover providers.
+www.googleapis.com
+books.google.com
+books.googleusercontent.com
+openlibrary.org
+covers.openlibrary.org
+api.themoviedb.org
+image.tmdb.org
+www.omdbapi.com

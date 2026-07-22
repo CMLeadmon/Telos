@@ -655,6 +655,11 @@ func candidateCoverHTTPClient() *http.Client {
 		if req.URL.Scheme != via[len(via)-1].URL.Scheme && req.URL.Scheme != "https" {
 			return errors.New("cover redirect downgrades the scheme")
 		}
+		// Re-validate the hostname allowlist on every redirect so a redirect
+		// cannot escape the approved provider set.
+		if !coverHostAllowed(req.URL.Host) {
+			return errors.New("cover redirect leaves the approved provider set")
+		}
 		_, err := publicURLIPs(req.Context(), req.URL)
 		return err
 	}
@@ -665,6 +670,9 @@ func downloadCandidateCover(ctx context.Context, raw string) ([]byte, string, in
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return nil, "", http.StatusBadRequest, errors.New("invalid cover URL")
+	}
+	if !coverHostAllowed(parsed.Host) {
+		return nil, "", http.StatusBadRequest, errors.New("cover host is not an approved provider")
 	}
 	if _, err := publicURLIPs(ctx, parsed); err != nil {
 		return nil, "", http.StatusBadRequest, err

@@ -153,3 +153,10 @@ backend/capacity_test.go
 backend/health.go
 backend/health_test.go
 backend/health_integration_test.go
+backend/egress.go
+backend/egress_test.go
+deploy/egress-proxy/Dockerfile
+config/egress/squid.conf
+config/egress/allowed-domains.txt
+scripts/tests/egress_test.sh
+documentation/operations/controlled-egress.md

@@ -15,6 +15,12 @@ networks:
     name: telos-db
     driver: bridge
     internal: true
+  # The ONLY non-internal egress network besides ingress. Only the controlled
+  # egress proxy joins it; ClamAV/Jellyfin/Grimmory reach the Internet solely
+  # through that proxy from the internal telos-backend network.
+  telos-egress:
+    name: telos-egress
+    driver: bridge
 
 volumes:
   traefik_acme:
@@ -174,6 +180,29 @@ services:
       timeout: 5s
       retries: 5
 
+  # Controlled egress proxy: deny-by-default Squid, the single Internet path for
+  # ClamAV/Jellyfin/Grimmory. Dual-homed: reachable by clients on telos-backend,
+  # reaches the Internet on telos-egress.
+  telos-egress-proxy:
+    build:
+      context: .
+      dockerfile: deploy/egress-proxy/Dockerfile
+    container_name: telos-egress-proxy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - telos-backend
+      - telos-egress
+    volumes:
+      - ./config/egress/squid.conf:/etc/squid/squid.conf:ro,z
+      - ./config/egress/allowed-domains.txt:/etc/squid/allowed-domains.txt:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "squid -k parse -f /etc/squid/squid.conf || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
   clamav:
     image: clamav/clamav:latest
     container_name: telos-clamav
@@ -182,6 +211,13 @@ services:
       - no-new-privileges:true
     networks:
       - telos-backend
+    # FreshClam reaches database.clamav.net only through the controlled proxy.
+    environment:
+      - http_proxy=http://telos-egress-proxy:3128
+      - https_proxy=http://telos-egress-proxy:3128
+      - HTTP_PROXY=http://telos-egress-proxy:3128
+      - HTTPS_PROXY=http://telos-egress-proxy:3128
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory,grimmory-db,livekit
     healthcheck:
       test: ["CMD-SHELL", "echo PING | nc -w 2 localhost 3310 | grep -q PONG"]
       interval: 10s
@@ -198,6 +234,12 @@ services:
     environment:
       - TZ=${TZ}
       - JELLYFIN_PublishedServerUrl=https://${TELOS_DOMAIN}
+      # Metadata/artwork fetches egress only through the controlled proxy.
+      - http_proxy=http://telos-egress-proxy:3128
+      - https_proxy=http://telos-egress-proxy:3128
+      - HTTP_PROXY=http://telos-egress-proxy:3128
+      - HTTPS_PROXY=http://telos-egress-proxy:3128
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,grimmory,grimmory-db,livekit
     volumes:
       - jellyfin_config:/config
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
@@ -240,6 +282,13 @@ services:
       - DATABASE_PASSWORD=${GRIMMORY_DB_PASSWORD}
       - API_DOCS_ENABLED=true
       - DISK_TYPE=LOCAL
+      # Metadata/cover provider fetches egress only through the controlled proxy.
+      - http_proxy=http://telos-egress-proxy:3128
+      - https_proxy=http://telos-egress-proxy:3128
+      - HTTP_PROXY=http://telos-egress-proxy:3128
+      - HTTPS_PROXY=http://telos-egress-proxy:3128
+      - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=telos-egress-proxy -Dhttp.proxyPort=3128 -Dhttps.proxyHost=telos-egress-proxy -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1|grimmory-db|telos-core|postgres|redis
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory-db,livekit
     volumes:
       - grimmory_config:/app/data
       - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books:z
