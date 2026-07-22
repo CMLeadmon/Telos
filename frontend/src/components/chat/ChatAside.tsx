@@ -76,8 +76,6 @@ export function ChatAside() {
         <h3>Online Members ({onlineCount})</h3>
         <div className="chanlist" style={{ gap: "4px" }}>
           {online.map((u) => {
-            const isOracle =
-              u.username.toLowerCase() === "oracle" || u.role.toLowerCase() === "ai oracle";
             return (
               <div
                 key={u.userId}
@@ -146,7 +144,7 @@ export function ChatAside() {
                     width: "8px",
                     height: "8px",
                     borderRadius: "50%",
-                    background: isOracle ? "var(--cyan)" : "var(--rose)",
+                    background: "var(--rose)",
                   }}
                 />
               </div>

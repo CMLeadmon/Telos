@@ -4,7 +4,6 @@ import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Bell,
   BookOpen,
   Folder,
   Hash,
@@ -13,7 +12,6 @@ import {
   Moon,
   Search,
   Settings,
-  Sparkles,
   Sun,
   Tv,
   Volume2,
@@ -378,12 +376,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}{" "}
             {user?.DisplayName || user?.Username}
           </span>
-          <button className="iconbtn" aria-label="oracle">
-            <Sparkles size={18} />
-          </button>
-          <button className="iconbtn" aria-label="notifications">
-            <Bell size={18} />
-          </button>
           <Link
             href="/settings"
             className={`iconbtn${pathname.startsWith("/settings") ? " on" : ""}`}

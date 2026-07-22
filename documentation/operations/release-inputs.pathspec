@@ -160,3 +160,4 @@ config/egress/squid.conf
 config/egress/allowed-domains.txt
 scripts/tests/egress_test.sh
 documentation/operations/controlled-egress.md
+scripts/check-product-truth.sh

@@ -11,12 +11,6 @@
 .mbody{margin:5px 0 0;color:var(--muted);font-size:14px;line-height:1.55;overflow-wrap:anywhere}
 .mbody b{color:var(--ink);font-weight:600}
 
-.oracle{border:1px solid var(--line-2);border-left:3px solid var(--cyan);border-radius:var(--r);
-  padding:14px 16px;margin-top:10px;max-width:520px;background:rgba(2,181,255,.05)}
-.oracle .ott{font-family:var(--f-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
-  color:var(--cyan);margin-bottom:8px}
-.oracle ul{margin:0;padding-left:16px;color:var(--muted);font-size:13px;line-height:1.7}
-
 .composer{padding:16px 24px 20px;display:flex;gap:10px;align-items:center;background:var(--surface);
   border-top:1px solid var(--line);position:relative;z-index:2}
 .composer .cwrap{flex:1;position:relative;display:flex;align-items:center}
