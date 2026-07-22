@@ -94,6 +94,7 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 		`DELETE FROM channel_reads WHERE user_id = $1`,
 		`DELETE FROM notifications WHERE user_id = $1`,
 		`DELETE FROM user_events WHERE recipient_id = $1`,
+		`DELETE FROM annotations WHERE user_id = $1 AND visibility = 'private'`,
 		`DELETE FROM files WHERE uploader_id = $1 AND purpose <> 'shared'`,
 		`DELETE FROM user_roles WHERE user_id = $1`,
 	} {

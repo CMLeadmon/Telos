@@ -477,6 +477,15 @@ func main() {
 	mux.Handle("GET /api/v1/events", withAuth(http.HandlerFunc(handleEventsCatchUp), ""))
 	mux.Handle("GET /api/v1/events/ws", withAuth(http.HandlerFunc(handleEventsWS), ""))
 
+	// Book annotations (private/community) + community replies.
+	mux.Handle("GET /api/v1/library/books/{id}/annotations", withAuth(http.HandlerFunc(handleListAnnotations), "view_library"))
+	mux.Handle("POST /api/v1/library/books/{id}/annotations", withAuth(http.HandlerFunc(handleCreateAnnotation), "view_library"))
+	mux.Handle("PATCH /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handlePatchAnnotation), "view_library"))
+	mux.Handle("DELETE /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handleDeleteAnnotation), "view_library"))
+	mux.Handle("GET /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleListAnnotationReplies), "view_library"))
+	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), "view_library"))
+	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), "view_library"))
+
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
 
