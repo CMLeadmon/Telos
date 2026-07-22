@@ -112,3 +112,21 @@
 .mylist-controls button{width:24px;height:24px;border-radius:var(--r-xs);border:1px solid var(--line-2);
   background:var(--surface);color:var(--muted);cursor:pointer}
 .mylist-more{margin-top:8px;background:none;border:none;color:var(--cyan);cursor:pointer;font-size:13px}
+
+/* Watch Party panel + player */
+.wp-panel{padding:14px 0;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:10px}
+.wp-panel header{display:flex;align-items:center;justify-content:space-between}
+.wp-panel h3{margin:0;font-size:15px}
+.wp-lease{font-family:var(--f-mono);font-size:12px;color:var(--cyan)}
+.wp-host-controls,.wp-succession,.wp-links{display:flex;gap:8px;flex-wrap:wrap}
+.wp-panel button{padding:6px 12px;border-radius:var(--r-xs);border:1px solid var(--line-2);background:var(--surface-2);
+  color:var(--ink);cursor:pointer;font-size:13px}
+.wp-succession input,.wp-dialog input{padding:6px 8px;border:1px solid var(--line-2);border-radius:var(--r-xs);
+  background:var(--surface-2);color:var(--ink);font-size:13px}
+.wp-follow,.wp-participant-note,.wp-follow-note{font-size:12px;color:var(--muted);margin:0}
+.wp-player video{width:100%;max-height:70vh;background:#000;border-radius:var(--r)}
+.wp-dialog{display:flex;flex-direction:column;gap:10px;padding:16px;background:var(--surface);
+  border:1px solid var(--line-2);border-radius:var(--r);max-width:420px}
+.wp-dialog label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.wp-actions{display:flex;gap:8px}
+.wp-error{color:var(--rose);font-size:12px}
