@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  Bell,
   BookOpen,
   Folder,
   Hash,
@@ -21,8 +22,10 @@ import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore"
 import { useVoiceSessionStore } from "@/stores/useVoiceSessionStore";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
-import { api, avatarUrl } from "@/lib/api";
+import { useNotificationStore } from "@/stores/useNotificationStore";
+import { api, avatarUrl, wsBase } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
+import { NotificationInbox } from "@/components/notifications/NotificationInbox";
 import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
 
@@ -44,6 +47,49 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
   const voice = useVoiceSessionStore();
+
+  // Notifications: unread badge, live event socket, and the inbox dialog.
+  const unreadCount = useNotificationStore((s) => s.unreadCount);
+  const reconcile = useNotificationStore((s) => s.reconcile);
+  const applyEvent = useNotificationStore((s) => s.applyEvent);
+  const [inboxOpen, setInboxOpen] = useState(false);
+
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    // Catch up on anything missed, then open the recipient-scoped event socket
+    // and apply live hints (reconnecting with a bounded backoff).
+    void reconcile();
+    let ws: WebSocket | null = null;
+    let closed = false;
+    let backoff = 1000;
+    const open = () => {
+      if (closed) return;
+      ws = new WebSocket(`${wsBase()}/api/v1/events/ws`);
+      ws.onmessage = (ev) => {
+        try {
+          const msg = JSON.parse(ev.data);
+          if (typeof msg?.sequence === "number") applyEvent({ sequence: msg.sequence });
+        } catch {
+          /* ignore malformed frames */
+        }
+      };
+      ws.onopen = () => {
+        backoff = 1000;
+        void reconcile();
+      };
+      ws.onclose = () => {
+        if (closed) return;
+        backoff = Math.min(backoff * 2, 30000);
+        setTimeout(open, backoff);
+      };
+      ws.onerror = () => ws?.close();
+    };
+    open();
+    return () => {
+      closed = true;
+      ws?.close();
+    };
+  }, [status, reconcile, applyEvent]);
 
   interface SearchUser {
     id: string;
@@ -376,6 +422,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}{" "}
             {user?.DisplayName || user?.Username}
           </span>
+          <button
+            className="iconbtn notif-bell"
+            aria-label="notifications"
+            onClick={() => setInboxOpen((v) => !v)}
+          >
+            <Bell size={18} />
+            {unreadCount > 0 && (
+              <span className="notif-badge" aria-label={`${unreadCount} unread`}>
+                {unreadCount > 99 ? "99+" : unreadCount}
+              </span>
+            )}
+          </button>
+          <NotificationInbox open={inboxOpen} onClose={() => setInboxOpen(false)} />
           <Link
             href="/settings"
             className={`iconbtn${pathname.startsWith("/settings") ? " on" : ""}`}

@@ -51,8 +51,9 @@ hit=$(grep -rniE 'nothing (ever )?leaves|never leaves (your|the) (node|device|se
 [ -n "$hit" ] && report "absolute local-only privacy claim" "$hit"
 
 # 7. Listed visible inert controls that must stay absent until their tasks ship.
-#    (notification bell -> P5-T3; My List/Watch Party controls -> their tasks.)
-hit=$(grep -rniE 'aria-label="notifications"|aria-label="oracle"' frontend/src 2>/dev/null)
+#    The Oracle control is permanently prohibited; the notification bell shipped
+#    in P5-T3, so it is no longer inert.
+hit=$(grep -rniE 'aria-label="oracle"' frontend/src 2>/dev/null)
 [ -n "$hit" ] && report "inert advertised control" "$hit"
 
 if [ "$fail" -eq 0 ]; then

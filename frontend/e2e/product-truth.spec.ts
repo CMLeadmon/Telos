@@ -28,10 +28,14 @@ test("no Oracle or AI control renders in the app shell", async ({ page }) => {
   await expect(page.getByText(/AI[- ]powered|AI summ|ask the oracle/i)).toHaveCount(0);
 });
 
-test("the notification bell stays absent until its feature ships", async ({ page }) => {
+test("the notification bell is a real control, not an inert one", async ({ page }) => {
   await login(page);
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
-  await expect(page.locator('[aria-label="notifications"]')).toHaveCount(0);
+  // Shipped in P5-T3: the bell exists and opens a working inbox dialog.
+  const bell = page.locator('[aria-label="notifications"]');
+  await expect(bell).toBeVisible();
+  await bell.click();
+  await expect(page.getByRole("dialog", { name: "Notifications" })).toBeVisible();
 });
 
 test("no inert My List or Watch Party control renders yet", async ({ page }) => {
