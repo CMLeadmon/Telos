@@ -167,3 +167,6 @@ backend/notifications_test.go
 backend/events.go
 backend/events_test.go
 backend/notification_handlers.go
+backend/db/migrations/0014_threads.sql
+backend/chat_threads.go
+backend/chat_integration_test.go

@@ -39,6 +39,16 @@ Account deletion enqueues an `account_deleted` security event in the same
 transaction (transactional outbox), which Phase 5 materializes for
 administrators.
 
+## Channel change log
+
+The per-channel `channel_changes` log (migration 0014) records compact
+`message.created`/`updated`/`deleted` entries with a strictly-increasing
+sequence, used only for socket catch-up. It is **retained for 7 days** and
+pruned in bounded batches by the reconciler. A catch-up cursor older than the
+retained floor returns `410 change_cursor_expired` with the current high-water
+so the client fully resynchronizes rather than receiving a partial page
+presented as complete.
+
 ## File catalog
 
 Every file row (migration 0012) carries a `purpose` (`shared`/`avatar`/

@@ -98,6 +98,11 @@ func (r *FileReconciler) RunOnce(ctx context.Context) (ReconcileReport, error) {
 	if err := r.acknowledgeHandoffs(ctx, &rep); err != nil {
 		return rep, err
 	}
+	// Bounded prune of the durable channel-change log (7-day retention). This is
+	// pure DB work and safe regardless of physical storage wiring.
+	if _, err := PruneChannelChanges(ctx); err != nil {
+		return rep, err
+	}
 	return rep, nil
 }
 

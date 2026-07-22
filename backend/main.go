@@ -410,6 +410,11 @@ func main() {
 	// Chat WebSocket
 	mux.Handle("GET /api/v1/chat/ws", withAuth(http.HandlerFunc(handleWebSocket), "view_channel"))
 	mux.Handle("POST /api/v1/channels/{id}/messages", withAuth(http.HandlerFunc(handleSendMessage), "send_messages"))
+	mux.Handle("GET /api/v1/channels/{id}/roots", withAuth(http.HandlerFunc(handleListChannelRoots), "view_channel"))
+	mux.Handle("POST /api/v1/channels/{id}/messages/{rootID}/replies", withAuth(http.HandlerFunc(handleSendReply), "send_messages"))
+	mux.Handle("GET /api/v1/channels/{id}/messages/{rootID}/replies", withAuth(http.HandlerFunc(handleListThreadReplies), "view_channel"))
+	mux.Handle("GET /api/v1/channels/{id}/changes", withAuth(http.HandlerFunc(handleChannelChanges), "view_channel"))
+	mux.Handle("PUT /api/v1/channels/{id}/read", withAuth(http.HandlerFunc(handleMarkChannelRead), "view_channel"))
 	mux.Handle("PATCH /api/v1/channels/{id}/messages/{mid}", withAuth(http.HandlerFunc(handleEditMessage), "send_messages"))
 	mux.Handle("DELETE /api/v1/channels/{id}/messages/{mid}", withAuth(http.HandlerFunc(handleDeleteMessage), "view_channel"))
 	mux.Handle("POST /api/v1/channels/{id}/messages/{mid}/reactions", withAuth(http.HandlerFunc(handleAddReaction), "send_messages"))
@@ -1950,8 +1955,9 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	user := r.Context().Value(userContextKey).(*UserContext)
 	var body struct {
-		Content string `json:"content"`
-		Embed   *struct {
+		Content          string `json:"content"`
+		ClientMutationID string `json:"clientMutationId"`
+		Embed            *struct {
 			Kind string `json:"kind"`
 			Ref  string `json:"ref"`
 		} `json:"embed"`
@@ -1969,8 +1975,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var embedKind, embedRef *string
-	var embedSnapshot []byte
+	var embed messageEmbedInput
 	if body.Embed != nil {
 		k, ref := body.Embed.Kind, body.Embed.Ref
 		snap, err := buildEmbedSnapshot(r.Context(), k, ref)
@@ -1982,25 +1987,79 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid embed: "+err.Error(), status)
 			return
 		}
-		embedKind = &k
-		embedRef = &ref
-		embedSnapshot = snap
+		embed = messageEmbedInput{Kind: &k, Ref: &ref, Snapshot: snap}
 	}
 
-	var msgID string
-	var ts time.Time
-	err := dbPool.QueryRow(r.Context(), `
-		INSERT INTO messages (channel_id, user_id, content, embed_kind, embed_ref, embed_snapshot)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, created_at`, channelID, user.ID, body.Content, embedKind, embedRef, embedSnapshot).Scan(&msgID, &ts)
-	if err != nil {
-		http.Error(w, "persist failed", 500)
+	msgID, ts, ok := persistChatMessage(w, r, channelID, user.ID, body.Content, body.ClientMutationID, nil, embed)
+	if !ok {
 		return
 	}
 
 	msg := buildWSMessage(r.Context(), msgID, user.ID, body.Content, ts)
 	publishChatEvent(r.Context(), channelID, WSEvent{Type: "message", Message: &msg})
 
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	json.NewEncoder(w).Encode(map[string]*WSMessage{"message": &msg})
+}
+
+// persistChatMessage runs the transactional create (idempotency + change log +
+// notifications) and maps thread errors to HTTP responses. It returns ok=false
+// after writing an error response.
+func persistChatMessage(w http.ResponseWriter, r *http.Request, channelID, authorID, content, clientMutationID string, threadRootID *string, embed messageEmbedInput) (string, time.Time, bool) {
+	tx, err := dbPool.Begin(r.Context())
+	if err != nil {
+		http.Error(w, "persist failed", 500)
+		return "", time.Time{}, false
+	}
+	defer tx.Rollback(r.Context())
+	msgID, ts, _, err := createChatMessageTx(r.Context(), tx, channelID, authorID, content, clientMutationID, threadRootID, embed)
+	if err != nil {
+		switch {
+		case errors.Is(err, errReplyToReply), errors.Is(err, errThreadRootMissing):
+			http.Error(w, "invalid thread root", http.StatusBadRequest)
+		default:
+			http.Error(w, "persist failed", 500)
+		}
+		return "", time.Time{}, false
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		http.Error(w, "persist failed", 500)
+		return "", time.Time{}, false
+	}
+	return msgID, ts, true
+}
+
+// handleSendReply posts a one-level thread reply under a root message.
+func handleSendReply(w http.ResponseWriter, r *http.Request) {
+	channelID, ok := authorizeChannelHTTP(w, r, ChannelSend)
+	if !ok {
+		return
+	}
+	rootID := r.PathValue("rootID")
+	if !looksLikeUUID(rootID) {
+		http.Error(w, "invalid thread root", http.StatusBadRequest)
+		return
+	}
+	user := r.Context().Value(userContextKey).(*UserContext)
+	var body struct {
+		Content          string `json:"content"`
+		ClientMutationID string `json:"clientMutationId"`
+	}
+	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
+		return
+	}
+	body.Content = strings.TrimSpace(body.Content)
+	if body.Content == "" || len(body.Content) > 4000 {
+		http.Error(w, "invalid content", 400)
+		return
+	}
+	msgID, ts, ok := persistChatMessage(w, r, channelID, user.ID, body.Content, body.ClientMutationID, &rootID, messageEmbedInput{})
+	if !ok {
+		return
+	}
+	msg := buildWSMessage(r.Context(), msgID, user.ID, body.Content, ts)
+	publishChatEvent(r.Context(), channelID, WSEvent{Type: "message", Message: &msg})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(201)
 	json.NewEncoder(w).Encode(map[string]*WSMessage{"message": &msg})
