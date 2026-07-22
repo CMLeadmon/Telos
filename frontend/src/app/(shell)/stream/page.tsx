@@ -21,6 +21,7 @@ import {
 } from "@/stores/useMediaStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
+import { MyListShelf } from "@/components/stream/MyListShelf";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
@@ -338,6 +339,7 @@ export default function StreamPage() {
   return (
     <div className="streammain" data-testid="stream-browse">
       <div className="streamscroll">
+        <MyListShelf />
         {sharedItemError && (
           <div className="streamnotice error" role="alert">
             <AlertCircle size={16} />

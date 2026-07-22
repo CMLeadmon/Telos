@@ -175,3 +175,6 @@ backend/annotations.go
 backend/annotation_handlers.go
 backend/annotations_test.go
 backend/annotations_integration_test.go
+backend/db/migrations/0016_my_list.sql
+backend/mylist.go
+backend/mylist_test.go

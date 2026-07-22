@@ -97,3 +97,18 @@
 .crumb{background:none;border:none;padding:0;font:inherit;color:inherit;cursor:pointer}
 .crumb:hover:not(:disabled){color:var(--ink)}
 .crumb:disabled{color:var(--ink);cursor:default}
+
+/* My List shelf */
+.mylist-shelf{padding:16px 0}
+.mylist-shelf .shelf-title{font-size:16px;margin:0 0 10px}
+.mylist-conflict{font-size:12px;color:var(--muted);margin:0 0 8px}
+.mylist-row{list-style:none;margin:0;padding:0;display:flex;gap:12px;overflow-x:auto}
+.mylist-item{flex:none;width:150px;padding:10px;border:1px solid var(--line-2);border-radius:var(--r);
+  background:var(--surface-2);position:relative}
+.mylist-item.unavailable{opacity:.55}
+.mylist-title{display:block;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mylist-badge{display:inline-block;margin-top:4px;font-size:10px;color:var(--rose);text-transform:uppercase;letter-spacing:.06em}
+.mylist-controls{display:flex;gap:6px;margin-top:8px}
+.mylist-controls button{width:24px;height:24px;border-radius:var(--r-xs);border:1px solid var(--line-2);
+  background:var(--surface);color:var(--muted);cursor:pointer}
+.mylist-more{margin-top:8px;background:none;border:none;color:var(--cyan);cursor:pointer;font-size:13px}

@@ -486,6 +486,12 @@ func main() {
 	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), "view_library"))
 	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), "view_library"))
 
+	// My List (durable, ordered, per-user media list).
+	mux.Handle("GET /api/v1/users/me/media-list", withAuth(http.HandlerFunc(handleGetMyList), "view_media"))
+	mux.Handle("POST /api/v1/users/me/media-list", withAuth(http.HandlerFunc(handleAddToMyList), "view_media"))
+	mux.Handle("DELETE /api/v1/users/me/media-list/{itemID}", withAuth(http.HandlerFunc(handleRemoveFromMyList), "view_media"))
+	mux.Handle("PUT /api/v1/users/me/media-list/order", withAuth(http.HandlerFunc(handleReorderMyList), "view_media"))
+
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
 
