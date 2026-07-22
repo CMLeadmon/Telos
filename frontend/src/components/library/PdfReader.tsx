@@ -5,6 +5,8 @@ import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 import { api, libraryContentUrl } from "@/lib/api";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { clampPage, clampZoom, pdfProgressPayload, parseStoredLocator } from "@/lib/reader";
+import { normalizeRects, selectionText } from "@/lib/pdfSelection";
+import type { AnnotationLocator } from "@/stores/useAnnotationStore";
 
 interface Progress {
   locator: { page?: number; zoom?: number };
@@ -26,9 +28,11 @@ type PdfDoc = { numPages: number; getPage: (n: number) => Promise<PdfPage>; dest
 export function PdfReader({
   book,
   onPercent,
+  onSelection,
 }: {
   book: LibraryBook;
   onPercent: (p: number) => void;
+  onSelection?: (locator: AnnotationLocator, text: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textLayerRef = useRef<HTMLDivElement>(null);
@@ -145,12 +149,26 @@ export function PdfReader({
 
   const go = (delta: number) => setPage((p) => clampPage(p + delta, total));
 
+  // A text selection over the page yields normalized per-page rectangles for an
+  // annotation. The client never asserts authorization or visibility.
+  const captureSelection = () => {
+    if (!onSelection) return;
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    const pageEl = canvasRef.current?.parentElement;
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0 || !pageEl) return;
+    const box = pageEl.getBoundingClientRect();
+    const clientRects = Array.from(sel.getRangeAt(0).getClientRects());
+    const rects = normalizeRects(box, clientRects);
+    const text = selectionText(sel.toString());
+    if (rects.length > 0 && text) onSelection({ kind: "pdf", page, rects }, text);
+  };
+
   return (
     <div className="pdf-reader" data-testid="pdf-reader">
       {error && <p className="reader-error">{error}</p>}
       {!error && opening && <p className="reader-loading">opening…</p>}
       <div className="pdf-scroll" hidden={!!error}>
-        <div className="pdf-page">
+        <div className="pdf-page" onMouseUp={captureSelection}>
           <canvas ref={canvasRef} data-testid="pdf-canvas" />
           <div ref={textLayerRef} className="pdf-text-layer" data-testid="pdf-text-layer" />
         </div>

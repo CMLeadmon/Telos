@@ -149,3 +149,40 @@
 .pdf-controls button:disabled{opacity:.4;cursor:default}
 .pdf-pageinfo{font-family:var(--f-mono);font-size:12px;color:var(--muted);min-width:70px;text-align:center}
 .epub-reader{flex:1;position:relative;min-height:0;display:flex}
+
+/* Reader body + annotation panel layout */
+.reader-body{flex:1;display:flex;min-height:0}
+.reader-main{flex:1;position:relative;display:flex;flex-direction:column;min-width:0}
+.reader-side{width:320px;flex:none;border-left:1px solid var(--line-2);background:var(--surface);
+  overflow-y:auto;display:flex;flex-direction:column}
+@media (max-width:820px){.reader-side{display:none}}
+.annot-panel{display:flex;flex-direction:column}
+.annot-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line-2)}
+.annot-head h3{margin:0;font-size:14px}
+.annot-filters{display:flex;gap:4px}
+.annot-filters button{font-size:12px;padding:4px 10px;border:1px solid var(--line-2);border-radius:var(--r-pill);
+  background:var(--surface-2);color:var(--muted);cursor:pointer}
+.annot-filters button[aria-selected="true"]{color:var(--cyan);border-color:var(--cyan)}
+.annot-list{list-style:none;margin:0;padding:0}
+.annot-row{padding:12px 14px;border-bottom:1px solid var(--line)}
+.annot-row.focused{background:rgba(2,181,255,.06)}
+.annot-quote{margin:0 0 6px;padding-left:8px;border-left:2px solid var(--line-2);color:var(--muted);font-size:12px}
+.annot-note{margin:0 0 6px;font-size:13px;color:var(--ink)}
+.annot-meta{display:flex;align-items:center;gap:8px;font-size:11px}
+.annot-meta button{background:none;border:none;color:var(--cyan);cursor:pointer;font-size:11px}
+.annot-vis{font-family:var(--f-mono);text-transform:uppercase;letter-spacing:.08em;color:var(--faint)}
+.annot-vis.community{color:var(--cyan)}
+.annot-replies{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.annot-reply{margin:0 0 4px;font-size:12px;color:var(--muted)}
+.annot-reply-composer input{width:100%;padding:6px 8px;border:1px solid var(--line-2);border-radius:var(--r-xs);
+  background:var(--surface-2);color:var(--ink);font-size:12px}
+.annot-editor{padding:12px 14px;border-bottom:1px solid var(--line-2);display:flex;flex-direction:column;gap:8px}
+.annot-editor textarea{min-height:70px;padding:8px;border:1px solid var(--line-2);border-radius:var(--r-xs);
+  background:var(--surface-2);color:var(--ink);font-size:13px;resize:vertical}
+.annot-visibility{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+.annot-actions{display:flex;gap:8px}
+.annot-actions button{padding:4px 12px;border-radius:var(--r-xs);border:none;background:var(--rose);color:#000;
+  font-size:12px;cursor:pointer}
+.annot-actions .annot-cancel{background:transparent;border:1px solid var(--line-2);color:var(--muted)}
+.annot-error{color:var(--rose);font-size:12px}
+.annot-empty{padding:16px 14px;color:var(--muted);font-size:13px}

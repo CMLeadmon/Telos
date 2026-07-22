@@ -6,6 +6,7 @@ import type { Book, Rendition } from "epubjs";
 import { api, libraryContentUrl } from "@/lib/api";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { epubProgressPayload, parseStoredLocator } from "@/lib/reader";
+import type { AnnotationLocator } from "@/stores/useAnnotationStore";
 
 interface Progress {
   locator: { cfi?: string; fraction?: number };
@@ -23,10 +24,12 @@ export function EpubReader({
   book,
   onClose,
   onPercent,
+  onSelection,
 }: {
   book: LibraryBook;
   onClose: () => void;
   onPercent: (p: number) => void;
+  onSelection?: (locator: AnnotationLocator, text: string) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const renditionRef = useRef<Rendition | null>(null);
@@ -74,6 +77,11 @@ export function EpubReader({
           if (e.key === "ArrowLeft") rendition.prev();
           if (e.key === "ArrowRight") rendition.next();
         });
+        // A highlight selection yields a CFI range locator for an annotation.
+        rendition.on("selected", (cfiRange: string, contents: { window: Window }) => {
+          const text = contents.window.getSelection?.()?.toString() ?? "";
+          onSelection?.({ kind: "epub", cfi: cfiRange }, text);
+        });
 
         await rendition.display(stored?.kind === "epub" ? stored.cfi : undefined);
         if (disposed) return;
@@ -100,7 +108,7 @@ export function EpubReader({
       epub?.destroy();
       host.replaceChildren();
     };
-  }, [book.id, onClose, onPercent]);
+  }, [book.id, onClose, onPercent, onSelection]);
 
   return (
     <div className="epub-reader" data-testid="epub-reader">

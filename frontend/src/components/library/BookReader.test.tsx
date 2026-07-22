@@ -9,6 +9,9 @@ vi.mock("./EpubReader", () => ({
 vi.mock("./PdfReader", () => ({
   PdfReader: () => <div data-testid="pdf-reader">pdf</div>,
 }));
+vi.mock("./AnnotationPanel", () => ({
+  AnnotationPanel: () => <div data-testid="annotation-panel">panel</div>,
+}));
 
 import { BookReader } from "./BookReader";
 import type { LibraryBook } from "@/stores/useLibraryStore";
