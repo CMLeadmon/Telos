@@ -9,6 +9,7 @@ import { ChatMessage } from "@/components/chat/ChatMessage";
 import { EmojiPicker } from "@/components/chat/EmojiPicker";
 import { MentionAutocomplete, type SearchUser } from "@/components/chat/MentionAutocomplete";
 import { SharePicker } from "@/components/chat/SharePicker";
+import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { api } from "@/lib/api";
 
 interface ShareItemMetadata {
@@ -376,6 +377,7 @@ export default function ChatPage() {
           }}
         />
       )}
+      <ThreadPanel />
     </>
   );
 }

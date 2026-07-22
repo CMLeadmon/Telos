@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Smile, Edit2, Trash2, Pin } from "lucide-react";
+import { Smile, Edit2, Trash2, Pin, MessagesSquare } from "lucide-react";
 import { ChatMessage as ChatMessageType, useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { apiBase } from "@/lib/api";
@@ -24,7 +24,8 @@ interface ChatMessageProps {
 }
 
 export function ChatMessage({ message, canModerate }: ChatMessageProps) {
-  const { editMessage, deleteMessage, toggleReaction, togglePin } = useChatSessionStore();
+  const { editMessage, deleteMessage, toggleReaction, togglePin, openThread } =
+    useChatSessionStore();
   const currentUser = useAuthStore((s) => s.user);
   const myId = currentUser?.ID;
   const isOwn = message.senderId === myId;
@@ -85,6 +86,14 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
             />
           )}
         </div>
+        <button
+          className="iconbtn action-btn"
+          title="Reply in thread"
+          aria-label="Reply in thread"
+          onClick={() => void openThread(message)}
+        >
+          <MessagesSquare size={16} />
+        </button>
         {canModerate && (
           <button
             className={`iconbtn action-btn${message.pinned ? " on" : ""}`}

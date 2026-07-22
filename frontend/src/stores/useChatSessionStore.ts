@@ -1,6 +1,25 @@
 import { create } from "zustand";
-import { api, wsBase } from "@/lib/api";
+import { api, ApiError, wsBase } from "@/lib/api";
 import { useAuthStore } from "./useAuthStore";
+
+// mergeReplies upserts replies by id (idempotent with socket delivery) and
+// keeps ascending order.
+function mergeReplies(existing: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>();
+  for (const m of existing) byId.set(m.id, m);
+  for (const m of incoming) byId.set(m.id, m);
+  return Array.from(byId.values()).sort((a, b) => {
+    const ta = a.timestamp ?? "";
+    const tb = b.timestamp ?? "";
+    if (ta === tb) return a.id < b.id ? -1 : 1;
+    return ta < tb ? -1 : 1;
+  });
+}
+
+function apiMessage(e: unknown): string {
+  if (e instanceof ApiError) return e.message;
+  return "Something went wrong.";
+}
 
 export interface Channel {
   id: string;
@@ -82,6 +101,31 @@ interface ChatSessionState {
   deleteMessage: (id: string) => Promise<void>;
   toggleReaction: (messageId: string, emoji: string) => Promise<void>;
   togglePin: (messageId: string) => Promise<void>;
+
+  // One-level threads.
+  activeThreadRoot: ChatMessage | null;
+  threadReplies: ChatMessage[];
+  threadNextCursor: string | null;
+  threadStatus: "idle" | "loading" | "ready" | "error";
+  threadDraftError: string | null;
+  // A stable client mutation id retained with the current unacknowledged draft
+  // so every retry maps to the same durable message.
+  pendingReplyMutationId: string | null;
+  openThread: (root: ChatMessage) => Promise<void>;
+  loadMoreReplies: () => Promise<void>;
+  sendReply: (content: string) => Promise<void>;
+  closeThread: () => void;
+}
+
+interface ReplyPage {
+  items: ChatMessage[];
+  nextCursor?: string;
+}
+
+// newMutationId returns a stable idempotency key for a draft submission.
+function newMutationId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
+  return `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 let socket: WebSocket | null = null;
@@ -115,9 +159,91 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
   onlineCount: 0,
   pins: [],
 
+  activeThreadRoot: null,
+  threadReplies: [],
+  threadNextCursor: null,
+  threadStatus: "idle",
+  threadDraftError: null,
+  pendingReplyMutationId: null,
+
   fetchChannels: async () => {
     const channels = await api<Channel[]>("/api/v1/channels");
     set({ channels });
+  },
+
+  openThread: async (root) => {
+    set({
+      activeThreadRoot: root,
+      threadReplies: [],
+      threadNextCursor: null,
+      threadStatus: "loading",
+      threadDraftError: null,
+      pendingReplyMutationId: null,
+    });
+    const channelId = get().activeChannelId;
+    if (!channelId) return;
+    try {
+      const page = await api<ReplyPage>(
+        `/api/v1/channels/${channelId}/messages/${root.id}/replies?limit=50`,
+      );
+      set({ threadReplies: page.items ?? [], threadNextCursor: page.nextCursor ?? null, threadStatus: "ready" });
+    } catch (e) {
+      set({ threadStatus: "error", threadDraftError: apiMessage(e) });
+    }
+  },
+
+  loadMoreReplies: async () => {
+    const { activeThreadRoot, threadNextCursor, activeChannelId, threadStatus } = get();
+    if (!activeThreadRoot || !threadNextCursor || !activeChannelId || threadStatus === "loading") return;
+    set({ threadStatus: "loading" });
+    try {
+      const page = await api<ReplyPage>(
+        `/api/v1/channels/${activeChannelId}/messages/${activeThreadRoot.id}/replies?limit=50&cursor=${encodeURIComponent(threadNextCursor)}`,
+      );
+      set((s) => ({
+        threadReplies: mergeReplies(s.threadReplies, page.items ?? []),
+        threadNextCursor: page.nextCursor ?? null,
+        threadStatus: "ready",
+      }));
+    } catch (e) {
+      set({ threadStatus: "error", threadDraftError: apiMessage(e) });
+    }
+  },
+
+  sendReply: async (content) => {
+    const { activeThreadRoot, activeChannelId } = get();
+    if (!activeThreadRoot || !activeChannelId || !content.trim()) return;
+    // One mutation id per draft, reused across retries until acknowledgement.
+    const mutationId = get().pendingReplyMutationId ?? newMutationId();
+    set({ pendingReplyMutationId: mutationId, threadDraftError: null });
+    try {
+      const res = await api<{ message: ChatMessage }>(
+        `/api/v1/channels/${activeChannelId}/messages/${activeThreadRoot.id}/replies`,
+        { method: "POST", body: JSON.stringify({ content, clientMutationId: mutationId }) },
+      );
+      // Acknowledged: merge by id (idempotent with any socket delivery) and
+      // clear the draft's mutation id so the input can be cleared.
+      set((s) => ({
+        threadReplies: mergeReplies(s.threadReplies, res.message ? [res.message] : []),
+        pendingReplyMutationId: null,
+        threadDraftError: null,
+      }));
+    } catch (e) {
+      // Preserve the draft + mutation id so a retry maps to one message.
+      set({ threadDraftError: apiMessage(e) });
+      throw e;
+    }
+  },
+
+  closeThread: () => {
+    set({
+      activeThreadRoot: null,
+      threadReplies: [],
+      threadNextCursor: null,
+      threadStatus: "idle",
+      threadDraftError: null,
+      pendingReplyMutationId: null,
+    });
   },
 
   connect: (channelId) => {
