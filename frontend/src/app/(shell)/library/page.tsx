@@ -168,17 +168,20 @@ function BookCard({
 }) {
   const [coverBroken, setCoverBroken] = useState(false);
   const isEpub = book.format === "EPUB";
+  // Both EPUB and PDF open in-app; only an unreadable format falls back to a tab.
+  const readable = book.format === "EPUB" || book.format === "PDF";
   const open = () => {
-    if (isEpub) onRead();
+    if (readable) onRead();
     else window.open(libraryContentUrl(book.id), "_blank", "noopener");
   };
   return (
     <article
       className="library-card"
       data-testid="library-card"
+      data-format={book.format}
       role="button"
       tabIndex={0}
-      aria-label={`${isEpub ? "read" : "open"} ${book.title}`}
+      aria-label={`${readable ? "read" : "open"} ${book.title}`}
       onClick={open}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {

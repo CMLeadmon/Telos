@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net"
 	"net/http"
@@ -922,11 +923,94 @@ func validateProgress(raw []byte) ([]byte, float64, error) {
 	return locator, body.Percent, nil
 }
 
+// validateBookProgress server-validates a reading position against the book's
+// format. An EPUB locator must be {cfi:string, fraction:0..1}; a PDF locator must
+// be {page:>=1, zoom:0.1..10}. Mixed keys, nonfinite, negative, or out-of-range
+// values are rejected so no client can persist an incoherent position.
+func validateBookProgress(format string, raw []byte) ([]byte, float64, error) {
+	locator, percent, err := validateProgress(raw)
+	if err != nil {
+		return nil, 0, err
+	}
+	var loc map[string]json.RawMessage
+	if err := json.Unmarshal(locator, &loc); err != nil {
+		return nil, 0, errors.New("locator must be a JSON object")
+	}
+
+	_, hasCFI := loc["cfi"]
+	_, hasFraction := loc["fraction"]
+	_, hasPage := loc["page"]
+	_, hasZoom := loc["zoom"]
+
+	switch strings.ToLower(format) {
+	case "epub":
+		if hasPage || hasZoom {
+			return nil, 0, errors.New("epub locator must not carry pdf fields")
+		}
+		var cfi string
+		if err := json.Unmarshal(loc["cfi"], &cfi); err != nil || strings.TrimSpace(cfi) == "" || len(cfi) > 1024 {
+			return nil, 0, errors.New("epub locator requires a valid cfi")
+		}
+		if err := validateFractionField(loc["fraction"]); err != nil {
+			return nil, 0, err
+		}
+	case "pdf":
+		if hasCFI || hasFraction {
+			return nil, 0, errors.New("pdf locator must not carry epub fields")
+		}
+		if err := validatePDFPageField(loc["page"]); err != nil {
+			return nil, 0, err
+		}
+		if err := validateZoomField(loc["zoom"]); err != nil {
+			return nil, 0, err
+		}
+	default:
+		return nil, 0, errors.New("unsupported book format")
+	}
+	return locator, percent, nil
+}
+
+func validateFractionField(raw json.RawMessage) error {
+	var f float64
+	if err := json.Unmarshal(raw, &f); err != nil {
+		return errors.New("fraction must be a number")
+	}
+	if math.IsNaN(f) || math.IsInf(f, 0) || f < 0 || f > 1 {
+		return errors.New("fraction must be between 0 and 1")
+	}
+	return nil
+}
+
+func validatePDFPageField(raw json.RawMessage) error {
+	var p float64
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return errors.New("page must be a number")
+	}
+	if math.IsNaN(p) || math.IsInf(p, 0) || p < 1 || p != math.Trunc(p) || p > 100000 {
+		return errors.New("page must be a positive integer")
+	}
+	return nil
+}
+
+func validateZoomField(raw json.RawMessage) error {
+	var z float64
+	if err := json.Unmarshal(raw, &z); err != nil {
+		return errors.New("zoom must be a number")
+	}
+	if math.IsNaN(z) || math.IsInf(z, 0) || z < 0.1 || z > 10 {
+		return errors.New("zoom must be between 0.1 and 10")
+	}
+	return nil
+}
+
 func handleGetBookProgress(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
 	id, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	if !authorizeBookHTTP(w, r, id, BookRead) {
 		return
 	}
 	var locator []byte
@@ -954,12 +1038,23 @@ func handlePutBookProgress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
 		return
 	}
+	if !authorizeBookHTTP(w, r, id, BookRead) {
+		return
+	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
 	if err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
-	locator, percent, err := validateProgress(raw)
+	// The format is server-derived so the locator is validated for the real book.
+	reqCtx, cancel := upstreamRequestContext(r.Context())
+	defer cancel()
+	book, berr := fetchGrimmoryBook(reqCtx, id)
+	if berr != nil {
+		writeLibraryError(w, http.StatusBadGateway, "the book service is unavailable")
+		return
+	}
+	locator, percent, err := validateBookProgress(book.Format, raw)
 	if err != nil {
 		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 		return

@@ -134,3 +134,18 @@
   .book-manage-form{grid-template-columns:1fr}.book-manage-wide{grid-column:auto}
   .book-cover-controls,.book-danger-zone{flex-direction:column}
 }
+
+/* In-app PDF reader */
+.pdf-reader{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+.pdf-scroll{flex:1;overflow:auto;display:flex;justify-content:center;padding:16px;background:var(--surface-2)}
+.pdf-page{position:relative}
+.pdf-page canvas{display:block;box-shadow:0 2px 16px rgba(0,0,0,.35)}
+.pdf-text-layer{position:absolute;inset:0;overflow:hidden;opacity:.2;line-height:1;user-select:text}
+.pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent}
+.pdf-controls{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px;
+  border-top:1px solid var(--line-2);background:var(--surface)}
+.pdf-controls button{width:32px;height:32px;border-radius:var(--r-xs);border:1px solid var(--line-2);
+  background:var(--surface-2);color:var(--ink);display:flex;align-items:center;justify-content:center;cursor:pointer}
+.pdf-controls button:disabled{opacity:.4;cursor:default}
+.pdf-pageinfo{font-family:var(--f-mono);font-size:12px;color:var(--muted);min-width:70px;text-align:center}
+.epub-reader{flex:1;position:relative;min-height:0;display:flex}

@@ -247,6 +247,33 @@ func TestValidateProgress(t *testing.T) {
 	}
 }
 
+func TestValidateBookProgressFormatSpecific(t *testing.T) {
+	cases := []struct {
+		name, format, in string
+		ok               bool
+	}{
+		// EPUB
+		{"EPUBProgress valid", "EPUB", `{"locator":{"cfi":"epubcfi(/6/4!/4)","fraction":0.4},"percent":0.4}`, true},
+		{"EPUBProgress empty cfi", "EPUB", `{"locator":{"cfi":"","fraction":0.4},"percent":0.4}`, false},
+		{"EPUBProgress fraction oob", "EPUB", `{"locator":{"cfi":"x","fraction":1.4},"percent":0.4}`, false},
+		{"EPUBProgress mixed pdf fields", "EPUB", `{"locator":{"cfi":"x","fraction":0.4,"page":2},"percent":0.4}`, false},
+		// PDF
+		{"PDFProgress valid", "PDF", `{"locator":{"page":12,"zoom":1.5},"percent":0.3}`, true},
+		{"PDFProgress page zero", "PDF", `{"locator":{"page":0,"zoom":1},"percent":0.3}`, false},
+		{"PDFProgress fractional page", "PDF", `{"locator":{"page":2.5,"zoom":1},"percent":0.3}`, false},
+		{"PDFProgress zoom oob", "PDF", `{"locator":{"page":1,"zoom":99},"percent":0.3}`, false},
+		{"PDFProgress mixed epub fields", "PDF", `{"locator":{"page":1,"zoom":1,"cfi":"x"},"percent":0.3}`, false},
+		// Unknown format
+		{"BookProgress unknown format", "mobi", `{"locator":{"page":1,"zoom":1},"percent":0.3}`, false},
+	}
+	for _, c := range cases {
+		_, _, err := validateBookProgress(c.format, []byte(c.in))
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err=%v, want ok=%v", c.name, err, c.ok)
+		}
+	}
+}
+
 func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T) {
 	var forwarded map[string]any
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
