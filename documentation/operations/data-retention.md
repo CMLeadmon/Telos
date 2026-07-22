@@ -16,6 +16,7 @@ invalidated before success is reported.
 | Reactions (`message_reactions`) | Deleted |
 | Channel read state (`channel_reads`) | Deleted |
 | Notifications (`notifications`) | Deleted |
+| User-event stream (`user_events` where `recipient_id`) | Deleted |
 | Private uploads and avatars (`files` where `purpose <> 'shared'`) | Row deleted; physical asset queued for removal |
 | Shared community files (`files` where `purpose = 'shared'`) | Retained |
 | Public chat messages | Retained, authored by the anonymized user |

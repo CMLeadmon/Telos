@@ -949,15 +949,35 @@ func handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
-	if _, err := dbPool.Exec(ctx, `UPDATE users SET password_hash = $1 WHERE id = $2`, newHash, user.ID); err != nil {
+	// Change the password, revoke every other session, and record the
+	// account_security event (which materializes an in-app notification) in one
+	// transaction so a partial change can never publish an unnotified state.
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $1 WHERE id = $2`, newHash, user.ID); err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 	// Revoke every other session — a changed password invalidates old devices.
-	dbPool.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
 		UPDATE sessions SET revoked_at = NOW()
 		WHERE user_id = $1 AND revoked_at IS NULL AND token_hash <> $2
-	`, user.ID, currentTokenHash(r))
+	`, user.ID, currentTokenHash(r)); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if err := securityEvents.Record(ctx, tx, SecurityEventIntent{Kind: "password_changed", ActorID: user.ID, SubjectID: user.ID}); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	// Close the user's live sockets; the current tab reconnects with its
 	// still-valid session.
 	revokeUserSockets(user.ID)

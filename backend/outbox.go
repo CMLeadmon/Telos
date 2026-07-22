@@ -57,15 +57,46 @@ func (OutboxSecurityEventSink) Record(ctx context.Context, tx pgx.Tx, intent Sec
 	// Idempotency key ties the event to the actor/subject/resource/kind so a
 	// retried mutation produces exactly one durable event.
 	key := "sec:" + intent.Kind + ":" + intent.ActorID + ":" + intent.SubjectID + ":" + intent.ResourceID
-	_, err := EnqueueOutbox(ctx, tx, OutboxEvent{
+	if _, err := EnqueueOutbox(ctx, tx, OutboxEvent{
 		Topic:          "telos:events:security",
 		EventType:      intent.Kind,
 		AggregateType:  "user",
 		AggregateID:    intent.SubjectID,
 		IdempotencyKey: key,
 		Payload:        payload,
-	})
-	return err
+	}); err != nil {
+		return err
+	}
+
+	// Materialize an account_security in-app notification for the affected user
+	// on the kinds the recipient should see. The public payload names only the
+	// event kind — never a credential or session token. An inactive recipient
+	// keeps the notification for their next authorized login.
+	if intent.SubjectID != "" && accountSecurityNotifyKinds[intent.Kind] {
+		notifPayload, _ := json.Marshal(map[string]string{"event": intent.Kind})
+		if _, err := CreateNotification(ctx, tx, NotificationInput{
+			RecipientID:    intent.SubjectID,
+			ActorID:        intent.ActorID,
+			Kind:           NotifyAccountSecurity,
+			ResourceType:   "account",
+			ResourceID:     intent.SubjectID,
+			IdempotencyKey: "notif:" + key,
+			Payload:        notifPayload,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// accountSecurityNotifykinds are the security intents that also produce an
+// in-app notification for the affected user. Bootstrap/invite/deletion do not.
+var accountSecurityNotifyKinds = map[string]bool{
+	"roles_changed":    true,
+	"account_enabled":  true,
+	"account_disabled": true,
+	"password_changed": true,
+	"sessions_revoked": true,
 }
 
 // OutboxDispatcher claims and publishes pending outbox rows.

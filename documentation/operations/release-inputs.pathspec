@@ -161,3 +161,9 @@ config/egress/allowed-domains.txt
 scripts/tests/egress_test.sh
 documentation/operations/controlled-egress.md
 scripts/check-product-truth.sh
+backend/db/migrations/0013_notifications.sql
+backend/notifications.go
+backend/notifications_test.go
+backend/events.go
+backend/events_test.go
+backend/notification_handlers.go

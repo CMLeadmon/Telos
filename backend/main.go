@@ -464,6 +464,14 @@ func main() {
 	mux.Handle("DELETE /api/v1/folders/{id}", withAuth(http.HandlerFunc(handleDeleteFolder), "manage_files"))
 	mux.Handle("GET /api/v1/files/audit", withAuth(http.HandlerFunc(handleListFileAudit), "manage_files"))
 
+	// In-app notifications + recipient-scoped user-event stream.
+	mux.Handle("GET /api/v1/notifications", withAuth(http.HandlerFunc(handleListNotifications), ""))
+	mux.Handle("GET /api/v1/notifications/unread-count", withAuth(http.HandlerFunc(handleUnreadCount), ""))
+	mux.Handle("PUT /api/v1/notifications/{id}/read", withAuth(http.HandlerFunc(handleMarkNotificationRead), ""))
+	mux.Handle("PUT /api/v1/notifications/read-all", withAuth(http.HandlerFunc(handleMarkAllNotificationsRead), ""))
+	mux.Handle("GET /api/v1/events", withAuth(http.HandlerFunc(handleEventsCatchUp), ""))
+	mux.Handle("GET /api/v1/events/ws", withAuth(http.HandlerFunc(handleEventsWS), ""))
+
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
 
