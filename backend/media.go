@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -300,4 +302,129 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr, token st
 	// Item-level authorization is added in Phase 4 (JellyfinAuthorizer); the
 	// handlers already validate the item ID shape before reaching here.
 	proxyUpstream(w, r, target, policy, func(context.Context) error { return nil })
+}
+
+// hlsMintFor returns a locator-minting closure bound to this request's item,
+// user, and session, so every rewritten URI is unforgeable and non-replayable.
+func hlsMintFor(r *http.Request, itemID string) (func(resourcePath string) string, bool) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil {
+		return nil, false
+	}
+	token, err := sessionTokenFromRequest(r)
+	if err != nil {
+		return nil, false
+	}
+	sess := hlsSessionBinding(token)
+	now := time.Now()
+	return func(resourcePath string) string {
+		return mintHLSLocatorURL(itemID, user.ID, sess, resourcePath, now)
+	}, true
+}
+
+// serveRewrittenManifest fetches an HLS manifest from Jellyfin server-side,
+// rewrites every URI to an opaque Telos locator (stripping upstream tokens), and
+// serves it. The browser never sees an upstream hostname, path credential, or
+// admin token.
+func serveRewrittenManifest(w http.ResponseWriter, r *http.Request, itemID, subpath, rawQuery string) {
+	mint, ok := hlsMintFor(r, itemID)
+	if !ok {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+
+	target := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, itemID, subpath)
+	if filtered := filterHLSQuery(rawQuery); filtered != "" {
+		target += "?" + filtered
+	}
+	reqCtx, cancel := upstreamRequestContext(r.Context())
+	defer cancel()
+	upReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, target, nil)
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "proxy_error", "The request could not be prepared.")
+		return
+	}
+	upReq.Header.Set("X-Emby-Token", getJellyfinAdminToken())
+	resp, err := upstreamHTTPClient.Do(upReq)
+	if err != nil {
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "An upstream service is unavailable.")
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_error", "The upstream returned an unexpected response.")
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxHLSBytes+1))
+	if err != nil || len(body) > maxHLSBytes {
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_error", "The manifest could not be read.")
+		return
+	}
+	rewritten, err := rewriteHLSManifest(body, itemID, mint)
+	if err != nil {
+		log.Printf("hls: manifest rewrite rejected request_id=%s item=%s: %v", requestIDFrom(r.Context()), itemID, err)
+		writeAPIError(w, r, http.StatusBadGateway, "upstream_error", "The manifest could not be served.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method != http.MethodHead {
+		w.Write(rewritten)
+	}
+}
+
+// handleHLSResource serves an opaque HLS locator: it authenticates the locator,
+// re-checks that it belongs to the current user and session, reauthorizes the
+// item, and proxies (or re-rewrites, for a sub-manifest) the bound resource.
+func handleHLSResource(w http.ResponseWriter, r *http.Request) {
+	locator := r.PathValue("locator")
+	loc, err := verifyHLSLocator(locator, time.Now())
+	if err != nil {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	// Bind to the current session and user; a locator minted for another
+	// session or user is indistinguishably not found.
+	token, terr := sessionTokenFromRequest(r)
+	if terr != nil || hlsSessionBinding(token) != loc.Sess {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID != loc.User {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	if !validJellyfinID(loc.Item) {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	// Reauthorize the item on every locator hit (membership may have changed).
+	if !authorizeJellyfinItem(w, r, loc.Item) {
+		return
+	}
+	subpath, rawQuery, err := splitResourcePath(loc.Res)
+	if err != nil {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	if strings.HasSuffix(subpath, ".m3u8") {
+		serveRewrittenManifest(w, r, loc.Item, subpath, rawQuery)
+		return
+	}
+	// Binary segment/key/map: admit against long-stream capacity before opening
+	// any upstream work, then proxy with the media policy. The stored query is
+	// already token-free and allowlisted; the browser query is ignored.
+	release, ok := acquireStreamSlot(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	target := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, loc.Item, subpath)
+	if rawQuery != "" {
+		target += "?" + rawQuery
+	}
+	proxyRequest(w, r, target, getJellyfinAdminToken(), nil)
 }

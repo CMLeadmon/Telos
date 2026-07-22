@@ -95,7 +95,7 @@ func getGrimmoryToken(ctx context.Context) (string, error) {
 
 // grimmoryRequest performs one explicit authenticated upstream request,
 // re-logging-in once on 401 (for example after a Grimmory restart).
-func grimmoryRequest(ctx context.Context, client *http.Client, method, path, contentType string, body []byte) (*http.Response, error) {
+func grimmoryRequest(ctx context.Context, client *http.Client, method, path, contentType string, body []byte, extra http.Header) (*http.Response, error) {
 	do := func(tok string) (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, method, grimmoryBaseURL+path, bytes.NewReader(body))
 		if err != nil {
@@ -104,6 +104,13 @@ func grimmoryRequest(ctx context.Context, client *http.Client, method, path, con
 		req.Header.Set("Authorization", "Bearer "+tok)
 		if contentType != "" {
 			req.Header.Set("Content-Type", contentType)
+		}
+		// Forward only allowlisted range/conditional request headers, never the
+		// browser's cookies, Authorization, or arbitrary headers.
+		for name := range extra {
+			if v := extra.Values(name); len(v) > 0 {
+				req.Header[http.CanonicalHeaderKey(name)] = append([]string(nil), v...)
+			}
 		}
 		return client.Do(req)
 	}
@@ -126,7 +133,7 @@ func grimmoryRequest(ctx context.Context, client *http.Client, method, path, con
 }
 
 func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
-	return grimmoryRequest(ctx, upstreamHTTPClient, http.MethodGet, path, "", nil)
+	return grimmoryRequest(ctx, upstreamHTTPClient, http.MethodGet, path, "", nil, nil)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -453,7 +460,7 @@ func handleUpdateLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := upstreamRequestContext(r.Context())
 	path := "/api/v1/books/" + id + "/metadata?mergeCategories=false&replaceMode=REPLACE_WHEN_PROVIDED"
-	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodPut, path, "application/json", payload)
+	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodPut, path, "application/json", payload, nil)
 	if err != nil {
 		cancel()
 		writeLibraryError(w, http.StatusBadGateway, "Grimmory unavailable")
@@ -561,7 +568,7 @@ func handleFetchLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	resp, err := grimmoryRequest(ctx, grimmoryMetadataHTTPClient, http.MethodPost,
-		"/api/v1/books/"+id+"/metadata/prospective", "application/json", payload)
+		"/api/v1/books/"+id+"/metadata/prospective", "application/json", payload, nil)
 	if err != nil {
 		writeLibraryError(w, http.StatusBadGateway, "metadata providers unavailable")
 		return
@@ -708,7 +715,7 @@ func forwardCoverToGrimmory(ctx context.Context, id string, data []byte, content
 		return nil, err
 	}
 	return grimmoryRequest(ctx, upstreamHTTPClient, http.MethodPost,
-		"/api/v1/books/"+id+"/metadata/cover/upload", writer.FormDataContentType(), body.Bytes())
+		"/api/v1/books/"+id+"/metadata/cover/upload", writer.FormDataContentType(), body.Bytes(), nil)
 }
 
 func handleUpdateLibraryBookCover(w http.ResponseWriter, r *http.Request) {
@@ -769,7 +776,7 @@ func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := upstreamRequestContext(r.Context())
 	defer cancel()
 	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodDelete,
-		"/api/v1/books?ids="+url.QueryEscape(id), "", nil)
+		"/api/v1/books?ids="+url.QueryEscape(id), "", nil, nil)
 	if err != nil {
 		writeLibraryError(w, http.StatusBadGateway, "Grimmory unavailable")
 		return
@@ -792,17 +799,31 @@ func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
 // Library — cover & content proxies
 // ═══════════════════════════════════════════════════════════════════════════
 
+// grimmoryBinaryResponseHeaders are the upstream response headers propagated for
+// a book binary. Range/validator headers must survive so 206/304 work.
+var grimmoryBinaryResponseHeaders = []string{
+	"Content-Range", "Accept-Ranges", "Content-Length", "ETag", "Last-Modified",
+}
+
 func proxyGrimmoryBinary(w http.ResponseWriter, r *http.Request, path, forceContentType string) {
-	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
-	defer cancel()
-	resp, err := grimmoryGET(ctx, path)
+	// No total-transfer deadline: a large EPUB/PDF over a slow client must not be
+	// aborted mid-stream. The upstream client keeps a bounded response-header
+	// timeout, and r.Context() cancellation closes the body on client disconnect.
+	extra := http.Header{}
+	for name := range rangeRequestHeaders {
+		if v := r.Header.Values(name); len(v) > 0 {
+			extra[http.CanonicalHeaderKey(name)] = append([]string(nil), v...)
+		}
+	}
+	resp, err := grimmoryRequest(r.Context(), upstreamHTTPClient, http.MethodGet, path, "", nil, extra)
 	if err != nil {
 		log.Printf("library: grimmory binary fetch failed request_id=%s: %v", requestIDFrom(r.Context()), err)
 		writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "The book service is unavailable.")
 		return
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	// Accept OK, Partial Content, and Not Modified; anything else is an error.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusNotModified {
 		log.Printf("library: grimmory binary status request_id=%s: %s", requestIDFrom(r.Context()), resp.Status)
 		writeAPIError(w, r, http.StatusBadGateway, "upstream_error", "The book service returned an error.")
 		return
@@ -811,10 +832,20 @@ func proxyGrimmoryBinary(w http.ResponseWriter, r *http.Request, path, forceCont
 	if forceContentType != "" {
 		ct = forceContentType
 	}
-	w.Header().Set("Content-Type", ct)
+	if ct != "" {
+		w.Header().Set("Content-Type", ct)
+	}
+	for _, name := range grimmoryBinaryResponseHeaders {
+		if v := resp.Header.Values(name); len(v) > 0 {
+			w.Header()[http.CanonicalHeaderKey(name)] = append([]string(nil), v...)
+		}
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Cache-Control", "private, max-age=300")
-	io.Copy(w, resp.Body)
+	w.WriteHeader(resp.StatusCode)
+	if r.Method != http.MethodHead && resp.StatusCode != http.StatusNotModified {
+		io.Copy(w, resp.Body)
+	}
 }
 
 func libraryBookID(r *http.Request) (string, bool) {

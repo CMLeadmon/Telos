@@ -146,3 +146,7 @@ backend/file_mutations_test.go
 backend/reconciliation.go
 backend/reconciliation_test.go
 backend/reconciliation_integration_test.go
+backend/hls.go
+backend/hls_test.go
+backend/capacity.go
+backend/capacity_test.go

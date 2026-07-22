@@ -126,6 +126,33 @@ anywhere as an available integration. Any future implementation must add purpose
 or identity endpoints; it must not restore a public administrative catch-all
 proxy.
 
+### 4.1 HLS manifest rewriting and long streams
+
+A Jellyfin HLS manifest is never relayed to the browser verbatim. `backend/hls.go`
+parses each bounded manifest (≤1 MiB, ≤10,000 lines, ≤4 KiB per URI) and rewrites
+every segment, variant, `EXT-X-KEY`, `EXT-X-MAP`, `EXT-X-MEDIA`, and iframe URI to
+an opaque `/api/v1/hls/{locator}` route. A URI is accepted only when it resolves —
+relative, absolute-path, or exact `jellyfin:8096`-origin — **beneath the authorized
+item's `/jellyfin/Videos/{id}/` prefix**; userinfo, fragments, protocol-relative and
+non-HTTP schemes, alternate hosts/IPs, traversal, and unknown URI-bearing tags fail
+the whole manifest closed. Upstream tokens (`api_key`) are stripped; only allowlisted
+stream query keys survive.
+
+Each locator is an HMAC-SHA256 token (dedicated `TELOS_HLS_SIGNING_KEY_FILE`, never a
+session or cursor key) sealing item, user, session binding, resource path, and a
+2-minute expiry. Serving a locator re-verifies the signature, confirms the current
+user and session, **reauthorizes the item**, and only then proxies (or, for a
+sub-manifest, re-rewrites) the bound resource — so a locator cannot be replayed
+across users or sessions, tampered, or outlived.
+
+Every long binary stream (audio, HLS segment) is admitted through a per-node
+`StreamCapacity` (`backend/capacity.go`) with global and per-user bounds
+(`TELOS_STREAM_MAX_CONCURRENT`, `TELOS_STREAM_MAX_PER_USER`) **before** any upstream
+work opens; excess requests get `503` and the slot releases on completion, cancel, or
+error. Book binaries carry no total-transfer deadline — a bounded response-header
+timeout plus client-disconnect cancellation replaces it — and propagate `200/206/304`
+with their range/validator headers.
+
 ## 5. Internet-facing HTTP security boundary
 
 The boundary is centralized in `backend/security.go` and configured once from

@@ -219,6 +219,19 @@ func main() {
 	}
 	cursorCodec = &hmacCursorCodec{ring: ring}
 
+	// Dedicated HLS locator signing key (never shared with session/cursor keys).
+	hlsKey, hlsErr := loadHLSSigningKey(os.Getenv("TELOS_HLS_SIGNING_KEY_FILE"), securityConfig.Environment)
+	if hlsErr != nil {
+		log.Fatalf("Critical Configuration Error: %v", hlsErr)
+	}
+	hlsSigningKey = hlsKey
+
+	// Long-stream admission control (per-node global and per-user bounds).
+	streamCapacity = newStreamCapacity(
+		envInt("TELOS_STREAM_MAX_CONCURRENT", 100),
+		envInt("TELOS_STREAM_MAX_PER_USER", 6),
+	)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -410,6 +423,7 @@ func main() {
 	mux.Handle("GET /api/v1/stream/audio/{id}", withAuth(http.HandlerFunc(handleStreamAudio), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}", withAuth(http.HandlerFunc(handleStreamVideo), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}/{path...}", withAuth(http.HandlerFunc(handleStreamVideoSubpath), "view_media"))
+	mux.Handle("GET /api/v1/hls/{locator}", withAuth(http.HandlerFunc(handleHLSResource), "view_media"))
 	// Library module routes (Grimmory-backed catalog)
 	mux.Handle("GET /api/v1/library/books", withAuth(http.HandlerFunc(handleLibraryBooks), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleLibraryBookByID), "view_library"))
@@ -3089,6 +3103,11 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	if !authorizeJellyfinItem(w, r, id) {
 		return
 	}
+	release, ok := acquireStreamSlot(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
 	proxyRequest(w, r, targetURL, token, nil)
@@ -3163,6 +3182,18 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	if !authorizeJellyfinItem(w, r, id) {
 		return
 	}
+	// A manifest is rewritten server-side so every segment/key/variant URI
+	// becomes an opaque, token-free Telos locator; only non-manifest binaries
+	// reached directly here are proxied (segments now arrive via /api/v1/hls).
+	if strings.HasSuffix(subpath, ".m3u8") {
+		serveRewrittenManifest(w, r, id, subpath, r.URL.RawQuery)
+		return
+	}
+	release, ok := acquireStreamSlot(w, r)
+	if !ok {
+		return
+	}
+	defer release()
 	token := getJellyfinAdminToken()
 	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, id, subpath)
 	proxyRequest(w, r, targetURL, token, jellyfinStreamQueryKeys)
