@@ -88,11 +88,6 @@ var frontendFS embed.FS
 // Types
 // ═══════════════════════════════════════════════════════════════════════════
 
-type HealthResponse struct {
-	Status   string            `json:"status"`
-	Services map[string]string `json:"services"`
-}
-
 type WSMessage struct {
 	ID          string            `json:"id"`
 	Sender      string            `json:"sender"`
@@ -262,6 +257,8 @@ func main() {
 		log.Fatalf("Critical: Database migration state is not current: %v", err)
 	}
 	migrateCancel()
+	// Migrations are confirmed current; readiness may now report the schema as OK.
+	migrationsVerified = true
 
 	// Initialize Redis Client
 	opt, err := redis.ParseURL(redisURL)
@@ -328,6 +325,18 @@ func main() {
 	StartFileReconciler(reconcileCtx, fileReconciler)
 	defer reconcileCancel()
 
+	// Readiness: cheap, coalesced, sanitized dependency probes. Upstream media
+	// services are required in production and advisory (warn) in development.
+	requiredUpstreams := securityConfig.Environment != "development"
+	healthService = newHealthService(
+		postgresChecker(),
+		redisChecker(),
+		outboxChecker(),
+		mountChecker("storage", "/data/shared"),
+		upstreamChecker("jellyfin", jellyfinBaseURL+"/System/Info/Public", requiredUpstreams),
+		upstreamChecker("grimmory", grimmoryBaseURL+"/api/v1/healthcheck", requiredUpstreams),
+	)
+
 	// Ensure local directories exist
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging dir: %v", err)
@@ -353,7 +362,9 @@ func main() {
 	mux := http.NewServeMux()
 
 	// Public Routes
-	mux.HandleFunc("GET /api/v1/health", handleHealth)
+	mux.HandleFunc("GET /api/v1/health/live", handleLiveness)
+	mux.HandleFunc("GET /api/v1/health/ready", handleReadiness)
+	mux.HandleFunc("GET /api/v1/health", handleReadiness)
 	mux.HandleFunc("POST /api/v1/auth/bootstrap", handleBootstrap)
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/invites/accept", handleAcceptInvite)
@@ -1165,99 +1176,7 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Handler — Health
-// ═══════════════════════════════════════════════════════════════════════════
-
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	services := make(map[string]string)
-	overallStatus := "healthy"
-
-	if dbPool == nil {
-		services["database"] = "uninitialized"
-		overallStatus = "unhealthy"
-	} else {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := dbPool.Ping(ctx); err != nil {
-			// Never surface raw driver/connection error text publicly.
-			log.Printf("health: database ping failed request_id=%s: %v", requestIDFrom(r.Context()), err)
-			services["database"] = "unhealthy"
-			overallStatus = "unhealthy"
-		} else {
-			services["database"] = "healthy"
-		}
-	}
-
-	if redisClient == nil {
-		services["redis"] = "uninitialized"
-		overallStatus = "unhealthy"
-	} else {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := redisClient.Ping(ctx).Err(); err != nil {
-			log.Printf("health: redis ping failed request_id=%s: %v", requestIDFrom(r.Context()), err)
-			services["redis"] = "unhealthy"
-			overallStatus = "unhealthy"
-		} else {
-			services["redis"] = "healthy"
-		}
-	}
-
-	type probe struct {
-		name string
-		url  string
-	}
-	probes := []probe{
-		{name: "jellyfin", url: jellyfinBaseURL + "/System/Info/Public"},
-		{name: "grimmory", url: grimmoryBaseURL + "/api/v1/healthcheck"},
-	}
-	results := make(chan struct {
-		name   string
-		status string
-	}, len(probes))
-	for _, p := range probes {
-		go func(p probe) {
-			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			req, err := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
-			if err != nil {
-				results <- struct{ name, status string }{p.name, "degraded"}
-				return
-			}
-			resp, err := upstreamHTTPClient.Do(req)
-			if err != nil {
-				results <- struct{ name, status string }{p.name, "degraded"}
-				return
-			}
-			resp.Body.Close()
-			status := "healthy"
-			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				status = "degraded"
-			}
-			results <- struct{ name, status string }{p.name, status}
-		}(p)
-	}
-	for range probes {
-		result := <-results
-		services[result.name] = result.status
-		if result.status == "degraded" && overallStatus == "healthy" {
-			overallStatus = "degraded"
-		}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if overallStatus == "unhealthy" {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
-
-	json.NewEncoder(w).Encode(HealthResponse{
-		Status:   overallStatus,
-		Services: services,
-	})
-}
+// The Health handlers (liveness/readiness) live in health.go.
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Handler — Chat / WebSocket

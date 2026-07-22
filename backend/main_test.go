@@ -127,35 +127,34 @@ func TestGenerateLiveKitToken(t *testing.T) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 func TestHandleHealth(t *testing.T) {
-	oldPool, oldRedis := dbPool, redisClient
+	oldPool, oldRedis, oldSvc := dbPool, redisClient, healthService
 	dbPool, redisClient = nil, nil
+	// A readiness service whose postgres check fails (nil pool) must report 503.
+	healthService = newHealthService(postgresChecker(), redisChecker())
 	defer func() {
-		dbPool = oldPool
-		redisClient = oldRedis
+		dbPool, redisClient, healthService = oldPool, oldRedis, oldSvc
 	}()
 
 	req := httptest.NewRequest("GET", "/api/v1/health", nil)
 	rr := httptest.NewRecorder()
-
-	handleHealth(rr, req)
+	handleReadiness(rr, req)
 
 	if rr.Code != http.StatusServiceUnavailable {
-		t.Errorf("Expected 503 Service Unavailable when DB and Redis are nil, got %d", rr.Code)
+		t.Errorf("Expected 503 when DB and Redis are nil, got %d", rr.Code)
 	}
-
-	var resp HealthResponse
+	var resp HealthReport
 	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode health response: %v", err)
 	}
+	if resp.Status != HealthFail {
+		t.Errorf("Expected overall status fail, got %q", resp.Status)
+	}
 
-	if resp.Status != "unhealthy" {
-		t.Errorf("Expected overall status to be unhealthy, got %q", resp.Status)
-	}
-	if resp.Services["database"] != "uninitialized" {
-		t.Errorf("Expected database service to be uninitialized, got %q", resp.Services["database"])
-	}
-	if resp.Services["redis"] != "uninitialized" {
-		t.Errorf("Expected redis service to be uninitialized, got %q", resp.Services["redis"])
+	// Liveness is always OK and does no dependency work.
+	lr := httptest.NewRecorder()
+	handleLiveness(lr, httptest.NewRequest("GET", "/api/v1/health/live", nil))
+	if lr.Code != http.StatusOK {
+		t.Errorf("Expected liveness 200, got %d", lr.Code)
 	}
 }
 

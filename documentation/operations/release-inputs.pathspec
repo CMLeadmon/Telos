@@ -150,3 +150,6 @@ backend/hls.go
 backend/hls_test.go
 backend/capacity.go
 backend/capacity_test.go
+backend/health.go
+backend/health_test.go
+backend/health_integration_test.go

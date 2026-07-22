@@ -112,11 +112,24 @@ podman compose config
 podman compose up -d
 ```
 
-`telos-core` has `restart: unless-stopped` and an HTTP healthcheck. `/api/v1/health`
-returns `unhealthy` with HTTP 503 when PostgreSQL or Redis is unavailable. It
-returns `degraded` with HTTP 200 when Jellyfin or Grimmory is unavailable so
-operators can alert on lost features without creating an upstream-dependent
-gateway restart loop.
+`telos-core` has `restart: unless-stopped` and splits health into liveness and
+readiness (`backend/health.go`):
+
+- **`GET /api/v1/health/live`** reports process state only — O(1), no network,
+  database, disk, or `statfs` work — so a liveness probe never restarts the
+  gateway because a dependency is slow.
+- **`GET /api/v1/health/ready`** (aliased by `/api/v1/health`, and the Compose
+  healthcheck target) runs cheap dependency probes — PostgreSQL connectivity and
+  verified migrations, Redis, a writable shared mount, and Jellyfin/Grimmory —
+  each with a 2s child timeout under a 3s overall bound. The sanitized report is
+  cached for 5 seconds and every concurrent miss coalesces onto **one** internal
+  probe (detached from any caller's cancellation), so 500 simultaneous requests
+  invoke each dependency once, never a per-request probe storm. A required
+  dependency failure returns HTTP 503; the outbox backlog warns above 100
+  pending or 30s age and fails above 1,000 or 2 minutes. Reports carry only
+  stable status codes and bounded numbers — never a hostname, path, credential,
+  or raw error. In development the media upstreams are advisory (`warn`) rather
+  than required.
 
 After first boot, use the one-time bootstrap token to create the Owner account.
 Rotate or remove `TELOS_BOOTSTRAP_TOKEN` from the runtime environment after the
