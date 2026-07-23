@@ -1,0 +1,5 @@
+{
+  "predecessorVersion": "0.1.0-alpha.1",
+  "maxSchemaMigration": 18,
+  "allowInPlaceRollback": true
+}
