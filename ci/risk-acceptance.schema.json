@@ -1,0 +1,13 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TelosRiskAcceptance",
+  "type": "object",
+  "properties": {
+    "cve": { "type": "string" },
+    "evidence": { "type": "string" },
+    "mitigation": { "type": "string" },
+    "owner": { "type": "string" },
+    "expires": { "type": "string" }
+  },
+  "required": ["cve", "evidence", "mitigation", "owner", "expires"]
+}

@@ -1,0 +1,39 @@
+name: CI Security and Quality Gates
+
+on:
+  push:
+    branches: [ main, docs-rewrite ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  backend-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Run Backend Tests & Coverage
+        run: |
+          cd backend
+          go test -race -v -coverprofile=coverage.out ./...
+
+  frontend-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Lint and Unit Test
+        run: |
+          cd frontend
+          npm ci
+          npm run lint
+          npm run test:unit
+          npm run build
+          npm run check:bundle
