@@ -1,0 +1,22 @@
+name: Publish Certified Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0-beta.1)'
+        required: true
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Pins and Build Release
+        run: |
+          bash scripts/verify-release-pins.sh
+          bash scripts/build-release.sh

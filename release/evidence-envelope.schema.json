@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "TelosEvidenceEnvelope",
+  "type": "object",
+  "properties": {
+    "candidateLockHash": { "type": "string" },
+    "status": { "type": "string" }
+  },
+  "required": ["candidateLockHash", "status"]
+}
