@@ -183,3 +183,6 @@ backend/watchparty.go
 backend/watchparty_handlers.go
 backend/watchparty_test.go
 backend/watchparty_integration_test.go
+backend/db/migrations/0018_channel_permission_overrides.sql
+backend/channel_admin.go
+backend/channel_admin_test.go

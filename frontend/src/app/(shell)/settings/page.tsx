@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   BadgeInfo,
+  Hash,
   KeyRound,
   Mail,
   Mic,
@@ -19,6 +20,7 @@ import { VoiceAudioSection } from "@/components/settings/VoiceAudioSection";
 import { AdminUsersSection } from "@/components/settings/AdminUsersSection";
 import { AdminInvitesSection } from "@/components/settings/AdminInvitesSection";
 import { AdminRolesSection } from "@/components/settings/AdminRolesSection";
+import { AdminChannelsSection } from "@/components/settings/AdminChannelsSection";
 import { CreditsSection } from "@/components/settings/CreditsSection";
 
 const SECTIONS = [
@@ -30,6 +32,7 @@ const SECTIONS = [
   { id: "users", label: "Members", icon: Users, admin: true, C: AdminUsersSection },
   { id: "invites", label: "Invites", icon: Mail, admin: true, C: AdminInvitesSection },
   { id: "roles", label: "Roles", icon: KeyRound, admin: true, C: AdminRolesSection },
+  { id: "channels", label: "Channels", icon: Hash, admin: true, C: AdminChannelsSection },
 ] as const;
 
 export default function SettingsPage() {

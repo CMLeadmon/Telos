@@ -401,6 +401,12 @@ func main() {
 	mux.Handle("DELETE /api/v1/admin/invites/{id}", withAuth(http.HandlerFunc(handleAdminRevokeInvite), "manage_community"))
 
 	// Settings — admin: roles & permissions
+	mux.Handle("POST /api/v1/admin/channels", withAuth(http.HandlerFunc(handleAdminCreateChannel), "manage_channels"))
+	mux.Handle("PATCH /api/v1/admin/channels/{id}", withAuth(http.HandlerFunc(handleAdminUpdateChannel), "manage_channels"))
+	mux.Handle("DELETE /api/v1/admin/channels/{id}", withAuth(http.HandlerFunc(handleAdminDeleteChannel), "manage_channels"))
+	mux.Handle("GET /api/v1/admin/channels/{id}/overrides", withAuth(http.HandlerFunc(handleGetChannelOverrides), "manage_channels"))
+	mux.Handle("PUT /api/v1/admin/channels/{id}/overrides", withAuth(http.HandlerFunc(handlePutChannelOverride), "manage_channels"))
+
 	mux.Handle("GET /api/v1/admin/roles", withAuth(http.HandlerFunc(handleAdminListRoles), "manage_roles"))
 	mux.Handle("GET /api/v1/admin/permissions", withAuth(http.HandlerFunc(handleAdminListPermissions), "manage_roles"))
 	mux.Handle("POST /api/v1/admin/roles", withAuth(http.HandlerFunc(handleAdminCreateRole), "manage_roles"))
@@ -739,49 +745,26 @@ func hasPermission(ctx context.Context, user *UserContext, perm string, channelI
 	}
 
 	if channelID != nil {
-		isAdmin := false
-		for _, r := range user.Roles {
-			if r == "Administrator" {
-				isAdmin = true
-				break
-			}
+		// Explicit per-(channel, role, permission) overrides apply to every
+		// non-Owner role — including Administrator and custom roles. Deny takes
+		// precedence over allow; a missing row means "inherit" (fall through to
+		// the global grant). Owner already returned true above.
+		var denied, allowed int
+		err = dbPool.QueryRow(ctx, `
+			SELECT
+				COUNT(*) FILTER (WHERE decision = 'deny'),
+				COUNT(*) FILTER (WHERE decision = 'allow')
+			FROM channel_permission_overrides
+			WHERE channel_id = $1 AND permission_id = $2 AND role_id = ANY($3)
+		`, *channelID, perm, user.Roles).Scan(&denied, &allowed)
+		if err != nil {
+			return false, err
 		}
-
-		if !isAdmin {
-			var flag int
-			switch perm {
-			case "view_channel":
-				flag = 1
-			case "send_messages":
-				flag = 2
-			case "join_voice":
-				flag = 4
-			default:
-				flag = 0
-			}
-
-			if flag > 0 {
-				var allowedCount int
-				var deniedCount int
-
-				err = dbPool.QueryRow(ctx, `
-					SELECT 
-						COUNT(CASE WHEN (deny_mask & $1) <> 0 THEN 1 END),
-						COUNT(CASE WHEN (allow_mask & $1) <> 0 THEN 1 END)
-					FROM channel_role_overrides
-					WHERE channel_id = $2 AND role_id = ANY($3)
-				`, flag, *channelID, user.Roles).Scan(&deniedCount, &allowedCount)
-				if err != nil {
-					return false, err
-				}
-
-				if deniedCount > 0 {
-					return false, nil
-				}
-				if allowedCount > 0 {
-					return true, nil
-				}
-			}
+		if denied > 0 {
+			return false, nil
+		}
+		if allowed > 0 {
+			return true, nil
 		}
 	}
 

@@ -62,10 +62,10 @@ func TestAuthorizeChannelViewDenyOverride(t *testing.T) {
 	withFixture(t)
 	ctx := context.Background()
 	chID := seedChannel(t, "restricted")
-	// Deny view (flag bit 1) for Member on this channel.
+	// Explicitly deny view_channel for Member on this channel.
 	if _, err := dbPool.Exec(ctx, `
-		INSERT INTO channel_role_overrides (channel_id, role_id, deny_mask, allow_mask)
-		VALUES ($1, 'Member', 1, 0)
+		INSERT INTO channel_permission_overrides (channel_id, role_id, permission_id, decision)
+		VALUES ($1, 'Member', 'view_channel', 'deny')
 	`, chID); err != nil {
 		t.Fatalf("seed override: %v", err)
 	}

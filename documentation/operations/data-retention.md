@@ -20,6 +20,7 @@ invalidated before success is reported.
 | Private annotations (`annotations` where `visibility = 'private'`) | Deleted |
 | My List entries + revision (`media_list_entries`, `media_lists`) | Deleted |
 | Watch Party membership/invitations/host offers | Deleted; hosted parties are ended |
+| Channel permission overrides (`channel_permission_overrides`) | Cascade-deleted when the role or channel is removed |
 | Community annotations and replies | Retained, authored by the anonymized user |
 | Private uploads and avatars (`files` where `purpose <> 'shared'`) | Row deleted; physical asset queued for removal |
 | Shared community files (`files` where `purpose = 'shared'`) | Retained |
