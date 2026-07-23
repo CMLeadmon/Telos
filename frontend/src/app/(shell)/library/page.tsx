@@ -11,6 +11,7 @@ import {
 } from "@/stores/useLibraryStore";
 import { useMediaStore, type MediaItem } from "@/stores/useMediaStore";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { hasCapability } from "@/lib/capabilities";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
@@ -249,7 +250,7 @@ export default function LibraryPage() {
     filtered,
   } = useLibraryStore();
   const canManage = useAuthStore(
-    (state) => state.user?.Permissions?.includes("manage_library") ?? false,
+    (state) => hasCapability(state.user, "manage_library"),
   );
   const [reading, setReading] = useState<LibraryBook | null>(null);
   const [managing, setManaging] = useState<LibraryBook | null>(null);

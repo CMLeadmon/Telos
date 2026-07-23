@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { hasCapability } from "@/lib/capabilities";
 import { useAnnotationStore, type AnnotationLocator } from "@/stores/useAnnotationStore";
 import { formatKind } from "@/lib/reader";
 import { EpubReader } from "./EpubReader";
@@ -18,8 +19,7 @@ interface PendingSelection {
 }
 
 // BookReader is the overlay chrome that dispatches to the format-specific
-// in-app reader and hosts the annotation panel. Neither reader library loads
-// until its reader mounts.
+// reader component (EPUB or PDF) and anchors annotations.
 export function BookReader({
   book,
   onClose,
@@ -30,7 +30,7 @@ export function BookReader({
   const [percent, setPercent] = useState(0);
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const kind = formatKind(book.format);
-  const canModerate = useAuthStore((s) => s.user?.Permissions?.includes("moderate_annotations") ?? false);
+  const canModerate = useAuthStore((s) => hasCapability(s.user, "moderate_annotations"));
   const createAnnotation = useAnnotationStore((s) => s.create);
 
   useEffect(() => {

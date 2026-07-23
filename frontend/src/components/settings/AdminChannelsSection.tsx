@@ -9,14 +9,20 @@ interface Channel {
   type: string;
 }
 
+interface RoleInfo {
+  id: string;
+  name: string;
+}
+
 type Decision = "inherit" | "allow" | "deny";
 
 // Permissions that can be overridden per channel/role.
 const OVERRIDABLE = ["view_channel", "send_messages", "join_voice"];
-const ROLES = ["Administrator", "Moderator", "Member", "Librarian", "Contributor"];
+const DEFAULT_ROLES = ["Administrator", "Moderator", "Member", "Librarian", "Contributor"];
 
 export function AdminChannelsSection() {
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [roles, setRoles] = useState<string[]>(DEFAULT_ROLES);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [type, setType] = useState("text");
@@ -31,13 +37,24 @@ export function AdminChannelsSection() {
   useEffect(() => {
     // Promise-chain loader (setState only inside .then, never synchronously in
     // the effect body) satisfies the setState-in-effect lint rule.
-    load();
+    void load();
+    api<RoleInfo[]>("/api/v1/admin/roles")
+      .then((r) => {
+        const nonOwner = r.map((role) => role.id).filter((id) => id !== "Owner");
+        if (nonOwner.length > 0) setRoles(nonOwner);
+      })
+      .catch(() => {
+        // Fall back to default non-Owner roles if endpoint fails
+      });
   }, []);
 
   const create = async () => {
     setError(null);
     try {
-      await api("/api/v1/admin/channels", { method: "POST", body: JSON.stringify({ name, type }) });
+      await api("/api/v1/admin/channels", {
+        method: "POST",
+        body: JSON.stringify({ name, type }),
+      });
       setName("");
       await load();
     } catch (e) {
@@ -61,7 +78,9 @@ export function AdminChannelsSection() {
   const openOverrides = async (id: string) => {
     setSelected(id);
     try {
-      const res = await api<{ overrides: Record<string, Record<string, Decision>> }>(`/api/v1/admin/channels/${id}/overrides`);
+      const res = await api<{ overrides: Record<string, Record<string, Decision>> }>(
+        `/api/v1/admin/channels/${id}/overrides`,
+      );
       setOverrides(res.overrides ?? {});
     } catch {
       setOverrides({});
@@ -85,11 +104,24 @@ export function AdminChannelsSection() {
   return (
     <div className="admin-channels" data-testid="admin-channels-section">
       <h2>Channels</h2>
-      {error && <p className="settings-error" role="alert" data-testid="admin-channels-error">{error}</p>}
+      {error && (
+        <p className="settings-error" role="alert" data-testid="admin-channels-error">
+          {error}
+        </p>
+      )}
 
       <div className="channel-create">
-        <input aria-label="Channel name" value={name} onChange={(e) => setName(e.target.value)} placeholder="channel-name" />
-        <select aria-label="Channel type" value={type} onChange={(e) => setType(e.target.value)}>
+        <input
+          aria-label="Channel name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="channel-name"
+        />
+        <select
+          aria-label="Channel type"
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+        >
           <option value="text">text</option>
           <option value="voice">voice</option>
         </select>
@@ -104,7 +136,10 @@ export function AdminChannelsSection() {
             <span className="channel-name">#{c.name}</span>
             <span className="channel-type">{c.type}</span>
             <button onClick={() => void openOverrides(c.id)}>Overrides</button>
-            <button onClick={() => void remove(c.id)} data-testid={`delete-channel-${c.id}`}>
+            <button
+              onClick={() => void remove(c.id)}
+              data-testid={`delete-channel-${c.id}`}
+            >
               Delete
             </button>
           </li>
@@ -124,7 +159,7 @@ export function AdminChannelsSection() {
               </tr>
             </thead>
             <tbody>
-              {ROLES.map((role) => (
+              {roles.map((role) => (
                 <tr key={role}>
                   <td>{role}</td>
                   {OVERRIDABLE.map((perm) => (
@@ -132,7 +167,9 @@ export function AdminChannelsSection() {
                       <select
                         aria-label={`${role} ${perm}`}
                         value={overrides[role]?.[perm] ?? "inherit"}
-                        onChange={(e) => void setOverride(role, perm, e.target.value as Decision)}
+                        onChange={(e) =>
+                          void setOverride(role, perm, e.target.value as Decision)
+                        }
                       >
                         <option value="inherit">inherit</option>
                         <option value="allow">allow</option>

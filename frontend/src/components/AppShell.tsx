@@ -24,16 +24,17 @@ import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
 import { useNotificationStore } from "@/stores/useNotificationStore";
 import { api, avatarUrl, wsBase } from "@/lib/api";
+import { hasCapability } from "@/lib/capabilities";
 import { BrandLogo } from "@/components/BrandLogo";
 import { NotificationInbox } from "@/components/notifications/NotificationInbox";
 import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
 
 const MODULES = [
-  { href: "/chat", label: "Chat", icon: MessageSquare },
-  { href: "/stream", label: "Stream", icon: Tv },
-  { href: "/library", label: "Library", icon: BookOpen },
-  { href: "/files", label: "Files", icon: Folder },
+  { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
+  { href: "/stream", label: "Stream", icon: Tv, capability: "view_media" },
+  { href: "/library", label: "Library", icon: BookOpen, capability: "view_library" },
+  { href: "/files", label: "Files", icon: Folder, capability: "view_files" },
 ];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -467,16 +468,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <aside className="rail">
           <div className="scroll">
             <nav className="modnav">
-              {MODULES.map(({ href, label, icon: Icon }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className={`navbtn${pathname.startsWith(href) ? " on" : ""}`}
-                >
-                  <Icon size={18} />
-                  {label}
-                </Link>
-              ))}
+              {MODULES.filter((m) => hasCapability(user, m.capability)).map(
+                ({ href, label, icon: Icon }) => (
+                  <Link
+                    key={href}
+                    href={href}
+                    className={`navbtn${pathname.startsWith(href) ? " on" : ""}`}
+                  >
+                    <Icon size={18} />
+                    {label}
+                  </Link>
+                ),
+              )}
             </nav>
 
             {textChannels.length > 0 && (

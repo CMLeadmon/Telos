@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { hasCapability } from "@/lib/capabilities";
 import { ProfileSection } from "@/components/settings/ProfileSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
@@ -29,21 +30,22 @@ const SECTIONS = [
   { id: "appearance", label: "Appearance", icon: Palette, admin: false, C: AppearanceSection },
   { id: "voice", label: "Voice & Audio", icon: Mic, admin: false, C: VoiceAudioSection },
   { id: "credits", label: "Credits", icon: BadgeInfo, admin: false, C: CreditsSection },
-  { id: "users", label: "Members", icon: Users, admin: true, C: AdminUsersSection },
-  { id: "invites", label: "Invites", icon: Mail, admin: true, C: AdminInvitesSection },
-  { id: "roles", label: "Roles", icon: KeyRound, admin: true, C: AdminRolesSection },
-  { id: "channels", label: "Channels", icon: Hash, admin: true, C: AdminChannelsSection },
+  { id: "users", label: "Members", icon: Users, admin: true, capability: "manage_members", C: AdminUsersSection },
+  { id: "invites", label: "Invites", icon: Mail, admin: true, capability: "create_invites", C: AdminInvitesSection },
+  { id: "roles", label: "Roles", icon: KeyRound, admin: true, capability: "manage_roles", C: AdminRolesSection },
+  { id: "channels", label: "Channels", icon: Hash, admin: true, capability: "manage_channels", C: AdminChannelsSection },
 ] as const;
 
 export default function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const [active, setActive] = useState<string>("profile");
   // Client-side visibility only — every admin endpoint enforces permissions server-side.
-  const isAdmin =
-    user?.Roles.some((r) => r === "Owner" || r === "Administrator") ?? false;
-  const visible = SECTIONS.filter((s) => !s.admin || isAdmin);
+  const visible = SECTIONS.filter(
+    (s) => !s.admin || (s.capability && hasCapability(user, s.capability)),
+  );
   const current = visible.find((s) => s.id === active) ?? visible[0];
   const Panel = current.C;
+  const hasAdminSections = visible.some((s) => s.admin);
 
   return (
     <div className="settings" data-testid="settings-page">
@@ -60,7 +62,7 @@ export default function SettingsPage() {
               <Icon size={16} /> {label}
             </button>
           ))}
-        {isAdmin && (
+        {hasAdminSections && (
           <>
             <h3 className="grouplabel">Administration</h3>
             {visible
@@ -83,3 +85,4 @@ export default function SettingsPage() {
     </div>
   );
 }
+

@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Hash, Plus, Send, Smile, X } from "lucide-react";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { EmojiPicker } from "@/components/chat/EmojiPicker";
@@ -36,9 +37,9 @@ export default function ChatPage() {
   const active = channels.find((c) => c.id === activeChannelId);
 
   const currentUser = useAuthStore((s) => s.user);
-  const canModerate = currentUser?.Roles.some((r) =>
-    ["Administrator", "Host", "Curator", "Owner"].includes(r)
-  ) ?? false;
+  const canModerate =
+    hasCapability(currentUser, "moderate_chat") ||
+    hasCapability(currentUser, "manage_messages");
 
   useEffect(() => {
     if (!activeChannelId && channels.length > 0) {
