@@ -13,15 +13,83 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--f-sans)}
 @media (max-width:860px){
   .rail{display:none}
   .app.app--viewport .topbar{padding:0 14px}
-  .tabbar{display:flex}
+  .tabbar{display:none}
+  .mobile-bottom-nav{display:flex}
 }
 
-/* Mobile tabbar (from the mobile mockups' status bar + 4-item tabbar pattern) */
-.tabbar{display:none;flex:none;height:64px;border-top:1px solid var(--line);background:var(--surface);
-  align-items:stretch;justify-content:space-around;position:relative;z-index:5}
-.tabbar .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
-  color:var(--muted);font-family:var(--f-mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
-.tabbar .tab.on{color:var(--accent)}
+/* Mobile bottom nav & channels drawer */
+.mobile-bottom-nav {
+  display: none;
+  flex: none;
+  height: 56px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  align-items: center;
+  justify-content: space-around;
+  position: relative;
+  z-index: 20;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-nav-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: var(--muted);
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  background: transparent;
+  border: none;
+  padding: 6px 0;
+  cursor: pointer;
+  text-decoration: none;
+}
+.mobile-nav-btn.on {
+  color: var(--accent);
+}
+.mobile-nav-btn:hover {
+  color: var(--ink);
+}
+
+.mobile-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  justify-content: flex-end;
+}
+.mobile-drawer {
+  width: 280px;
+  max-width: 85vw;
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.mobile-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.mobile-drawer-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+.mobile-drawer-content {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
 
 /* Auth card (login/bootstrap) — DS card + inputs over the scene */
 .authwrap{min-height:100dvh;display:flex;align-items:center;justify-content:center;position:relative;

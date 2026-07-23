@@ -29,6 +29,7 @@ import { BrandLogo } from "@/components/BrandLogo";
 import { NotificationInbox } from "@/components/notifications/NotificationInbox";
 import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
+import { MobileNavigation } from "@/components/MobileNavigation";
 
 const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
@@ -555,18 +556,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {onChat && <ChatAside />}
       </div>
 
-      <nav className="tabbar">
-        {MODULES.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className={`tab${pathname.startsWith(href) ? " on" : ""}`}
-          >
-            <Icon size={20} />
-            {label}
-          </Link>
-        ))}
-      </nav>
+      <MobileNavigation />
     </div>
   );
 }
