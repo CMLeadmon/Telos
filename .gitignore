@@ -34,3 +34,7 @@ uploads-tmp/
 test-results/
 playwright-report/
 coverage/
+
+# Agent worktrees and local release-operator bootstrap material
+.worktrees/
+.telos-operator/
