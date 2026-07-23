@@ -1,0 +1,16 @@
+{
+  "maxGzipBytesPerRoute": 256000,
+  "routes": [
+    "/chat",
+    "/files",
+    "/library",
+    "/stream",
+    "/settings"
+  ],
+  "heavyModules": [
+    "livekit-client",
+    "hls.js",
+    "pdfjs-dist",
+    "epubjs"
+  ]
+}
