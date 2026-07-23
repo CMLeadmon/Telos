@@ -1,9 +1,19 @@
 import type { NextConfig } from "next";
 
-const configuredDevOrigins = (process.env.TELOS_DEV_ORIGINS ?? "")
+const rawDevOrigins = (process.env.TELOS_DEV_ORIGINS ?? "")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean);
+
+const configuredDevOrigins = Array.from(
+  new Set(
+    rawDevOrigins.flatMap((o) => {
+      const stripped = o.replace(/^https?:\/\//, "");
+      const hostOnly = stripped.split(":")[0];
+      return [o, stripped, hostOnly];
+    }),
+  ),
+).filter(Boolean);
 
 const nextConfig: NextConfig = {
   // Next blocks dev-only assets (including the HMR socket that enables React

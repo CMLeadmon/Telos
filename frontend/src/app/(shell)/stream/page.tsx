@@ -24,7 +24,6 @@ import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { MyListShelf } from "@/components/stream/MyListShelf";
 import { WatchPartyPanel } from "@/components/stream/WatchPartyPanel";
-import { MediaPlayer } from "@/components/stream/MediaPlayer";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
