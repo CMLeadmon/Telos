@@ -1,0 +1,12 @@
+{
+  "minFirefoxVersion": "152.0.6",
+  "supportedProjects": [
+    "chromium",
+    "chrome",
+    "firefox",
+    "webkit",
+    "msedge",
+    "mobile-chrome",
+    "mobile-safari"
+  ]
+}

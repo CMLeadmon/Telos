@@ -7,7 +7,6 @@ import {
   BookOpen,
   Folder,
   Hash,
-  Menu,
   MessageSquare,
   Settings,
   Tv,
@@ -15,7 +14,7 @@ import {
   X,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
-import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore";
+import { useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useVoiceSessionStore } from "@/stores/useVoiceSessionStore";
 import { hasCapability } from "@/lib/capabilities";
 

@@ -9,7 +9,8 @@
     "test:unit": "vitest run && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/*.test.mjs",
     "check:a11y-evidence": "node scripts/check-accessibility-evidence.mjs",
     "clean:build": "node scripts/clean-build.mjs",
-    "check:bundle": "node scripts/check-bundle-budget.mjs"
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
+    "check:browsers": "node scripts/check-installed-browsers.mjs"
   },
   "dependencies": {
     "epubjs": "0.4.2",

@@ -1,0 +1,11 @@
+groups:
+  - name: telos_alerts
+    rules:
+      - alert: TelosDependencyDown
+        expr: telos_active_sockets < 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Telos dependency or core service down"
+          runbook_url: "documentation/operations/incidents.md"
