@@ -30,6 +30,7 @@ import { NotificationInbox } from "@/components/notifications/NotificationInbox"
 import { ChatAside } from "@/components/chat/ChatAside";
 import { VoiceDock } from "@/components/VoiceDock";
 import { MobileNavigation } from "@/components/MobileNavigation";
+import { ConnectivityBanner } from "@/components/ConnectivityBanner";
 
 const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
@@ -363,6 +364,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="app app--viewport" data-testid="app-shell">
+      <ConnectivityBanner />
       <div className="topbar">
         <div className="brand">
           <BrandLogo size={62} />

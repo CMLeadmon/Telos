@@ -13,6 +13,8 @@ export interface CurrentUser {
 interface AuthState {
   user: CurrentUser | null;
   status: "unknown" | "authenticated" | "anonymous";
+  connectivity: "online" | "reconnecting" | "error";
+  setConnectivity: (connectivity: "online" | "reconnecting" | "error") => void;
   fetchMe: () => Promise<void>;
   login: (
     username: string,
@@ -37,22 +39,23 @@ interface AuthState {
 export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   status: "unknown",
+  connectivity: "online",
+
+  setConnectivity: (connectivity) => set({ connectivity }),
 
   fetchMe: async () => {
     try {
       const user = await api<CurrentUser>("/api/v1/auth/me");
-      set({ user, status: "authenticated" });
+      set({ user, status: "authenticated", connectivity: "online" });
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        set((state) =>
-          state.status === "authenticated"
-            ? state
-            : { user: null, status: "anonymous" },
-        );
+        set({ user: null, status: "anonymous", connectivity: "online" });
       } else {
-        set((state) =>
-          state.status === "authenticated" ? state : { status: "anonymous" },
-        );
+        set((state) => ({
+          ...state,
+          status: state.status === "authenticated" ? "authenticated" : "anonymous",
+          connectivity: "error",
+        }));
       }
     }
   },
