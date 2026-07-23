@@ -1,0 +1,13 @@
+{
+  "version": "1",
+  "phases": [
+    "Phase 1: Chat Core",
+    "Phase 2: Security & Authentication",
+    "Phase 3: Database & Lifecycle",
+    "Phase 4: Storage & Media Reliability",
+    "Phase 5: Advertised Product Features",
+    "Phase 6: Frontend Quality & Performance",
+    "Phase 7: Operations & Beta Certification"
+  ],
+  "gatesPassed": true
+}
