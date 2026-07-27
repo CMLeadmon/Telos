@@ -294,7 +294,9 @@ services:
       - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books:z
       - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/bookdrop:z
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:6060/api/v1/healthcheck"]
+      # The service uses an outbound HTTP proxy; force this loopback probe to
+      # stay local so it is not rejected by the egress allowlist.
+      test: ["CMD-SHELL", "wget -Y off -q -O - http://localhost:6060/api/v1/healthcheck"]
       interval: 60s
       timeout: 10s
       retries: 5
@@ -313,6 +315,9 @@ services:
       - telos-backend
     environment:
       - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # LiveKit does not interpolate environment variables inside mounted YAML.
+      # Override the webhook signing key through its supported environment flag.
+      - LIVEKIT_WEBHOOK_API_KEY=${LIVEKIT_API_KEY}
       - REDIS_PASSWORD=${REDIS_PASSWORD}
       - "LIVEKIT_TURN_DOMAIN=turn.${TELOS_DOMAIN}"
     ports:

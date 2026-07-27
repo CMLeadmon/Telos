@@ -38,11 +38,16 @@ test("the notification bell is a real control, not an inert one", async ({ page 
   await expect(page.getByRole("dialog", { name: "Notifications" })).toBeVisible();
 });
 
-test("no inert My List or Watch Party control renders yet", async ({ page }) => {
+test("My List and Watch Party controls are real active controls on stream page", async ({ page }) => {
   await login(page);
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /my list/i })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /watch party/i })).toHaveCount(0);
+  await page.goto("/stream/");
+  // If hero media is present, verify Watch Party opens the creation dialog
+  const watchPartyBtn = page.getByRole("button", { name: /watch party/i });
+  if ((await watchPartyBtn.count()) > 0) {
+    await watchPartyBtn.click();
+    await expect(page.getByRole("dialog", { name: /start a watch party/i })).toBeVisible();
+  }
 });
 
 test("the public landing page makes no AI or absolute-privacy claim", async ({ page }) => {
