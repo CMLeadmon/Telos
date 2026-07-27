@@ -57,8 +57,10 @@ links, bookmarks, and share cards keep working.
 
 **Backend:** `voice.go`, `voice_test.go`, `watchparty.go`,
 `watchparty_handlers.go`, `watchparty_integration_test.go`,
-`watchparty_test.go`, `notifications.go`, `notification_handlers.go`,
-`notifications_test.go`, `mylist.go`, `mylist_test.go`.
+`watchparty_test.go`, `notification_handlers.go`, `mylist.go`, `mylist_test.go`.
+
+`notifications.go` and `notifications_test.go` are **not** deleted — they are
+renamed and reduced to `user_events.go` / `user_events_test.go` per §3.3.1.
 
 **Frontend components:** `VoiceDock.tsx`, `settings/VoiceAudioSection.tsx`,
 `stream/WatchPartyPanel.tsx`, `stream/CreateWatchPartyDialog.tsx`,
@@ -108,9 +110,19 @@ component inside `app/(shell)/stream/page.tsx`.
 
 **E2E:** `capabilities.spec.ts`, `product-truth.spec.ts`.
 
-### 3.3 Migration `0019_remove_realtime_extras.sql`
+### 3.3 Migrations `0019` and `0020`
 
-Applied in this order:
+The schema work splits across two migrations because half of it must land
+*before* the Go changes and half *after*:
+
+- **`0019_user_event_idempotency.sql` — additive only.** Adds
+  `user_events.idempotency_key` with a unique index and backfills it from
+  `notifications`. Safe to apply while the current code is still running, which
+  is what makes the guard relocation in §3.3.1 possible without a flag day.
+- **`0020_remove_realtime_extras.sql` — destructive.** Every drop below. Applied
+  only after all code referencing the dropped objects is gone.
+
+`0020` is applied in this order:
 
 1. Drop `watch_party_host_offers`, `watch_party_invitations`,
    `watch_party_members`, `watch_parties` — reverse foreign-key order.
@@ -126,10 +138,50 @@ Applied in this order:
    intended; the migration must not add redundant explicit deletes, and the
    migration test asserts no orphaned override survives.
 5. Drop the `fk_notifications_event` constraint, then `DROP TABLE notifications`.
+   The idempotency guard has already moved to `user_events` in `0019` — see
+   §3.3.1.
 6. Narrow `chk_user_events_kind` to
    `('mention','thread_reply','annotation_reply','account_security')`.
 7. Drop `media_list_entries`, then `media_lists`.
 8. RBAC collapse — see §3.4.
+
+### 3.3.1 The inbox is not a leaf — `notifications` carries the idempotency guard
+
+`CreateNotification` is not a pure inbox writer. It does three things in one
+transaction:
+
+1. Claims an idempotency key by inserting into `notifications`, relying on that
+   table's `idx_notifications_idem` unique index and `ON CONFLICT DO NOTHING`.
+2. Appends the durable `user_events` row that WebSocket catch-up replays.
+3. Enqueues an outbox delivery hint on `telos:user:<recipient>`.
+
+The source comment states the ordering is deliberate: *"Claim the idempotency
+key first, without an event, so a concurrent replay that loses the race never
+inserts a duplicate user_event."* The notifications table **is** the
+deduplication mechanism protecting the event stream.
+
+Deleting it naively would therefore let a retried mutation append duplicate
+`user_events`, double-delivering mentions and thread replies on reconnect —
+a silent correctness regression in the exact subsystem this redesign claims to
+preserve.
+
+Phase 2 therefore **relocates the guard rather than deleting it**:
+
+- `user_events` gains `idempotency_key TEXT` and a unique index, so it
+  self-deduplicates.
+- `notifications.go` is **renamed and reduced** to `user_events.go`, exporting
+  `RecordUserEvent(ctx, tx, UserEventInput) (int64, error)` — the idempotent
+  claim, the event append, and the outbox hint, with the notifications-table
+  write removed.
+- The inbox read surface — `ListNotifications`, `UnreadCount`, `MarkRead`,
+  `MarkAllRead`, `loadNotificationByKey`, and their four HTTP handlers — is
+  deleted outright. That is the part that was genuinely inbox-only.
+- Callers in `chat_threads.go` (`notifyForMessageTx`), `annotations.go`
+  (`CreateReply`), and `outbox.go` (security intents) switch to
+  `RecordUserEvent`. Their transactional semantics are unchanged.
+
+A migration test asserts that recording the same idempotency key twice yields
+exactly one `user_events` row.
 
 **What survives, deliberately:**
 
@@ -227,7 +279,7 @@ capabilities are unchanged; the segment is hidden when the member lacks
 Navigation drops to three modules plus Settings in both `AppShell.tsx` and
 `MobileNavigation.tsx`.
 
-### 5.2 Commentary generalized — migration `0020`
+### 5.2 Commentary generalized — migration `0021`
 
 ```
 annotations.book_id BIGINT  →  target_type TEXT + target_id TEXT
@@ -300,8 +352,10 @@ Unchanged in principle: upstream failures return 502/503 and surface as
 `degraded` in `/api/v1/health`; handlers never fabricate catalog or media
 records. Two specific cases:
 
-- The `voice` health checker and any LiveKit reachability probe are removed from
-  the health aggregate. The `outbox` checker stays.
+- The health aggregate needs **no change**. Verified at `main.go:331-338`: it
+  registers `postgres`, `redis`, `outbox`, a `storage` mount check, and upstream
+  probes for `jellyfin` and `grimmory` only. There is no voice or LiveKit
+  checker to remove. The `outbox` checker stays.
 - Commentary on a media item whose Jellyfin record has since disappeared renders
   the comment with a non-authoritative title snapshot and a clear
   "item unavailable" state — it must not fabricate the item.
@@ -363,3 +417,9 @@ individually. Tests green before each commit. Push at the end. The live stack is
 - **`user_events` must not be dropped with the inbox.** Explicitly called out
   because migration 0013 created both, making them look coupled when the former
   is WebSocket reconnection infrastructure.
+- **Deleting `notifications` naively silently breaks event deduplication.** The
+  table's unique index is the idempotency guard for `user_events` (§3.3.1). The
+  guard must be relocated onto `user_events` in the same migration, before the
+  drop. This is the single highest-risk step in Phase 2 because nothing fails
+  loudly if it is missed — the regression only appears as duplicated mentions
+  and thread replies after a client reconnects.
