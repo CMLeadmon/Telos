@@ -43,6 +43,26 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
 
+  // Bind the app height to the visual viewport so the bottom nav and the chat
+  // composer stay above the on-screen keyboard on mobile (100dvh does not shrink
+  // when the keyboard opens). Writes a CSS var, not React state, so it never
+  // triggers a re-render. A no-op where visualViewport is unavailable.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const sync = () => {
+      document.documentElement.style.setProperty("--app-h", `${vv.height}px`);
+    };
+    sync();
+    vv.addEventListener("resize", sync);
+    vv.addEventListener("scroll", sync);
+    return () => {
+      vv.removeEventListener("resize", sync);
+      vv.removeEventListener("scroll", sync);
+      document.documentElement.style.removeProperty("--app-h");
+    };
+  }, []);
+
   interface SearchUser {
     id: string;
     username: string;

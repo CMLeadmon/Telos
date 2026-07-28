@@ -1,8 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { PictureInPicture2 } from "lucide-react";
 import type Hls from "hls.js";
 import { apiBase } from "@/lib/api";
+
+const RATES = [1, 1.25, 1.5, 2] as const;
 
 // HlsPlayer plays a Jellyfin stream. Video items are HLS: the gateway resolves
 // PlaybackInfo and 302s to a main.m3u8 sub-path; hls.js follows the redirect and
@@ -11,6 +14,27 @@ import { apiBase } from "@/lib/api";
 export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rate, setRate] = useState(1);
+
+  const changeRate = (r: number) => {
+    setRate(r);
+    if (videoRef.current) videoRef.current.playbackRate = r;
+  };
+
+  // Picture-in-Picture is a genuine mobile-web capability (unlike a gesture
+  // layer), so surface it explicitly for video. It is a no-op where the browser
+  // does not support it.
+  const canPip =
+    !audio && typeof document !== "undefined" && "pictureInPictureEnabled" in document;
+  const togglePip = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (document.pictureInPictureElement) {
+      void document.exitPictureInPicture().catch(() => {});
+    } else if (document.pictureInPictureEnabled) {
+      void v.requestPictureInPicture().catch(() => {});
+    }
+  };
 
   useEffect(() => {
     const video = videoRef.current;
@@ -60,14 +84,39 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
       {error ? (
         <p className="playererr">{`// ${error}`}</p>
       ) : (
-        <video
-          ref={videoRef}
-          controls
-          autoPlay
-          playsInline
-          crossOrigin={apiBase() ? "use-credentials" : undefined}
-          data-testid="stream-video"
-        />
+        <>
+          <video
+            ref={videoRef}
+            controls
+            autoPlay
+            playsInline
+            crossOrigin={apiBase() ? "use-credentials" : undefined}
+            data-testid="stream-video"
+          />
+          <div className="player-extras">
+            <div className="player-rate" role="group" aria-label="Playback speed">
+              {RATES.map((r) => (
+                <button
+                  key={r}
+                  className={`rate-btn${rate === r ? " on" : ""}`}
+                  aria-pressed={rate === r}
+                  onClick={() => changeRate(r)}
+                >
+                  {r}×
+                </button>
+              ))}
+            </div>
+            {canPip && (
+              <button
+                className="iconbtn"
+                aria-label="picture in picture"
+                onClick={togglePip}
+              >
+                <PictureInPicture2 size={18} />
+              </button>
+            )}
+          </div>
+        </>
       )}
     </div>
   );

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { X } from "lucide-react";
+import { MessageSquare, X } from "lucide-react";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
@@ -29,6 +29,7 @@ export function BookReader({
 }) {
   const [percent, setPercent] = useState(0);
   const [pending, setPending] = useState<PendingSelection | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
   const kind = formatKind(book.format);
   const canModerate = useAuthStore((s) => hasCapability(s.user, "moderate_annotations"));
   const createAnnotation = useAnnotationStore((s) => s.create);
@@ -42,7 +43,11 @@ export function BookReader({
   }, [onClose]);
 
   const onSelection = (locator: AnnotationLocator, text: string) => {
-    if (text.trim()) setPending({ locator, text });
+    if (text.trim()) {
+      setPending({ locator, text });
+      // Reveal the notes surface so the editor is visible where it is a sheet.
+      setNotesOpen(true);
+    }
   };
 
   return createPortal(
@@ -52,6 +57,17 @@ export function BookReader({
         <span className="reader-percent" data-testid="reader-percent">
           {Math.round(percent * 100)}%
         </span>
+        {kind !== null && (
+          <button
+            className="iconbtn reader-notes-toggle"
+            aria-label="notes"
+            aria-pressed={notesOpen}
+            data-testid="reader-notes-toggle"
+            onClick={() => setNotesOpen((o) => !o)}
+          >
+            <MessageSquare size={18} />
+          </button>
+        )}
         <button className="iconbtn" aria-label="close reader" onClick={onClose}>
           <X size={18} />
         </button>
@@ -71,7 +87,7 @@ export function BookReader({
         </div>
 
         {kind !== null && (
-          <div className="reader-side">
+          <div className={`reader-side${notesOpen ? " open" : ""}`}>
             {pending && (
               <AnnotationEditor
                 selectedText={pending.text}
