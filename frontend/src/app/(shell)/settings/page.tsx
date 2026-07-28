@@ -6,7 +6,6 @@ import {
   Hash,
   KeyRound,
   Mail,
-  Mic,
   Palette,
   Shield,
   User,
@@ -17,7 +16,6 @@ import { hasCapability } from "@/lib/capabilities";
 import { ProfileSection } from "@/components/settings/ProfileSection";
 import { SecuritySection } from "@/components/settings/SecuritySection";
 import { AppearanceSection } from "@/components/settings/AppearanceSection";
-import { VoiceAudioSection } from "@/components/settings/VoiceAudioSection";
 import { AdminUsersSection } from "@/components/settings/AdminUsersSection";
 import { AdminInvitesSection } from "@/components/settings/AdminInvitesSection";
 import { AdminRolesSection } from "@/components/settings/AdminRolesSection";
@@ -28,7 +26,6 @@ const SECTIONS = [
   { id: "profile", label: "Profile", icon: User, admin: false, C: ProfileSection },
   { id: "security", label: "Security", icon: Shield, admin: false, C: SecuritySection },
   { id: "appearance", label: "Appearance", icon: Palette, admin: false, C: AppearanceSection },
-  { id: "voice", label: "Voice & Audio", icon: Mic, admin: false, C: VoiceAudioSection },
   { id: "credits", label: "Credits", icon: BadgeInfo, admin: false, C: CreditsSection },
   { id: "users", label: "Members", icon: Users, admin: true, capability: "manage_members", C: AdminUsersSection },
   { id: "invites", label: "Invites", icon: Mail, admin: true, capability: "create_invites", C: AdminInvitesSection },

@@ -43,8 +43,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!activeChannelId && channels.length > 0) {
-      const first = channels.find((c) => c.type === "text");
-      if (first) connect(first.id);
+      connect(channels[0].id);
     }
   }, [activeChannelId, channels, connect]);
 

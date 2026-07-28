@@ -4,7 +4,6 @@ import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  Bell,
   BookOpen,
   Folder,
   Hash,
@@ -15,20 +14,15 @@ import {
   Settings,
   Sun,
   Tv,
-  Volume2,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore";
-import { useVoiceSessionStore } from "@/stores/useVoiceSessionStore";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
-import { useNotificationStore } from "@/stores/useNotificationStore";
-import { api, avatarUrl, wsBase } from "@/lib/api";
+import { api, avatarUrl } from "@/lib/api";
 import { hasCapability } from "@/lib/capabilities";
 import { BrandLogo } from "@/components/BrandLogo";
-import { NotificationInbox } from "@/components/notifications/NotificationInbox";
 import { ChatAside } from "@/components/chat/ChatAside";
-import { VoiceDock } from "@/components/VoiceDock";
 import { MobileNavigation } from "@/components/MobileNavigation";
 import { ConnectivityBanner } from "@/components/ConnectivityBanner";
 
@@ -49,50 +43,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const loadPrefs = usePreferencesStore((s) => s.load);
   const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
-  const voice = useVoiceSessionStore();
-
-  // Notifications: unread badge, live event socket, and the inbox dialog.
-  const unreadCount = useNotificationStore((s) => s.unreadCount);
-  const reconcile = useNotificationStore((s) => s.reconcile);
-  const applyEvent = useNotificationStore((s) => s.applyEvent);
-  const [inboxOpen, setInboxOpen] = useState(false);
-
-  useEffect(() => {
-    if (status !== "authenticated") return;
-    // Catch up on anything missed, then open the recipient-scoped event socket
-    // and apply live hints (reconnecting with a bounded backoff).
-    void reconcile();
-    let ws: WebSocket | null = null;
-    let closed = false;
-    let backoff = 1000;
-    const open = () => {
-      if (closed) return;
-      ws = new WebSocket(`${wsBase()}/api/v1/events/ws`);
-      ws.onmessage = (ev) => {
-        try {
-          const msg = JSON.parse(ev.data);
-          if (typeof msg?.sequence === "number") applyEvent({ sequence: msg.sequence });
-        } catch {
-          /* ignore malformed frames */
-        }
-      };
-      ws.onopen = () => {
-        backoff = 1000;
-        void reconcile();
-      };
-      ws.onclose = () => {
-        if (closed) return;
-        backoff = Math.min(backoff * 2, 30000);
-        setTimeout(open, backoff);
-      };
-      ws.onerror = () => ws?.close();
-    };
-    open();
-    return () => {
-      closed = true;
-      ws?.close();
-    };
-  }, [status, reconcile, applyEvent]);
 
   interface SearchUser {
     id: string;
@@ -274,7 +224,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <>
                   <Hash size={14} className="search-icon" />
                   <span className="search-title">{(item as unknown as Channel).name}</span>
-                  <span className="search-meta">{(item as unknown as Channel).type} channel</span>
+                  <span className="search-meta">channel</span>
                 </>
               )}
               {type === "user" && (
@@ -358,8 +308,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     );
   }
 
-  const textChannels = channels.filter((c) => c.type === "text");
-  const voiceChannels = channels.filter((c) => c.type === "voice");
   const onChat = pathname.startsWith("/chat");
 
   return (
@@ -426,19 +374,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}{" "}
             {user?.DisplayName || user?.Username}
           </span>
-          <button
-            className="iconbtn notif-bell"
-            aria-label="notifications"
-            onClick={() => setInboxOpen((v) => !v)}
-          >
-            <Bell size={18} />
-            {unreadCount > 0 && (
-              <span className="notif-badge" aria-label={`${unreadCount} unread`}>
-                {unreadCount > 99 ? "99+" : unreadCount}
-              </span>
-            )}
-          </button>
-          <NotificationInbox open={inboxOpen} onClose={() => setInboxOpen(false)} />
           <Link
             href="/settings"
             className={`iconbtn${pathname.startsWith("/settings") ? " on" : ""}`}
@@ -485,11 +420,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </nav>
 
-            {textChannels.length > 0 && (
+            {channels.length > 0 && (
               <div>
-                <h3 className="grouplabel">Text channels</h3>
+                <h3 className="grouplabel">Channels</h3>
                 <div className="chanlist">
-                  {textChannels.map((c) => (
+                  {channels.map((c) => (
                     <button
                       key={c.id}
                       className={`chan${
@@ -509,42 +444,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               </div>
             )}
-
-            {voiceChannels.length > 0 && (
-              <div>
-                <h3 className="grouplabel">Voice channels</h3>
-                <div className="chanlist">
-                  {voiceChannels.map((c) => {
-                    const joined =
-                      voice.status === "connected" && voice.channelId === c.id;
-                    return (
-                      <button
-                        key={c.id}
-                        className={`chan${joined ? " on" : ""}`}
-                        onClick={() =>
-                          joined ? void voice.leave() : void voice.join(c.id)
-                        }
-                      >
-                        <span className="l">
-                          <Volume2 size={15} />
-                          {c.name}
-                        </span>
-                        <span className="joinlbl">
-                          {joined
-                            ? "Leave"
-                            : voice.status === "connecting" &&
-                                voice.channelId === c.id
-                              ? "…"
-                              : "Join"}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
-          <VoiceDock />
           <div className="railfoot">
             <div className="row">
               <span className="dot" style={{ width: 5, height: 5 }} /> tunnel:

@@ -6,10 +6,8 @@ import {
   CheckCircle2,
   ChevronRight,
   Play,
-  Plus,
   RefreshCw,
   Share2,
-  Users,
   X,
 } from "lucide-react";
 import type Hls from "hls.js";
@@ -22,10 +20,6 @@ import {
 import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
-import { MyListShelf } from "@/components/stream/MyListShelf";
-import { WatchPartyPanel } from "@/components/stream/WatchPartyPanel";
-import { CreateWatchPartyDialog } from "@/components/stream/CreateWatchPartyDialog";
-import { useMyListStore } from "@/stores/useMyListStore";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
@@ -198,25 +192,6 @@ function PosterGrid({
 
 export default function StreamPage() {
   const [sharedItemError, setSharedItemError] = useState<string | null>(null);
-  const [watchPartyMediaId, setWatchPartyMediaId] = useState<string | null>(null);
-  const [addingToList, setAddingToList] = useState(false);
-  const [addedToList, setAddedToList] = useState(false);
-
-  const addToList = useMyListStore((s) => s.add);
-
-  const handleAddMyList = async (item: MediaItem) => {
-    if (addingToList) return;
-    setAddingToList(true);
-    try {
-      await addToList(item.id, { title: item.title, mediaType: item.type });
-      setAddedToList(true);
-      setTimeout(() => setAddedToList(false), 2000);
-    } catch {
-      // Error state recorded in store
-    } finally {
-      setAddingToList(false);
-    }
-  };
 
   const canRefreshMedia = useAuthStore(
     (s) => hasCapability(s.user, "manage_files"),
@@ -360,8 +335,6 @@ export default function StreamPage() {
   return (
     <div className="streammain" data-testid="stream-browse">
       <div className="streamscroll">
-        <WatchPartyPanel />
-        <MyListShelf />
         {sharedItemError && (
           <div className="streamnotice error" role="alert">
             <AlertCircle size={16} />
@@ -404,21 +377,6 @@ export default function StreamPage() {
                     }
                   >
                     <Play size={17} /> {featured.isFolder ? "Open" : "Play"}
-                  </button>
-                  <button
-                    className="btn-ghost btn-lg"
-                    disabled={addingToList}
-                    onClick={() => void handleAddMyList(featured)}
-                    data-testid="hero-add-my-list"
-                  >
-                    <Plus size={17} /> {addedToList ? "Added!" : addingToList ? "Adding…" : "My list"}
-                  </button>
-                  <button
-                    className="btn-ghost btn-lg"
-                    onClick={() => setWatchPartyMediaId(featured.id)}
-                    data-testid="hero-start-watch-party"
-                  >
-                    <Users size={17} /> Watch party
                   </button>
                 </div>
               </>
@@ -500,12 +458,6 @@ export default function StreamPage() {
           );
         })}
       </div>
-      {watchPartyMediaId && (
-        <CreateWatchPartyDialog
-          mediaItemId={watchPartyMediaId}
-          onClose={() => setWatchPartyMediaId(null)}
-        />
-      )}
     </div>
   );
 }

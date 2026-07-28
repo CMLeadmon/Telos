@@ -6,26 +6,12 @@ export interface Prefs {
   theme: Theme;
   sceneEnabled: boolean;
   reducedMotion: boolean;
-  voiceInputDeviceId: string;
-  voiceOutputDeviceId: string;
-  voiceInputGain: number;
-  voiceOutputVolume: number;
-  voiceNoiseSuppression: boolean;
-  voiceEchoCancellation: boolean;
-  voiceAutoGainControl: boolean;
 }
 
 const DEFAULTS: Prefs = {
   theme: "synthwave",
   sceneEnabled: true,
   reducedMotion: false,
-  voiceInputDeviceId: "",
-  voiceOutputDeviceId: "",
-  voiceInputGain: 1,
-  voiceOutputVolume: 1,
-  voiceNoiseSuppression: true,
-  voiceEchoCancellation: true,
-  voiceAutoGainControl: true,
 };
 
 interface PreferencesState {

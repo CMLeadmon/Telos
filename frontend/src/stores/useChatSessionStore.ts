@@ -24,7 +24,6 @@ function apiMessage(e: unknown): string {
 export interface Channel {
   id: string;
   name: string;
-  type: "text" | "voice";
 }
 
 export interface ChatMessage {

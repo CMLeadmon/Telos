@@ -21,20 +21,11 @@ vi.mock("@/stores/useAuthStore", () => ({
 vi.mock("@/stores/useChatSessionStore", () => ({
   useChatSessionStore: () => ({
     channels: [
-      { id: "c1", name: "general", type: "text" },
-      { id: "c2", name: "lounge", type: "voice" },
+      { id: "c1", name: "general" },
+      { id: "c2", name: "lounge" },
     ],
     activeChannelId: "c1",
     connect: vi.fn(),
-  }),
-}));
-
-vi.mock("@/stores/useVoiceSessionStore", () => ({
-  useVoiceSessionStore: () => ({
-    status: "disconnected",
-    channelId: null,
-    join: vi.fn(),
-    leave: vi.fn(),
   }),
 }));
 

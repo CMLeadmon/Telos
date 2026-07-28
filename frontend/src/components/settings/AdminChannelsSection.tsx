@@ -6,7 +6,6 @@ import { api, ApiError } from "@/lib/api";
 interface Channel {
   id: string;
   name: string;
-  type: string;
 }
 
 interface RoleInfo {
@@ -17,15 +16,14 @@ interface RoleInfo {
 type Decision = "inherit" | "allow" | "deny";
 
 // Permissions that can be overridden per channel/role.
-const OVERRIDABLE = ["view_channel", "send_messages", "join_voice"];
-const DEFAULT_ROLES = ["Administrator", "Moderator", "Member", "Librarian", "Contributor"];
+const OVERRIDABLE = ["view_channel", "send_messages"];
+const DEFAULT_ROLES = ["Administrator", "Moderator", "Member"];
 
 export function AdminChannelsSection() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [roles, setRoles] = useState<string[]>(DEFAULT_ROLES);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
-  const [type, setType] = useState("text");
   const [selected, setSelected] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, Record<string, Decision>>>({});
 
@@ -53,7 +51,7 @@ export function AdminChannelsSection() {
     try {
       await api("/api/v1/admin/channels", {
         method: "POST",
-        body: JSON.stringify({ name, type }),
+        body: JSON.stringify({ name }),
       });
       setName("");
       await load();
@@ -70,7 +68,6 @@ export function AdminChannelsSection() {
       await api(`/api/v1/admin/channels/${id}`, { method: "DELETE" });
       await load();
     } catch (e) {
-      // A 409 means the channel is linked to an active Watch Party.
       setError(e instanceof ApiError ? e.message : "Could not delete the channel.");
     }
   };
@@ -117,14 +114,6 @@ export function AdminChannelsSection() {
           onChange={(e) => setName(e.target.value)}
           placeholder="channel-name"
         />
-        <select
-          aria-label="Channel type"
-          value={type}
-          onChange={(e) => setType(e.target.value)}
-        >
-          <option value="text">text</option>
-          <option value="voice">voice</option>
-        </select>
         <button onClick={() => void create()} data-testid="create-channel">
           Create
         </button>
@@ -134,7 +123,6 @@ export function AdminChannelsSection() {
         {channels.map((c) => (
           <li key={c.id} data-testid={`channel-${c.id}`}>
             <span className="channel-name">#{c.name}</span>
-            <span className="channel-type">{c.type}</span>
             <button onClick={() => void openOverrides(c.id)}>Overrides</button>
             <button
               onClick={() => void remove(c.id)}

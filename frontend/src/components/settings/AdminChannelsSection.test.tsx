@@ -39,16 +39,16 @@ describe("AdminChannelsSection", () => {
     await waitFor(() => expect(screen.getByTestId("channel-c1")).toBeInTheDocument());
   });
 
-  it("shows a visible error when deleting a channel linked to an active party (409)", async () => {
+  it("shows a visible error when a channel delete fails", async () => {
     apiMock.mockImplementation(async (path: string, init?: RequestInit) => {
-      if (path === "/api/v1/channels") return [{ id: "c1", name: "party-chan", type: "text" }];
-      if (init?.method === "DELETE") throw new ApiError(409, "This channel is linked to an active Watch Party.");
+      if (path === "/api/v1/channels") return [{ id: "c1", name: "some-chan" }];
+      if (init?.method === "DELETE") throw new ApiError(500, "Could not delete the channel.");
       return {};
     });
     render(<AdminChannelsSection />);
     await waitFor(() => expect(screen.getByTestId("channel-c1")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("delete-channel-c1"));
-    await waitFor(() => expect(screen.getByTestId("admin-channels-error")).toHaveTextContent(/watch party/i));
+    await waitFor(() => expect(screen.getByTestId("admin-channels-error")).toHaveTextContent(/could not delete/i));
   });
 
   it("renders per-role inherit/allow/deny override selects", async () => {
