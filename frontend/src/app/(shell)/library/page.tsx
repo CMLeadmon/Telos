@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpen, ImageOff, Music, Settings, Share2 } from "lucide-react";
+import { BookOpen, Folder, ImageOff, Music, Settings, Share2 } from "lucide-react";
 import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
@@ -14,6 +14,7 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
+import { FilesBrowser } from "@/components/library/FilesBrowser";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 function AudiobookRow({
@@ -252,10 +253,33 @@ export default function LibraryPage() {
   const canManage = useAuthStore(
     (state) => hasCapability(state.user, "manage_library"),
   );
+  const canViewFiles = useAuthStore(
+    (state) => hasCapability(state.user, "view_files"),
+  );
   const [reading, setReading] = useState<LibraryBook | null>(null);
   const [managing, setManaging] = useState<LibraryBook | null>(null);
+  // Initialize the active segment from the URL once (the ?view=files deep link
+  // and the /files redirect both land here). A lazy initializer avoids a
+  // setState-in-effect and the books-first flash it would cause.
+  const [view, setView] = useState<"books" | "files">(() =>
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("view") === "files"
+      ? "files"
+      : "books",
+  );
 
   const books = filtered();
+
+  // Reflect the active segment in the URL so it is shareable and survives a
+  // reload, without a full navigation.
+  const selectView = (next: "books" | "files") => {
+    setView(next);
+    const url =
+      next === "files"
+        ? `${window.location.pathname}?view=files`
+        : window.location.pathname;
+    window.history.replaceState({}, "", url);
+  };
 
   useEffect(() => {
     if (status === "idle") void fetchCatalog();
@@ -288,8 +312,36 @@ export default function LibraryPage() {
           <BookOpen size={17} />
           Library
         </div>
-        <span className="kicker">{`// ${books.length} on the shelf`}</span>
+        {canViewFiles && (
+          <div className="segmented" role="tablist" aria-label="Library view">
+            <button
+              role="tab"
+              aria-selected={view === "books"}
+              className={`seg${view === "books" ? " on" : ""}`}
+              onClick={() => selectView("books")}
+            >
+              <BookOpen size={14} /> Books
+            </button>
+            <button
+              role="tab"
+              aria-selected={view === "files"}
+              className={`seg${view === "files" ? " on" : ""}`}
+              data-testid="library-files-tab"
+              onClick={() => selectView("files")}
+            >
+              <Folder size={14} /> Files
+            </button>
+          </div>
+        )}
+        <span className="kicker">
+          {view === "books" ? `// ${books.length} on the shelf` : `// shared files`}
+        </span>
       </div>
+
+      {view === "files" ? (
+        <FilesBrowser />
+      ) : (
+      <>
       <div className="banner">one shelf for the whole node</div>
 
       <div className="library">
@@ -381,6 +433,8 @@ export default function LibraryPage() {
           <AudiobookShelf />
         </div>
       </div>
+      </>
+      )}
 
       {reading && (
         <BookReader book={reading} onClose={() => setReading(null)} />

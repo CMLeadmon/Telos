@@ -5,7 +5,6 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpen,
-  Folder,
   Hash,
   MessageSquare,
   Settings,
@@ -20,7 +19,6 @@ const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
   { href: "/stream", label: "Stream", icon: Tv, capability: "view_media" },
   { href: "/library", label: "Library", icon: BookOpen, capability: "view_library" },
-  { href: "/files", label: "Files", icon: Folder, capability: "view_files" },
 ];
 
 export function MobileNavigation() {
