@@ -11,6 +11,6 @@ the License at
     http://www.apache.org/licenses/LICENSE-2.0
 
 Telos orchestrates independent third-party services (Jellyfin, Grimmory,
-LiveKit, Traefik, PostgreSQL, Redis, MariaDB, ClamAV) as separate processes
+Traefik, PostgreSQL, Redis, MariaDB, ClamAV) as separate processes
 across container boundaries. These services are not part of this work and are
 distributed under their own licenses; see CREDITS.md for the complete matrix.

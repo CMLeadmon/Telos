@@ -1,4 +1,0 @@
-rooms:
-  - name: "voice-room-1"
-    publishers: 5
-    subscribers: 20

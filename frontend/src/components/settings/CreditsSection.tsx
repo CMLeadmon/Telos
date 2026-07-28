@@ -28,13 +28,6 @@ const ISOLATED_SERVICES: CreditEntry[] = [
     licenseUrl: "https://www.gnu.org/licenses/agpl-3.0.html",
   },
   {
-    name: "LiveKit",
-    role: "WebRTC SFU for voice rooms (isolated service)",
-    sourceUrl: "https://github.com/livekit/livekit",
-    licenseName: "Apache-2.0",
-    licenseUrl: "https://github.com/livekit/livekit/blob/master/LICENSE",
-  },
-  {
     name: "ClamAV",
     role: "Malware scanning for uploads (isolated service)",
     sourceUrl: "https://github.com/Cisco-Talos/clamav",

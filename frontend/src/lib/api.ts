@@ -24,16 +24,6 @@ export function wsBase(): string {
   return `${proto}//${window.location.host}`;
 }
 
-export function livekitUrl(): string {
-  const configured = process.env.NEXT_PUBLIC_LIVEKIT_URL;
-  if (configured) return configured;
-  if (typeof window !== "undefined") {
-    const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${window.location.host}/livekit`;
-  }
-  return "";
-}
-
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);

@@ -8,7 +8,6 @@
 # Known checks (default: all):
 #   core-ingress   Only Traefik publishes HTTP entry points (80/443).
 #   stop-grace     telos-core.stop_grace_period is at least 75 seconds.
-#   voice-cap      LiveKit config caps the room at 25 participants.
 #
 # The rendered config is written to a mode-0600 temp file and removed on exit;
 # only check names and statuses are printed.
@@ -17,7 +16,7 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 env_file=""
-checks="core-ingress,stop-grace,voice-cap,database-observer"
+checks="core-ingress,stop-grace,database-observer"
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--env-file)
@@ -57,14 +56,13 @@ report() { printf '%-14s %s\n' "$1" "$2"; }
 want() { case ",$checks," in *",$1,"*) return 0 ;; *) return 1 ;; esac; }
 
 if want core-ingress; then
-	# Every published port must belong to Traefik (80/443) or the reviewed
-	# LiveKit media ports; no other service may publish an HTTP entry point.
+	# Every published port must belong to Traefik (80/443); no other service
+	# may publish an HTTP entry point.
 	bad="$(python3 - "$rendered" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
 allowed = {
     ("traefik", "80"), ("traefik", "443"),
-    ("livekit", "7881"), ("livekit", "3478"), ("livekit", "50000-50100"),
 }
 bad = []
 for name, svc in (doc.get("services") or {}).items():
@@ -123,15 +121,6 @@ if want database-observer; then
 		fail=1
 	fi
 	[ "$obs_ok" -eq 1 ] && report database-observer "OK"
-fi
-
-if want voice-cap; then
-	if grep -qE '^\s*max_participants:\s*25\b' config/livekit.yaml; then
-		report voice-cap "OK"
-	else
-		report voice-cap "FAIL (room.max_participants != 25)"
-		fail=1
-	fi
 fi
 
 exit "$fail"

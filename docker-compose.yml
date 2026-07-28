@@ -92,8 +92,6 @@ services:
       # writes. The one-shot telos-migrate service owns schema changes.
       - DATABASE_URL=postgres://telos_runtime:${TELOS_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
-      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
       - JELLYFIN_USER_NAME=${JELLYFIN_USER_NAME:-}
       - JELLYFIN_LIBRARY_IDS=${JELLYFIN_LIBRARY_IDS:-}
@@ -217,7 +215,7 @@ services:
       - https_proxy=http://telos-egress-proxy:3128
       - HTTP_PROXY=http://telos-egress-proxy:3128
       - HTTPS_PROXY=http://telos-egress-proxy:3128
-      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory,grimmory-db,livekit
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory,grimmory-db
     healthcheck:
       test: ["CMD-SHELL", "echo PING | nc -w 2 localhost 3310 | grep -q PONG"]
       interval: 10s
@@ -239,7 +237,7 @@ services:
       - https_proxy=http://telos-egress-proxy:3128
       - HTTP_PROXY=http://telos-egress-proxy:3128
       - HTTPS_PROXY=http://telos-egress-proxy:3128
-      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,grimmory,grimmory-db,livekit
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,grimmory,grimmory-db
     volumes:
       - jellyfin_config:/config
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
@@ -288,7 +286,7 @@ services:
       - HTTP_PROXY=http://telos-egress-proxy:3128
       - HTTPS_PROXY=http://telos-egress-proxy:3128
       - JAVA_TOOL_OPTIONS=-Dhttp.proxyHost=telos-egress-proxy -Dhttp.proxyPort=3128 -Dhttps.proxyHost=telos-egress-proxy -Dhttps.proxyPort=3128 -Dhttp.nonProxyHosts=localhost|127.0.0.1|grimmory-db|telos-core|postgres|redis
-      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory-db,livekit
+      - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,jellyfin,grimmory-db
     volumes:
       - grimmory_config:/app/data
       - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books:z
@@ -301,28 +299,3 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
-
-  livekit:
-    image: livekit/livekit-server:v1.10
-    container_name: telos-livekit
-    restart: unless-stopped
-    command: --config /etc/livekit/config.yaml --redis-password ${REDIS_PASSWORD}
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - telos-ingress
-      - telos-backend
-    environment:
-      - "LIVEKIT_KEYS=${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
-      # LiveKit does not interpolate environment variables inside mounted YAML.
-      # Override the webhook signing key through its supported environment flag.
-      - LIVEKIT_WEBHOOK_API_KEY=${LIVEKIT_API_KEY}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - "LIVEKIT_TURN_DOMAIN=turn.${TELOS_DOMAIN}"
-    ports:
-      - "7881:7881"
-      - "3478:3478/udp"
-      - "50000-50100:50000-50100/udp"
-    volumes:
-      - ./config/livekit.yaml:/etc/livekit/config.yaml:ro,z

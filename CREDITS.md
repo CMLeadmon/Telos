@@ -19,7 +19,6 @@ agreement.
 |---|---|---|---|
 | Jellyfin | Media transcoding, HLS generation, and streaming (isolated service) | [https://github.com/jellyfin/jellyfin](https://github.com/jellyfin/jellyfin) | [GPL-2.0](https://github.com/jellyfin/jellyfin/blob/master/LICENSE) |
 | Grimmory | E-book catalog, metadata, and library management (isolated service) | [https://github.com/grimmory-tools/grimmory](https://github.com/grimmory-tools/grimmory) | [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) |
-| LiveKit | WebRTC SFU for voice rooms (isolated service) | [https://github.com/livekit/livekit](https://github.com/livekit/livekit) | [Apache-2.0](https://github.com/livekit/livekit/blob/master/LICENSE) |
 | ClamAV | Malware scanning for uploads (isolated service) | [https://github.com/Cisco-Talos/clamav](https://github.com/Cisco-Talos/clamav) | [GPL-2.0](https://github.com/Cisco-Talos/clamav/blob/main/COPYING.txt) |
 
 ## Infrastructure
