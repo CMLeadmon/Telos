@@ -18,7 +18,6 @@ const (
 
 var (
 	errChannelSlugInvalid = errors.New("channel slug is invalid")
-	errChannelTypeInvalid = errors.New("channel type is invalid")
 	errChannelNameTaken   = errors.New("channel name is taken")
 )
 
@@ -39,37 +38,31 @@ func normalizeChannelSlug(name string) (string, error) {
 	return s, nil
 }
 
-func validChannelType(t string) bool { return t == "text" || t == "voice" }
-
 func channelAudit(ctx context.Context, q DBTX, actorID, channelID, action string, detail map[string]any) error {
 	payload, _ := marshalAuditDetail(detail)
 	_, err := q.Exec(ctx, `INSERT INTO channel_audit (actor_id, channel_id, action, detail) VALUES (NULLIF($1,'')::uuid, NULLIF($2,'')::uuid, $3, $4)`, actorID, channelID, action, payload)
 	return err
 }
 
-// CreateChannel creates a channel with a normalized slug and valid type.
-func CreateChannel(ctx context.Context, actorID, name, chType string) (string, error) {
+// CreateChannel creates a channel with a normalized slug.
+func CreateChannel(ctx context.Context, actorID, name string) (string, error) {
 	slug, err := normalizeChannelSlug(name)
 	if err != nil {
 		return "", err
 	}
-	if !validChannelType(chType) {
-		return "", errChannelTypeInvalid
-	}
 	var id string
-	err = dbPool.QueryRow(ctx, `INSERT INTO channels (name, type) VALUES ($1, $2) RETURNING id::text`, slug, chType).Scan(&id)
+	err = dbPool.QueryRow(ctx, `INSERT INTO channels (name) VALUES ($1) RETURNING id::text`, slug).Scan(&id)
 	if isUniqueViolation(err) {
 		return "", errChannelNameTaken
 	}
 	if err != nil {
 		return "", err
 	}
-	_ = channelAudit(ctx, dbPool, actorID, id, "channel_created", map[string]any{"name": slug, "type": chType})
+	_ = channelAudit(ctx, dbPool, actorID, id, "channel_created", map[string]any{"name": slug})
 	return id, nil
 }
 
-// UpdateChannel renames a channel (type is immutable to preserve text/voice
-// invariants).
+// UpdateChannel renames a channel.
 func UpdateChannel(ctx context.Context, actorID, id, name string) error {
 	slug, err := normalizeChannelSlug(name)
 	if err != nil {
@@ -169,12 +162,11 @@ func handleAdminCreateChannel(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
 	var body struct {
 		Name string `json:"name"`
-		Type string `json:"type"`
 	}
 	if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 		return
 	}
-	id, err := CreateChannel(r.Context(), user.ID, body.Name, body.Type)
+	id, err := CreateChannel(r.Context(), user.ID, body.Name)
 	if err != nil {
 		channelAdminErr(w, r, err)
 		return
@@ -240,8 +232,8 @@ func handlePutChannelOverride(w http.ResponseWriter, r *http.Request) {
 
 func channelAdminErr(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
-	case errors.Is(err, errChannelSlugInvalid), errors.Is(err, errChannelTypeInvalid):
-		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The channel name or type is invalid.")
+	case errors.Is(err, errChannelSlugInvalid):
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The channel name is invalid.")
 	case errors.Is(err, errChannelNameTaken):
 		writeAPIError(w, r, http.StatusConflict, "name_taken", "That channel name is taken.")
 	case errors.Is(err, errChannelNotFound):

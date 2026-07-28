@@ -23,26 +23,23 @@ func TestChannelAdminCRUD(t *testing.T) {
 	db, actor := channelAdminFixture(t)
 	ctx := context.Background()
 
-	// Slug is lowercased; type validated.
-	id, err := CreateChannel(ctx, actor, "General-Chat", "text")
+	// Slug is lowercased.
+	id, err := CreateChannel(ctx, actor, "General-Chat")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	var name, typ string
-	db.QueryRow(ctx, `SELECT name, type FROM channels WHERE id=$1`, id).Scan(&name, &typ)
+	var name string
+	db.QueryRow(ctx, `SELECT name FROM channels WHERE id=$1`, id).Scan(&name)
 	if name != "general-chat" {
 		t.Fatalf("slug not lowercased: %q", name)
 	}
 
-	// Invalid slug and type are rejected.
-	if _, err := CreateChannel(ctx, actor, "Bad Name!", "text"); err != errChannelSlugInvalid {
+	// An invalid slug is rejected.
+	if _, err := CreateChannel(ctx, actor, "Bad Name!"); err != errChannelSlugInvalid {
 		t.Fatalf("invalid slug = %v", err)
 	}
-	if _, err := CreateChannel(ctx, actor, "ok-name", "hologram"); err != errChannelTypeInvalid {
-		t.Fatalf("invalid type = %v", err)
-	}
 	// Duplicate name conflicts.
-	if _, err := CreateChannel(ctx, actor, "general-chat", "text"); err != errChannelNameTaken {
+	if _, err := CreateChannel(ctx, actor, "general-chat"); err != errChannelNameTaken {
 		t.Fatalf("duplicate = %v, want name-taken", err)
 	}
 
@@ -63,7 +60,7 @@ func TestChannelAdminCRUD(t *testing.T) {
 func TestChannelOverrideDenyPrecedence(t *testing.T) {
 	db, actor := channelAdminFixture(t)
 	ctx := context.Background()
-	id, _ := CreateChannel(ctx, actor, "override-chan", "text")
+	id, _ := CreateChannel(ctx, actor, "override-chan")
 
 	// A role that is globally granted send_messages.
 	db.Exec(ctx, `INSERT INTO roles (id,name) VALUES ('TR','TR') ON CONFLICT DO NOTHING`)

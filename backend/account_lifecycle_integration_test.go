@@ -36,7 +36,7 @@ func TestAccountDeletionMatrix(t *testing.T) {
 	f.DB.Exec(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('doomed-sess',$1, NOW()+INTERVAL '1 hour')`, uid)
 	f.DB.Exec(ctx, `INSERT INTO user_preferences (user_id, prefs) VALUES ($1,'{"theme":"ink"}')`, uid)
 	f.DB.Exec(ctx, `INSERT INTO book_progress (user_id, book_id, percent) VALUES ($1,'b1',42)`, uid)
-	f.DB.QueryRow(ctx, `INSERT INTO channels (name, type) VALUES ('c','text') RETURNING id`).Scan(&cid)
+	f.DB.QueryRow(ctx, `INSERT INTO channels (name) VALUES ('c') RETURNING id`).Scan(&cid)
 	f.DB.QueryRow(ctx, `INSERT INTO messages (channel_id, user_id, content) VALUES ($1,$2,'public words') RETURNING id`, cid, uid).Scan(&mid)
 	// A private avatar file and a shared file.
 	f.DB.Exec(ctx, `INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type, purpose) VALUES ('a.png','h',$1,'clean','avatars/a.png',1,'image/png','avatar')`, uid)

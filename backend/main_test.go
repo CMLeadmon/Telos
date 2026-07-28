@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -49,76 +47,6 @@ func TestPasswordHashing(t *testing.T) {
 	}
 	if ok {
 		t.Errorf("Password verification succeeded for incorrect password")
-	}
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// LiveKit Token Generation Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-func TestGenerateLiveKitToken(t *testing.T) {
-	apiKey := "test-key"
-	apiSecret := "test-secret-at-least-thirty-two-chars"
-	roomName := "test-room"
-	identity := "test-user"
-
-	token, err := GenerateLiveKitToken(apiKey, apiSecret, roomName, identity)
-	if err != nil {
-		t.Fatalf("Failed to generate token: %v", err)
-	}
-
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 {
-		t.Fatalf("Token does not have 3 parts: %s", token)
-	}
-
-	// 1. Verify Header
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		t.Fatalf("Failed to decode header: %v", err)
-	}
-	var header map[string]string
-	if err := json.Unmarshal(headerBytes, &header); err != nil {
-		t.Fatalf("Failed to unmarshal header: %v", err)
-	}
-	if header["alg"] != "HS256" || header["typ"] != "JWT" {
-		t.Errorf("Unexpected header values: %+v", header)
-	}
-
-	// 2. Verify Claims
-	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		t.Fatalf("Failed to decode claims: %v", err)
-	}
-	var claims LiveKitClaims
-	if err := json.Unmarshal(claimsBytes, &claims); err != nil {
-		t.Fatalf("Failed to unmarshal claims: %v", err)
-	}
-
-	if claims.Iss != apiKey {
-		t.Errorf("Expected issuer %s, got %s", apiKey, claims.Iss)
-	}
-	if claims.Sub != identity {
-		t.Errorf("Expected subject %s, got %s", identity, claims.Sub)
-	}
-	if !claims.Video.RoomJoin || claims.Video.Room != roomName {
-		t.Errorf("Unexpected video grants: %+v", claims.Video)
-	}
-
-	// 3. Verify Signature
-	signingInput := parts[0] + "." + parts[1]
-	key := []byte(apiSecret)
-	h := hmac.New(sha256.New, key)
-	h.Write([]byte(signingInput))
-	expectedSignature := h.Sum(nil)
-
-	actualSignature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		t.Fatalf("Failed to decode signature: %v", err)
-	}
-
-	if !hmac.Equal(expectedSignature, actualSignature) {
-		t.Errorf("Signature verification failed")
 	}
 }
 
@@ -195,7 +123,7 @@ func TestGetMessagesForChannelReturnsLatest(t *testing.T) {
 		t.Fatalf("Failed to insert test user: %v", err)
 	}
 
-	if _, err := pool.Exec(ctx, `INSERT INTO channels (id, name, type) VALUES ($1, 'tdd-history-test', 'text')`, channelID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO channels (id, name) VALUES ($1, 'tdd-history-test')`, channelID); err != nil {
 		t.Fatalf("Failed to insert test channel: %v", err)
 	}
 
@@ -260,15 +188,8 @@ func TestHandleListChannelsIncludesSeeds(t *testing.T) {
 	for _, c := range channels {
 		byName[c.Name] = c
 	}
-	general, ok := byName["general"]
-	if !ok {
+	if _, ok := byName["general"]; !ok {
 		t.Fatal("Expected seeded channel 'general' in response")
-	}
-	if general.Type != "text" {
-		t.Errorf("Expected 'general' to be a text channel, got %q", general.Type)
-	}
-	if lounge, ok := byName["voice-lounge"]; ok && lounge.Type != "voice" {
-		t.Errorf("Expected 'voice-lounge' to be a voice channel, got %q", lounge.Type)
 	}
 }
 

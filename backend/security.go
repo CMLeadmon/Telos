@@ -174,12 +174,6 @@ func requireTrustedOrigin(next http.Handler, cfg SecurityConfig) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Signed server-to-server webhooks authenticate by signature, carry no
-		// browser Origin, and are exempt from the origin policy.
-		if r.URL.Path == "/api/v1/voice/webhook" {
-			next.ServeHTTP(w, r)
-			return
-		}
 		origin := r.Header.Get("Origin")
 		if origin == "" {
 			// Fall back to Referer's origin for older clients.

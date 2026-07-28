@@ -62,25 +62,9 @@ func validatePreferences(raw []byte) (map[string]any, error) {
 			if !ok || !validThemes[s] {
 				return nil, errors.New("invalid theme")
 			}
-		case "sceneEnabled", "reducedMotion",
-			"voiceNoiseSuppression", "voiceEchoCancellation", "voiceAutoGainControl":
+		case "sceneEnabled", "reducedMotion":
 			if _, ok := v.(bool); !ok {
 				return nil, fmt.Errorf("%s must be a boolean", k)
-			}
-		case "voiceInputDeviceId", "voiceOutputDeviceId":
-			s, ok := v.(string)
-			if !ok || len(s) > 256 {
-				return nil, fmt.Errorf("%s must be a string of at most 256 characters", k)
-			}
-		case "voiceInputGain":
-			f, ok := v.(float64)
-			if !ok || f < 0 || f > 2 {
-				return nil, errors.New("voiceInputGain must be a number between 0 and 2")
-			}
-		case "voiceOutputVolume":
-			f, ok := v.(float64)
-			if !ok || f < 0 || f > 1 {
-				return nil, errors.New("voiceOutputVolume must be a number between 0 and 1")
 			}
 		default:
 			return nil, fmt.Errorf("unknown preference key %q", k)

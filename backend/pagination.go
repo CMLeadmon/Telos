@@ -224,7 +224,6 @@ func init() {
 		{"files.audit", "created_desc"},
 		{"channel.roots", "created_desc"},
 		{"channel.replies", "created_asc"},
-		{"media.list", "position_asc"},
 	} {
 		registerList(ListPolicy{
 			Scope: s.scope, Mode: ListCursor, DefaultSort: s.sort,

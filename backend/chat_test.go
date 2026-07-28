@@ -16,7 +16,7 @@ func seedChannel(t *testing.T, name string) string {
 	t.Helper()
 	var id string
 	err := dbPool.QueryRow(context.Background(),
-		`INSERT INTO channels (name, type) VALUES ($1,'text') RETURNING id::text`, name).Scan(&id)
+		`INSERT INTO channels (name) VALUES ($1) RETURNING id::text`, name).Scan(&id)
 	if err != nil {
 		t.Fatalf("seed channel: %v", err)
 	}
@@ -42,7 +42,6 @@ func TestAuthorizeChannelMatrix(t *testing.T) {
 		{"nonexistent channel", member, "00000000-0000-0000-0000-000000000009", ChannelView, errChannelNotFound},
 		{"member can view", member, chID, ChannelView, nil},
 		{"member can send", member, chID, ChannelSend, nil},
-		{"member can voice", member, chID, ChannelVoice, nil},
 		{"no-perms view denied as not-found", noPerms, chID, ChannelView, errChannelNotFound},
 	}
 	for _, tc := range cases {

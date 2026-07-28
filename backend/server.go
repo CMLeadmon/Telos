@@ -32,7 +32,7 @@ func (noopOutboxDrainer) Drain(context.Context) error { return nil }
 var outboxDrainer OutboxDrainer = noopOutboxDrainer{}
 
 // shuttingDown flips true once a signal arrives so admission can reject new
-// upgrades/uploads/voice reservations with 503 shutting_down.
+// upgrades and uploads with 503 shutting_down.
 var shuttingDown atomic.Bool
 
 // shuttingDownMiddleware rejects new work once graceful shutdown has begun.

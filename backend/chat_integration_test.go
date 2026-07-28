@@ -21,7 +21,7 @@ func chatFixture(t *testing.T) (*pgxpool.Pool, string, string) {
 	// Reset truncates the seeded channels; re-insert the two this test uses.
 	for _, id := range []string{generalChannel, devChannel} {
 		f.DB.Exec(context.Background(),
-			`INSERT INTO channels (id, name, type) VALUES ($1, $2, 'text') ON CONFLICT (id) DO NOTHING`,
+			`INSERT INTO channels (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
 			id, "chan-"+id[:8])
 	}
 	mk := func(n string) string {

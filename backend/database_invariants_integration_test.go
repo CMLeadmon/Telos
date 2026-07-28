@@ -17,7 +17,7 @@ func TestDatabaseConstraintsRejectInvalidRows(t *testing.T) {
 	// Seed a valid user + channel to hang FK-bound rows off of.
 	var uid, cid string
 	pool.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('alice','x') RETURNING id`).Scan(&uid)
-	pool.QueryRow(ctx, `INSERT INTO channels (name, type) VALUES ('general','text') RETURNING id`).Scan(&cid)
+	pool.QueryRow(ctx, `INSERT INTO channels (name) VALUES ('general') RETURNING id`).Scan(&cid)
 
 	cases := []struct {
 		name string
@@ -25,7 +25,6 @@ func TestDatabaseConstraintsRejectInvalidRows(t *testing.T) {
 		args []any
 	}{
 		{"non-canonical username", `INSERT INTO users (username, password_hash) VALUES ($1,'x')`, []any{"Bad Name!"}},
-		{"invalid channel type", `INSERT INTO channels (name, type) VALUES ('x','audio')`, nil},
 		{"negative mask", `INSERT INTO channel_role_overrides (channel_id, role_id, allow_mask, deny_mask) VALUES ($1,'Member',-1,0)`, []any{cid}},
 		{"overlong message", `INSERT INTO messages (channel_id, user_id, content) VALUES ($1,$2,repeat('a',4001))`, []any{cid, uid}},
 		{"session expiry before creation", `INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES ('h',$1, NOW() - INTERVAL '1 hour', NOW())`, []any{uid}},

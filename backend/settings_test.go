@@ -67,11 +67,7 @@ func TestValidateNewPassword(t *testing.T) {
 }
 
 func TestValidatePreferences(t *testing.T) {
-	good := []byte(`{"theme":"ink","sceneEnabled":false,"reducedMotion":true,
-		"voiceInputDeviceId":"abc123","voiceOutputDeviceId":"",
-		"voiceInputGain":1.5,"voiceOutputVolume":0.8,
-		"voiceNoiseSuppression":true,"voiceEchoCancellation":false,
-		"voiceAutoGainControl":true}`)
+	good := []byte(`{"theme":"ink","sceneEnabled":false,"reducedMotion":true}`)
 	prefs, err := validatePreferences(good)
 	if err != nil {
 		t.Fatalf("valid prefs rejected: %v", err)
@@ -79,22 +75,12 @@ func TestValidatePreferences(t *testing.T) {
 	if prefs["theme"] != "ink" {
 		t.Errorf("theme = %v, want ink", prefs["theme"])
 	}
-	if prefs["voiceInputGain"] != 1.5 {
-		t.Errorf("voiceInputGain = %v, want 1.5", prefs["voiceInputGain"])
-	}
 	bads := [][]byte{
 		[]byte(`{"theme":"neon"}`),
 		[]byte(`{"sceneEnabled":"yes"}`),
 		[]byte(`{"evil":true}`),
 		[]byte(`{`),
 		[]byte(`{"theme":"` + strings.Repeat("a", 3000) + `"}`),
-		[]byte(`{"voiceInputGain":3}`),
-		[]byte(`{"voiceInputGain":-0.1}`),
-		[]byte(`{"voiceInputGain":"loud"}`),
-		[]byte(`{"voiceOutputVolume":1.1}`),
-		[]byte(`{"voiceNoiseSuppression":"on"}`),
-		[]byte(`{"voiceInputDeviceId":42}`),
-		[]byte(`{"voiceInputDeviceId":"` + strings.Repeat("d", 300) + `"}`),
 	}
 	for i, b := range bads {
 		if _, err := validatePreferences(b); err == nil {

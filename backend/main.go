@@ -271,8 +271,6 @@ func main() {
 	// Atomic login limiter (Redis Lua reservations with a degraded in-process
 	// fallback) replaces the old check-then-act throttle.
 	loginLimiter = newLoginLimiter(redisClient)
-	// Atomic voice seat store enforcing the 25-participant beta ceiling.
-	voiceSeats = newVoiceSeatStore(redisClient)
 
 	// Jellyfin item authorizer: every media item must belong to a configured
 	// library. Disabled (allow-all) in development when JELLYFIN_LIBRARY_IDS is
@@ -459,12 +457,6 @@ func main() {
 	mux.Handle("PUT /api/v1/library/books/{id}/cover", withAuth(http.HandlerFunc(handleUpdateLibraryBookCover), "manage_library"))
 	mux.Handle("DELETE /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleDeleteLibraryBook), "manage_library"))
 
-	// Voice Token (Requires join_voice)
-	mux.Handle("POST /api/v1/voice/channels/{id}/token", withAuth(http.HandlerFunc(handleVoiceToken), "join_voice"))
-	// Signed server-to-server webhook from LiveKit (verified by signature, not
-	// a user session); exempt from the browser origin policy.
-	mux.HandleFunc("POST /api/v1/voice/webhook", handleVoiceWebhook)
-
 	// File Library (Require view_files, upload_files, upload_books, manage_files)
 	mux.Handle("GET /api/v1/files", withAuth(http.HandlerFunc(handleListFiles), "view_files"))
 	mux.Handle("POST /api/v1/files", withAuth(http.HandlerFunc(handleUploadFile), "upload_files"))
@@ -487,12 +479,6 @@ func main() {
 	mux.Handle("GET /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleListAnnotationReplies), "view_library"))
 	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), "view_library"))
 	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), "view_library"))
-
-	// My List (durable, ordered, per-user media list).
-	mux.Handle("GET /api/v1/users/me/media-list", withAuth(http.HandlerFunc(handleGetMyList), "view_media"))
-	mux.Handle("POST /api/v1/users/me/media-list", withAuth(http.HandlerFunc(handleAddToMyList), "view_media"))
-	mux.Handle("DELETE /api/v1/users/me/media-list/{itemID}", withAuth(http.HandlerFunc(handleRemoveFromMyList), "view_media"))
-	mux.Handle("PUT /api/v1/users/me/media-list/order", withAuth(http.HandlerFunc(handleReorderMyList), "view_media"))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)
@@ -524,7 +510,7 @@ func main() {
 func validateSecrets() {
 	vars := []string{
 		"DATABASE_URL", "REDIS_URL", "TELOS_DOMAIN", "TELOS_PUBLIC_ORIGIN", "TELOS_BOOTSTRAP_TOKEN",
-		"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "JELLYFIN_ADMIN_TOKEN", "GRIMMORY_ADMIN_USER", "GRIMMORY_ADMIN_PASSWORD",
+		"JELLYFIN_ADMIN_TOKEN", "GRIMMORY_ADMIN_USER", "GRIMMORY_ADMIN_PASSWORD",
 	}
 	placeholders := []string{"your-secret-here", "change-me", "temp-token", "placeholder", "generate-me"}
 	for _, v := range vars {
@@ -2246,12 +2232,11 @@ func handleRemoveReaction(w http.ResponseWriter, r *http.Request) {
 type ChannelResponse struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-	Type string `json:"type"` // "text" or "voice"
 }
 
 func handleListChannels(w http.ResponseWriter, r *http.Request) {
 	rows, err := dbPool.Query(r.Context(), `
-		SELECT id::text, name, type FROM channels ORDER BY type, name
+		SELECT id::text, name FROM channels ORDER BY name
 	`)
 	if err != nil {
 		http.Error(w, "Failed to list channels", http.StatusInternalServerError)
@@ -2262,7 +2247,7 @@ func handleListChannels(w http.ResponseWriter, r *http.Request) {
 	channels := []ChannelResponse{}
 	for rows.Next() {
 		var c ChannelResponse
-		if err := rows.Scan(&c.ID, &c.Name, &c.Type); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name); err != nil {
 			http.Error(w, "Failed to scan channel entry", http.StatusInternalServerError)
 			return
 		}
@@ -3180,75 +3165,6 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LiveKit Voice Token (Hardened SDK)
-// ═══════════════════════════════════════════════════════════════════════════
-
-type VideoGrant struct {
-	Room           string `json:"room,omitempty"`
-	RoomJoin       bool   `json:"roomJoin,omitempty"`
-	CanPublish     bool   `json:"canPublish,omitempty"`
-	CanSubscribe   bool   `json:"canSubscribe,omitempty"`
-	CanPublishData bool   `json:"canPublishData,omitempty"`
-}
-
-type LiveKitClaims struct {
-	Exp   int64      `json:"exp"`
-	Iss   string     `json:"iss"`
-	Sub   string     `json:"sub"`
-	Nbf   int64      `json:"nbf"`
-	Video VideoGrant `json:"video"`
-}
-
-// GenerateLiveKitToken delegates to the hardened, microphone-only mint.
-func GenerateLiveKitToken(apiKey, apiSecret, roomName, identity string) (string, error) {
-	return mintVoiceToken(apiKey, apiSecret, roomName, identity)
-}
-
-func handleVoiceToken(w http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value(userContextKey).(*UserContext)
-
-	// The channel must exist, be viewable, and permit voice.
-	channelID, ok := authorizeChannelHTTP(w, r, ChannelVoice)
-	if !ok {
-		return
-	}
-	var cType string
-	if err := dbPool.QueryRow(r.Context(), "SELECT type FROM channels WHERE id = $1", channelID).Scan(&cType); err != nil {
-		writeAPIError(w, r, http.StatusNotFound, "channel_not_found", "Channel not found.")
-		return
-	}
-	if cType != "voice" {
-		writeAPIError(w, r, http.StatusBadRequest, "not_voice_channel", "This channel does not support voice.")
-		return
-	}
-
-	apiKey := os.Getenv("LIVEKIT_API_KEY")
-	apiSecret := os.Getenv("LIVEKIT_API_SECRET")
-	if apiKey == "" || apiSecret == "" {
-		writeAPIError(w, r, http.StatusInternalServerError, "voice_unconfigured", "Voice is not configured.")
-		return
-	}
-
-	// Reserve a seat atomically before signing; fail closed on capacity or a
-	// Redis error rather than issuing an unaccounted token.
-	if _, err := voiceSeats.Reserve(r.Context(), user.ID, channelID); err != nil {
-		writeAPIError(w, r, http.StatusServiceUnavailable, "voice_capacity_unavailable", "Voice is at capacity; try again shortly.")
-		return
-	}
-
-	token, err := mintVoiceToken(apiKey, apiSecret, channelID, user.ID)
-	if err != nil {
-		// Release the reservation we just took if signing failed.
-		_ = voiceSeats.(*redisVoiceSeatStore).release(r.Context(), user.ID)
-		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": token})
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Shared File Library & ClamAV Integration
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -3901,7 +3817,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 		go func() {
 			defer wg.Done()
 			rows, err := dbPool.Query(ctx, `
-				SELECT id::text, name, type FROM channels ORDER BY type, name
+				SELECT id::text, name FROM channels ORDER BY name
 			`)
 			if err != nil {
 				log.Printf("WARN: search channels query failed: %v", err)
@@ -3912,7 +3828,7 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			var chans []ChannelResponse
 			for rows.Next() {
 				var c ChannelResponse
-				if err := rows.Scan(&c.ID, &c.Name, &c.Type); err == nil {
+				if err := rows.Scan(&c.ID, &c.Name); err == nil {
 					allowed, err := hasPermission(ctx, user, "view_channel", &c.ID)
 					if err == nil && allowed {
 						if strings.Contains(strings.ToLower(c.Name), strings.ToLower(q)) {

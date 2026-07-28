@@ -37,7 +37,6 @@ type ChannelAction string
 const (
 	ChannelView  ChannelAction = "view"
 	ChannelSend  ChannelAction = "send"
-	ChannelVoice ChannelAction = "voice"
 	ChannelAdmin ChannelAction = "admin"
 )
 
@@ -83,8 +82,6 @@ func AuthorizeChannel(ctx context.Context, user *UserContext, channelID string, 
 		return nil
 	case ChannelSend:
 		actionPerm = "send_messages"
-	case ChannelVoice:
-		actionPerm = "join_voice"
 	case ChannelAdmin:
 		actionPerm = "manage_channels"
 	default:
