@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Dev-only Compose override (publishes the gateway to localhost for `npm run dev`)
+docker-compose.override.yml
+
 # Editor state
 .idea/
 .vscode/
