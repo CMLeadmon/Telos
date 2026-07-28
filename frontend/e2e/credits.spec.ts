@@ -3,7 +3,6 @@ import { expect, test } from "@playwright/test";
 const ISOLATED_SERVICES = [
   "Jellyfin",
   "Grimmory",
-  "LiveKit",
   "Traefik",
   "PostgreSQL",
   "Redis",

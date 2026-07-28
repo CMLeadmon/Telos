@@ -56,6 +56,14 @@ hit=$(grep -rniE 'nothing (ever )?leaves|never leaves (your|the) (node|device|se
 hit=$(grep -rniE 'aria-label="oracle"' frontend/src 2>/dev/null)
 [ -n "$hit" ] && report "inert advertised control" "$hit"
 
+# 8. Removed feature surfaces must not reappear in shipped code (voice rooms,
+#    LiveKit, Watch Party, the notification inbox, or My List). Tests and
+#    historical plans/specs are excluded above by path; here we scope to source.
+hit=$(grep -rniE 'livekit|watch.?party|voice.?dock|useVoiceSession|useWatchParty|useNotificationStore|useMyListStore|/media-list' \
+      frontend/src backend --include='*.go' --include='*.ts' --include='*.tsx' 2>/dev/null \
+      | grep -vE '(_test\.go|\.spec\.ts|\.test\.tsx?)')
+[ -n "$hit" ] && report "removed feature surface reappeared" "$hit"
+
 if [ "$fail" -eq 0 ]; then
   echo "product-truth: OK — no prohibited or inert surface found."
 fi

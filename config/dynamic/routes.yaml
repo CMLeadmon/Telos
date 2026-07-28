@@ -1,17 +1,5 @@
 http:
   routers:
-    livekit:
-      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/livekit`)'
-      entryPoints:
-        - websecure
-      priority: 300
-      middlewares:
-        - telos-inflight
-        - livekit-strip
-      service: livekit
-      tls:
-        certResolver: letsencrypt
-
     # Login: edge rate limit (10/min per IP, burst 5) plus the auth-body class.
     telos-login:
       rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && Path(`/api/v1/auth/login`)'
@@ -74,10 +62,6 @@ http:
         certResolver: letsencrypt
 
   middlewares:
-    livekit-strip:
-      stripPrefix:
-        prefixes:
-          - /livekit
     # Edge in-flight ceiling matching the gateway's 128-request admission cap.
     telos-inflight:
       inFlightReq:
@@ -104,26 +88,7 @@ http:
         memRequestBodyBytes: 65536
 
   services:
-    livekit:
-      loadBalancer:
-        servers:
-          - url: http://livekit:7880
     telos-core:
       loadBalancer:
         servers:
           - url: http://telos-core:8080
-
-tcp:
-  routers:
-    turn:
-      rule: 'HostSNI(`turn.{{ env "TELOS_DOMAIN" }}`)'
-      entryPoints:
-        - websecure
-      service: turn
-      tls:
-        certResolver: letsencrypt
-  services:
-    turn:
-      loadBalancer:
-        servers:
-          - address: livekit:5349

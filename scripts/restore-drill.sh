@@ -10,8 +10,8 @@
 #       Run the real drill on the operator's reference recovery environment.
 #
 # For clean-node disaster recovery the RTO clock starts when host-loss recovery
-# is declared and ends only after automated firewall + A/AAAA cutover and valid
-# app/turn certificates pass external HTTPS/WSS/range-media/voice/TURN probes.
+# is declared and ends only after automated firewall + A/AAAA cutover and a
+# valid app certificate passes external HTTPS/WSS/range-media probes.
 # A same-host-only restore cannot satisfy the beta RTO claim.
 set -euo pipefail
 

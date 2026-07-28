@@ -32,10 +32,10 @@ run_filter=""
 case "$suite" in
 auth) run_filter="-run Test(Bootstrap|InviteAcceptance|LastOwner|LoginLimiter|CanonicalUsername|SessionMutation|SecurityEvent)"; shift ;;
 realtime) run_filter="-run Test(Channel|Realtime|Socket|Revocation|Subscription)"; shift ;;
-security) run_filter="-run Test(Voice|Server|Shutdown|Slow|HTTPAdmission|Security)"; shift ;;
-db) run_filter="-run Test(Migration|Migrations|Migrator|Database|ForeignKey|QueryStatistics|MessageManagement|Cursor|ListPolicy|MyList|Search|Outbox|AccountDeletion|RetentionMatrix|AssetDeletion|SchemaOwner|RuntimeRole|LoadAuthenticatedUser|HistoryQueryCount|BuildListQuery|SessionTouchWorker|DatabaseTimeouts|DatabaseConstraints|FailedMigration|ConcurrentMigrators|DiscoverMigrations|PlanMigrations|ChecksumSet)"; shift ;;
+security) run_filter="-run Test(Server|Shutdown|Slow|HTTPAdmission|Security)"; shift ;;
+db) run_filter="-run Test(Migration|Migrations|Migrator|Database|ForeignKey|QueryStatistics|MessageManagement|Cursor|ListPolicy|Search|Outbox|AccountDeletion|RetentionMatrix|AssetDeletion|SchemaOwner|RuntimeRole|LoadAuthenticatedUser|HistoryQueryCount|BuildListQuery|SessionTouchWorker|DatabaseTimeouts|DatabaseConstraints|FailedMigration|ConcurrentMigrators|DiscoverMigrations|PlanMigrations|ChecksumSet)"; shift ;;
 storage) run_filter="-run Test(FileStore|FilePurpose|FileAudit|LogicalFolder|IngestionLease|BookHandoff|Upload|Quota|Capacity|Storage|Confine|EPUB|ContentValidation|ClamAV|Reconcil|Jellyfin|Grimmory|Range|Readiness|Health|Egress)"; shift ;;
-product) run_filter="-run Test(Notification|UserEvent|UserEventCatchUp|OutboxNotification|DeleteAccountNotification|DeleteAccountUserEvent|Thread|Annotation|MyList|WatchParty|ChannelOverride)"; shift ;;
+product) run_filter="-run Test(UserEvent|UserEventCatchUp|DeleteAccountUserEvent|RecordUserEvent|Thread|Annotation|ChannelOverride)"; shift ;;
 all) shift || true ;;
 -*) : ;; # first arg is already a go-test flag
 *) shift || true ;;

@@ -74,8 +74,8 @@ export default function LandingPage() {
             <h3>Chat</h3>
             <p>
               Group messaging built for talking about what you&apos;re reading
-              and watching. Threads, voice lounges, and a durable inbox that
-              keeps what you missed.
+              and watching. Threaded conversation, reactions, and pins keep the
+              discussion in one place.
             </p>
           </div>
           <div className="feat">

@@ -164,9 +164,8 @@ run_inventory() {
 		fi
 	fi
 
-	# Production compose: only Traefik may publish HTTP entry points. Other
-	# published ports must be on the reviewed non-HTTP allowlist (LiveKit
-	# WebRTC/TURN media ports).
+	# Production compose: only Traefik may publish HTTP entry points; no other
+	# service may publish any port.
 	local port_report
 	port_report="$(tree_file docker-compose.yml | awk '
 		/^services:/ { in_services=1; next }
@@ -183,7 +182,6 @@ run_inventory() {
 		[ -n "$service" ] || continue
 		case "$service:$port" in
 		traefik:80:80 | traefik:443:443) ;;
-		livekit:7881:7881 | livekit:3478:3478/udp | livekit:50000-50100:50000-50100/udp) ;;
 		*) fail_inventory "unreviewed published port in production compose: service=$service port=$port" ;;
 		esac
 	done <<<"$port_report"
@@ -325,8 +323,6 @@ POSTGRES_USER=telos
 POSTGRES_PASSWORD=$(rand 24)
 POSTGRES_DB=telos
 REDIS_PASSWORD=$(rand 24)
-LIVEKIT_API_KEY=lk$(rand 8)
-LIVEKIT_API_SECRET=$(rand 24)
 JELLYFIN_ADMIN_TOKEN=$(rand 16)
 JELLYFIN_USER_NAME=
 GRIMMORY_ADMIN_USER=telos-gateway

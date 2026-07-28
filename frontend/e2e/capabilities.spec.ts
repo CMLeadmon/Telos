@@ -23,10 +23,9 @@ test("capability-driven navigation and settings visibility", async ({ page }) =>
   await page.goto("/settings/");
   await expect(page.getByTestId("settings-page")).toBeVisible();
 
-  // Profile, Security, Appearance, Voice & Audio, Credits are always present
+  // Profile, Security, Appearance, Credits are always present
   await expect(page.getByRole("button", { name: "Profile" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Security" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Appearance" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Voice & Audio" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Credits" })).toBeVisible();
 });

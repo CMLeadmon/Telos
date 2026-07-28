@@ -58,7 +58,7 @@ if grep -rniE "\boracle\b|AI (summar|assistant|analysis)|an AI that" \
 fi
 
 # --- Isolated-service credits -----------------------------------------------
-for svc in Jellyfin Grimmory LiveKit Traefik PostgreSQL Redis MariaDB ClamAV; do
+for svc in Jellyfin Grimmory Traefik PostgreSQL Redis MariaDB ClamAV; do
 	grep -q "| $svc " CREDITS.md || err "CREDITS.md is missing isolated service/infrastructure credit: $svc"
 done
 

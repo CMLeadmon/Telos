@@ -1,8 +1,8 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// Product-truth browser assertions: no prohibited Oracle/AI surface and no inert
-// advertised control (notification bell before P5-T3; My List / Watch Party
-// controls before their tasks) renders in the shipped UI.
+// Product-truth browser assertions: no prohibited Oracle/AI surface, and no
+// removed feature (voice, Watch Party, the notification inbox, or My List)
+// renders in the shipped UI after the less-is-more redesign.
 
 const USERNAME = process.env.E2E_USERNAME;
 const PASSWORD = process.env.E2E_PASSWORD;
@@ -28,26 +28,18 @@ test("no Oracle or AI control renders in the app shell", async ({ page }) => {
   await expect(page.getByText(/AI[- ]powered|AI summ|ask the oracle/i)).toHaveCount(0);
 });
 
-test("the notification bell is a real control, not an inert one", async ({ page }) => {
+test("no voice, Watch Party, My List, or notification surface renders", async ({ page }) => {
   await login(page);
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
-  // Shipped in P5-T3: the bell exists and opens a working inbox dialog.
-  const bell = page.locator('[aria-label="notifications"]');
-  await expect(bell).toBeVisible();
-  await bell.click();
-  await expect(page.getByRole("dialog", { name: "Notifications" })).toBeVisible();
-});
 
-test("My List and Watch Party controls are real active controls on stream page", async ({ page }) => {
-  await login(page);
-  await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
+  // The topbar notification bell and its inbox are gone.
+  await expect(page.locator('[aria-label="notifications"]')).toHaveCount(0);
+  // The voice dock and any voice-channel join control are gone.
+  await expect(page.getByTestId("voice-dock")).toHaveCount(0);
+
   await page.goto("/stream/");
-  // If hero media is present, verify Watch Party opens the creation dialog
-  const watchPartyBtn = page.getByRole("button", { name: /watch party/i });
-  if ((await watchPartyBtn.count()) > 0) {
-    await watchPartyBtn.click();
-    await expect(page.getByRole("dialog", { name: /start a watch party/i })).toBeVisible();
-  }
+  await expect(page.getByRole("button", { name: /watch party/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /my list/i })).toHaveCount(0);
 });
 
 test("the public landing page makes no AI or absolute-privacy claim", async ({ page }) => {
