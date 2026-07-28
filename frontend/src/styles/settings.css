@@ -63,7 +63,7 @@ html[data-motion="reduced"] *,html[data-motion="reduced"] *::before,html[data-mo
 .creditlinks a{display:inline-flex;align-items:center;gap:5px;font-family:var(--f-mono);font-size:11.5px;
   color:var(--cyan);text-decoration:none}
 .creditlinks a:hover{text-decoration:underline}
-@media (max-width: 700px){.creditrow{flex-direction:column;align-items:flex-start}}
+@media (max-width: 720px){.creditrow{flex-direction:column;align-items:flex-start}}
 
 /* Admin channels management */
 .admin-channels h2{margin:0 0 12px}

@@ -1,6 +1,62 @@
-/* ---------------- shared scale ---------------- */
+/* ---------------- shared scale ----------------
+   Theme-independent tokens: radii, fonts, spacing rhythm, fluid type, the
+   responsive breakpoint set, and the touch-target floor. Colors and typefaces
+   live per-theme in themes.css.
+
+   Breakpoints are a single documented set. CSS @media cannot read var(), so the
+   literal values below are the source of truth — every @media query in the app
+   uses one of these three widths and nothing else:
+     --bp-sm  720px   phone / small tablet: layouts collapse to one column
+     --bp-md  900px   tablet: the desktop rail gives way to the bottom nav
+     --bp-lg 1100px   narrow desktop: the chat aside folds away
+*/
 :root{
   --r-xs:6px; --r:10px; --r-lg:14px; --r-pill:999px;
   --f-mono:'Space Mono',ui-monospace,monospace; /* @kind font */
+
+  /* Breakpoint reference (for JS/container queries; @media uses the literals). */
+  --bp-sm:720px; --bp-md:900px; --bp-lg:1100px;
+
+  /* Spacing rhythm — an 8px base with a half-step. Use these instead of
+     one-off pixel paddings so vertical and horizontal rhythm stay consistent. */
   --sp:8px;
+  --sp-1:4px; --sp-2:8px; --sp-3:12px; --sp-4:16px;
+  --sp-5:24px; --sp-6:32px; --sp-7:48px; --sp-8:64px;
+
+  /* Fluid type scale — each step interpolates with the viewport between a
+     mobile floor and a desktop ceiling, so text scales continuously rather
+     than jumping at a breakpoint. */
+  --fs-xs:clamp(11px, 0.68rem + 0.1vw, 12px);
+  --fs-sm:clamp(12.5px, 0.78rem + 0.1vw, 13.5px);
+  --fs-base:clamp(14px, 0.86rem + 0.15vw, 15px);
+  --fs-lg:clamp(16px, 0.95rem + 0.4vw, 18px);
+  --fs-xl:clamp(20px, 1.1rem + 1vw, 24px);
+  --fs-2xl:clamp(26px, 1.3rem + 2.2vw, 34px);
+
+  /* Minimum comfortable touch target. Applied to interactive controls only
+     under a coarse pointer (see the pointer:coarse block below) so desktop
+     stays dense while touch stays reachable. */
+  --tap:44px;
+
+  /* Safe-area insets, zeroed on hardware without a notch/home indicator. */
+  --safe-top:env(safe-area-inset-top, 0px);
+  --safe-bottom:env(safe-area-inset-bottom, 0px);
+  --safe-left:env(safe-area-inset-left, 0px);
+  --safe-right:env(safe-area-inset-right, 0px);
+}
+
+/* On touch devices, give the primary interactive controls a 44px hit area
+   without inflating the same controls on a mouse-driven desktop. */
+@media (pointer:coarse){
+  .iconbtn,
+  .chan,
+  .mobile-nav-btn,
+  .facetbtn,
+  .btn,
+  .btn-ghost,
+  .react,
+  .search-item,
+  .pdf-controls button{
+    min-height:var(--tap);
+  }
 }

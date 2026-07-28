@@ -77,7 +77,7 @@
 /* shared book management */
 .book-manage-overlay{position:fixed;inset:0;z-index:70;display:flex;align-items:center;
   justify-content:center;padding:24px;background:color-mix(in srgb,#000 68%,transparent)}
-.book-manage-modal{width:min(980px,100%);max-height:calc(100vh - 48px);display:flex;
+.book-manage-modal{width:min(980px,100%);max-height:calc(100dvh - 48px);display:flex;
   flex-direction:column;border:1px solid var(--line-2);border-radius:var(--r-lg);
   background:var(--surface);overflow:hidden}
 .book-manage-bar{display:flex;align-items:center;justify-content:space-between;gap:18px;
@@ -130,7 +130,7 @@
 .book-danger-zone .btn-danger:hover{background:var(--rose);color:#000}
 .book-manage-modal button:disabled{cursor:not-allowed;opacity:.55}
 @media(max-width:720px){
-  .book-manage-overlay{padding:0}.book-manage-modal{max-height:100vh;height:100%;border-radius:0}
+  .book-manage-overlay{padding:0}.book-manage-modal{max-height:100dvh;height:100%;border-radius:0}
   .book-manage-form{grid-template-columns:1fr}.book-manage-wide{grid-column:auto}
   .book-cover-controls,.book-danger-zone{flex-direction:column}
 }
@@ -155,7 +155,7 @@
 .reader-main{flex:1;position:relative;display:flex;flex-direction:column;min-width:0}
 .reader-side{width:320px;flex:none;border-left:1px solid var(--line-2);background:var(--surface);
   overflow-y:auto;display:flex;flex-direction:column}
-@media (max-width:820px){.reader-side{display:none}}
+@media (max-width:900px){.reader-side{display:none}}
 .annot-panel{display:flex;flex-direction:column}
 .annot-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line-2)}
 .annot-head h3{margin:0;font-size:14px}

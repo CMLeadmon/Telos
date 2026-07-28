@@ -6,11 +6,12 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--f-sans)}
 
 .app.app--viewport{width:100%;height:100dvh;border:0;border-radius:0}
 
-/* Desktop-first responsive collapse: rail/aside give way below tablet width. */
+/* Desktop-first responsive collapse: the chat aside folds at --bp-lg, then the
+   rail gives way to the bottom nav at --bp-md. */
 @media (max-width:1100px){
   .aside{display:none}
 }
-@media (max-width:860px){
+@media (max-width:900px){
   .rail{display:none}
   .app.app--viewport .topbar{padding:0 14px}
   .tabbar{display:none}
@@ -28,7 +29,7 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--f-sans)}
   justify-content: space-around;
   position: relative;
   z-index: 20;
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: var(--safe-bottom);
 }
 .mobile-nav-btn {
   flex: 1;
