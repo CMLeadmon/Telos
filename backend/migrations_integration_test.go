@@ -8,6 +8,80 @@ import (
 	"telos-core/testutil"
 )
 
+func TestMigration0020RemovesRealtimeExtras(t *testing.T) {
+	pool := testutil.FreshDatabase(t)
+	ctx := context.Background()
+	if _, err := RunMigrations(ctx, pool, migrationsFS); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	for _, table := range []string{
+		"watch_parties", "watch_party_members", "watch_party_invitations",
+		"watch_party_host_offers", "notifications", "media_lists", "media_list_entries",
+	} {
+		var exists bool
+		if err := pool.QueryRow(ctx,
+			`SELECT EXISTS(SELECT 1 FROM information_schema.tables
+			   WHERE table_schema='public' AND table_name=$1)`, table).Scan(&exists); err != nil {
+			t.Fatalf("check %s: %v", table, err)
+		}
+		if exists {
+			t.Errorf("table %s should have been dropped", table)
+		}
+	}
+
+	var typeExists bool
+	if err := pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM information_schema.columns
+		   WHERE table_name='channels' AND column_name='type')`).Scan(&typeExists); err != nil {
+		t.Fatalf("check channels.type: %v", err)
+	}
+	if typeExists {
+		t.Error("channels.type should have been dropped")
+	}
+
+	var permCount int
+	pool.QueryRow(ctx, `SELECT count(*) FROM permissions WHERE id='join_voice'`).Scan(&permCount)
+	if permCount != 0 {
+		t.Error("join_voice permission should have been dropped")
+	}
+
+	// The cascade must leave no orphaned per-channel override.
+	var orphans int
+	pool.QueryRow(ctx, `SELECT count(*) FROM channel_permission_overrides WHERE permission_id='join_voice'`).Scan(&orphans)
+	if orphans != 0 {
+		t.Errorf("found %d orphaned join_voice overrides", orphans)
+	}
+
+	var roleCount int
+	pool.QueryRow(ctx, `SELECT count(*) FROM roles WHERE id IN ('Contributor','Librarian')`).Scan(&roleCount)
+	if roleCount != 0 {
+		t.Error("Contributor and Librarian should have been deleted")
+	}
+
+	// Member must not gain a destructive capability in the collapse.
+	var escalated int
+	pool.QueryRow(ctx, `
+		SELECT count(*) FROM role_permissions
+		WHERE role_id='Member' AND permission_id IN ('manage_files','manage_library')
+	`).Scan(&escalated)
+	if escalated != 0 {
+		t.Error("Member must not gain manage_files or manage_library")
+	}
+
+	// Member absorbs Contributor's upload_books capability.
+	var memberUpload int
+	pool.QueryRow(ctx, `SELECT count(*) FROM role_permissions WHERE role_id='Member' AND permission_id='upload_books'`).Scan(&memberUpload)
+	if memberUpload != 1 {
+		t.Error("Member should have gained upload_books")
+	}
+
+	// Re-applying the whole set is a clean no-op (idempotent drops/inserts).
+	if _, err := VerifyMigrations(ctx, pool, migrationsFS); err != nil {
+		t.Fatalf("verify after apply: %v", err)
+	}
+}
+
 func TestRunMigrationsEmptyAppliesAtomically(t *testing.T) {
 	pool := testutil.FreshDatabase(t)
 	ctx := context.Background()

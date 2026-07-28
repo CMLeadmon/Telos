@@ -31,7 +31,7 @@ func TestGrimmoryAuthorizer(t *testing.T) {
 	}
 
 	reader := &UserContext{ID: "u1", Roles: []string{"Member"}}     // view_library
-	manager := &UserContext{ID: "u2", Roles: []string{"Librarian"}} // view + manage_library
+	manager := &UserContext{ID: "u2", Roles: []string{"Moderator"}} // view + manage_library
 	nobody := &UserContext{ID: "u3", Roles: []string{}}
 
 	// This test does not hit the DB; hasPermission needs dbPool. Skip if unset.
