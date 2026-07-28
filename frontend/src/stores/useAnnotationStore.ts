@@ -12,7 +12,8 @@ export interface AnnotationLocator {
 
 export interface Annotation {
   id: string;
-  bookId: number;
+  targetType: "book" | "media" | "file";
+  targetId: string;
   ownerId: string;
   visibility: AnnotationVisibility;
   locator: AnnotationLocator;

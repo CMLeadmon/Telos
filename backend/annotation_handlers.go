@@ -1,33 +1,57 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 )
 
-// annotationBookID returns the book id an annotation belongs to.
-func annotationBookID(ctx context.Context, annotationID string) (int64, bool) {
-	var bookID int64
-	if err := dbPool.QueryRow(ctx, `SELECT book_id FROM annotations WHERE id = $1`, annotationID).Scan(&bookID); err != nil {
-		return 0, false
+// requireCapabilityHTTP gates a request on a global capability, writing a 403
+// and returning false when the caller lacks it.
+func requireCapabilityHTTP(w http.ResponseWriter, r *http.Request, perm string) bool {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	ok, err := hasPermission(r.Context(), user, perm, nil)
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+		return false
 	}
-	return bookID, true
+	if !ok {
+		writeAPIError(w, r, http.StatusForbidden, "forbidden", "You do not have access to this target.")
+		return false
+	}
+	return true
 }
 
-// authorizeAnnotationBook gates an annotation-scoped route on BookRead for the
-// book the annotation belongs to.
-func authorizeAnnotationBook(w http.ResponseWriter, r *http.Request, annotationID string) (int64, bool) {
-	bookID, ok := annotationBookID(r.Context(), annotationID)
-	if !ok {
+// authorizeAnnotationAccess gates read/comment access to a target by its type:
+// a book uses the Grimmory per-book authorizer; streamed media and files use the
+// corresponding view capability.
+func authorizeAnnotationAccess(w http.ResponseWriter, r *http.Request, targetType, targetID string) bool {
+	switch targetType {
+	case "book":
+		return authorizeBookHTTP(w, r, targetID, BookRead)
+	case "media":
+		return requireCapabilityHTTP(w, r, "view_media")
+	case "file":
+		return requireCapabilityHTTP(w, r, "view_files")
+	default:
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Unknown annotation target.")
+		return false
+	}
+}
+
+// authorizeAnnotationTarget resolves an existing annotation's target and gates
+// the request on access to it. Patch/delete/reply routes are annotation-scoped,
+// so the target type is read from the row rather than trusted from the caller.
+func authorizeAnnotationTarget(w http.ResponseWriter, r *http.Request, annotationID string) (string, string, bool) {
+	var targetType, targetID string
+	if err := dbPool.QueryRow(r.Context(),
+		`SELECT target_type, target_id FROM annotations WHERE id = $1`, annotationID).Scan(&targetType, &targetID); err != nil {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
-		return 0, false
+		return "", "", false
 	}
-	if !authorizeBookHTTP(w, r, strconv.FormatInt(bookID, 10), BookRead) {
-		return 0, false
+	if !authorizeAnnotationAccess(w, r, targetType, targetID) {
+		return "", "", false
 	}
-	return bookID, true
+	return targetType, targetID, true
 }
 
 func handleListAnnotations(w http.ResponseWriter, r *http.Request) {
@@ -40,8 +64,7 @@ func handleListAnnotations(w http.ResponseWriter, r *http.Request) {
 	if !authorizeBookHTTP(w, r, idStr, BookRead) {
 		return
 	}
-	bookID, _ := strconv.ParseInt(idStr, 10, 64)
-	items, err := ListAnnotations(r.Context(), bookID, user.ID, 100)
+	items, err := ListAnnotations(r.Context(), "book", idStr, user.ID, 100)
 	if err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
@@ -81,8 +104,7 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The annotation locator is invalid.")
 		return
 	}
-	bookID, _ := strconv.ParseInt(idStr, 10, 64)
-	a, err := CreateAnnotation(r.Context(), bookID, user.ID, body.Visibility, locator, body.SelectedText, body.Note)
+	a, err := CreateAnnotation(r.Context(), "book", idStr, user.ID, body.Visibility, locator, body.SelectedText, body.Note)
 	if err != nil {
 		if err == errAnnotationText {
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The annotation text exceeds the allowed length.")
@@ -102,7 +124,7 @@ func handlePatchAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid annotation id.")
 		return
 	}
-	if _, ok := authorizeAnnotationBook(w, r, aid); !ok {
+	if _, _, ok := authorizeAnnotationTarget(w, r, aid); !ok {
 		return
 	}
 	var body struct {
@@ -133,7 +155,7 @@ func handleDeleteAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid annotation id.")
 		return
 	}
-	if _, ok := authorizeAnnotationBook(w, r, aid); !ok {
+	if _, _, ok := authorizeAnnotationTarget(w, r, aid); !ok {
 		return
 	}
 	if err := DeleteAnnotation(r.Context(), aid, user); err != nil {
@@ -156,7 +178,7 @@ func handleListAnnotationReplies(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid annotation id.")
 		return
 	}
-	if _, ok := authorizeAnnotationBook(w, r, aid); !ok {
+	if _, _, ok := authorizeAnnotationTarget(w, r, aid); !ok {
 		return
 	}
 	replies, err := ListReplies(r.Context(), aid, 100)
@@ -174,7 +196,7 @@ func handleCreateAnnotationReply(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid annotation id.")
 		return
 	}
-	if _, ok := authorizeAnnotationBook(w, r, aid); !ok {
+	if _, _, ok := authorizeAnnotationTarget(w, r, aid); !ok {
 		return
 	}
 	var body struct {
@@ -220,6 +242,63 @@ func handleDeleteAnnotationReply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"status": "success"})
+}
+
+// commentListHandler lists commentary on a media item or file. targetType fixes
+// which kind of target the route serves; the id comes from the path.
+func commentListHandler(targetType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := r.Context().Value(userContextKey).(*UserContext)
+		id := r.PathValue("id")
+		if id == "" {
+			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid target id.")
+			return
+		}
+		if !authorizeAnnotationAccess(w, r, targetType, id) {
+			return
+		}
+		items, err := ListAnnotations(r.Context(), targetType, id, user.ID, 100)
+		if err != nil {
+			writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+			return
+		}
+		writeJSON(w, map[string]any{"annotations": items})
+	}
+}
+
+// commentCreateHandler posts a comment on a media item or file. Comments carry
+// no locator or selected text — those are book-reader concepts — so the body is
+// just a visibility and a note.
+func commentCreateHandler(targetType string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		user := r.Context().Value(userContextKey).(*UserContext)
+		id := r.PathValue("id")
+		if id == "" {
+			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid target id.")
+			return
+		}
+		if !authorizeAnnotationAccess(w, r, targetType, id) {
+			return
+		}
+		var body struct {
+			Visibility string `json:"visibility"`
+			Note       string `json:"note"`
+		}
+		if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
+			return
+		}
+		a, err := CreateAnnotation(r.Context(), targetType, id, user.ID, body.Visibility, json.RawMessage("{}"), "", body.Note)
+		if err != nil {
+			if err == errAnnotationText {
+				writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The comment exceeds the allowed length.")
+				return
+			}
+			writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		writeJSON(w, a)
+	}
 }
 
 // writeJSON is a compact JSON responder.

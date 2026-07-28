@@ -7,6 +7,7 @@ import "@/styles/stream.css";
 import "@/styles/files.css";
 import "@/styles/settings.css";
 import "@/styles/library.css";
+import "@/styles/commentary.css";
 import { ThemeSync } from "@/components/ThemeSync";
 
 export const metadata: Metadata = {

@@ -13,7 +13,8 @@ const apiMock = api as unknown as ReturnType<typeof vi.fn>;
 function ann(id: string, visibility: "private" | "community" = "private", note = "n"): Annotation {
   return {
     id,
-    bookId: 42,
+    targetType: "book",
+    targetId: "42",
     ownerId: "o",
     visibility,
     locator: { kind: "epub", cfi: "x" },

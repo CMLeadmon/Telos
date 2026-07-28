@@ -471,14 +471,25 @@ func main() {
 	mux.Handle("GET /api/v1/events", withAuth(http.HandlerFunc(handleEventsCatchUp), ""))
 	mux.Handle("GET /api/v1/events/ws", withAuth(http.HandlerFunc(handleEventsWS), ""))
 
-	// Book annotations (private/community) + community replies.
+	// Book annotations (private/community highlights) — book-scoped, so gated on
+	// view_library with the locator validated against the book format.
 	mux.Handle("GET /api/v1/library/books/{id}/annotations", withAuth(http.HandlerFunc(handleListAnnotations), "view_library"))
 	mux.Handle("POST /api/v1/library/books/{id}/annotations", withAuth(http.HandlerFunc(handleCreateAnnotation), "view_library"))
-	mux.Handle("PATCH /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handlePatchAnnotation), "view_library"))
-	mux.Handle("DELETE /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handleDeleteAnnotation), "view_library"))
-	mux.Handle("GET /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleListAnnotationReplies), "view_library"))
-	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), "view_library"))
-	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), "view_library"))
+
+	// Commentary on streamed media and files — gated in-handler on view_media /
+	// view_files. Comments carry no locator.
+	mux.Handle("GET /api/v1/media/items/{id}/comments", withAuth(commentListHandler("media"), "view_media"))
+	mux.Handle("POST /api/v1/media/items/{id}/comments", withAuth(commentCreateHandler("media"), "view_media"))
+	mux.Handle("GET /api/v1/files/{id}/comments", withAuth(commentListHandler("file"), "view_files"))
+	mux.Handle("POST /api/v1/files/{id}/comments", withAuth(commentCreateHandler("file"), "view_files"))
+
+	// Annotation-scoped edit/delete/reply routes. The target type is read from
+	// the row and authorized in-handler, so no fixed capability is required here.
+	mux.Handle("PATCH /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handlePatchAnnotation), ""))
+	mux.Handle("DELETE /api/v1/library/annotations/{aid}", withAuth(http.HandlerFunc(handleDeleteAnnotation), ""))
+	mux.Handle("GET /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleListAnnotationReplies), ""))
+	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), ""))
+	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), ""))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)

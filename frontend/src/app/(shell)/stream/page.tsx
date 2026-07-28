@@ -20,6 +20,7 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { HlsPlayer } from "@/components/stream/HlsPlayer";
+import { CommentaryPanel } from "@/components/CommentaryPanel";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
@@ -126,6 +127,9 @@ export default function StreamPage() {
   const canRefreshMedia = useAuthStore(
     (s) => hasCapability(s.user, "manage_files"),
   );
+  const canModerateComments = useAuthStore(
+    (s) => hasCapability(s.user, "moderate_annotations"),
+  );
   const {
     libraries,
     libraryStatus,
@@ -223,6 +227,11 @@ export default function StreamPage() {
           <HlsPlayer
             src={streamUrl(nowPlaying.item, nowPlaying.library)}
             audio={isAudioItem(nowPlaying.item, nowPlaying.library)}
+          />
+          <CommentaryPanel
+            targetType="media"
+            targetId={nowPlaying.item.id}
+            canModerate={canModerateComments}
           />
         </div>
       </div>

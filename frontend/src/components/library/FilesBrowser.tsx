@@ -13,6 +13,7 @@ import {
   Folder,
   FolderPlus,
   Image as ImageIcon,
+  MessageSquare,
   Music,
   Trash2,
   UploadCloud,
@@ -26,6 +27,9 @@ import {
   useFilesStore,
   validateFile,
 } from "@/stores/useFilesStore";
+import { useAuthStore } from "@/stores/useAuthStore";
+import { hasCapability } from "@/lib/capabilities";
+import { CommentaryPanel } from "@/components/CommentaryPanel";
 
 function mimeIcon(mime: string) {
   if (mime.startsWith("image/")) return <ImageIcon size={17} />;
@@ -117,12 +121,16 @@ function FolderRow({
 function FileRow({
   file,
   confirming,
+  commentsOpen,
+  onToggleComments,
   onAskDelete,
   onCancelDelete,
   onDelete,
 }: {
   file: FileEntry;
   confirming: boolean;
+  commentsOpen: boolean;
+  onToggleComments: () => void;
   onAskDelete: () => void;
   onCancelDelete: () => void;
   onDelete: () => void;
@@ -168,6 +176,15 @@ function FileRow({
                 <Download size={16} />
               </a>
             )}
+            <button
+              className={`iconbtn${commentsOpen ? " on" : ""}`}
+              aria-label={`comments on ${file.filename}`}
+              aria-pressed={commentsOpen}
+              data-testid={`file-comments-${file.id}`}
+              onClick={onToggleComments}
+            >
+              <MessageSquare size={16} />
+            </button>
             <button
               className="iconbtn danger"
               aria-label={`delete ${file.filename}`}
@@ -243,7 +260,11 @@ export function FilesBrowser() {
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [folderName, setFolderName] = useState("");
+  const [commentsFor, setCommentsFor] = useState<FileEntry | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const canModerateComments = useAuthStore((s) =>
+    hasCapability(s.user, "moderate_annotations"),
+  );
 
   useEffect(() => {
     if (status === "idle") void fetchDir("", 1);
@@ -480,6 +501,10 @@ export function FilesBrowser() {
                 key={f.id}
                 file={f}
                 confirming={confirmingId === f.id}
+                commentsOpen={commentsFor?.id === f.id}
+                onToggleComments={() =>
+                  setCommentsFor((cur) => (cur?.id === f.id ? null : f))
+                }
                 onAskDelete={() => setConfirmingId(f.id)}
                 onCancelDelete={() => setConfirmingId(null)}
                 onDelete={() => {
@@ -488,6 +513,26 @@ export function FilesBrowser() {
                 }}
               />
             ))}
+          </div>
+        )}
+
+        {commentsFor && (
+          <div className="file-commentary" data-testid="file-commentary">
+            <div className="file-commentary-head">
+              <span className="fname">{commentsFor.filename}</span>
+              <button
+                className="iconbtn"
+                aria-label="close comments"
+                onClick={() => setCommentsFor(null)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <CommentaryPanel
+              targetType="file"
+              targetId={commentsFor.id}
+              canModerate={canModerateComments}
+            />
           </div>
         )}
 

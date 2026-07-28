@@ -125,10 +125,13 @@ func validateAnnotationText(selected, note string) error {
 
 // ── Store ───────────────────────────────────────────────────────────────────
 
-// Annotation is one book annotation.
+// Annotation is one piece of commentary anchored to a media target. For a book
+// the locator/selectedText carry the highlight; for streamed media or a file the
+// locator is empty and the annotation is a plain comment.
 type Annotation struct {
 	ID           string          `json:"id"`
-	BookID       int64           `json:"bookId"`
+	TargetType   string          `json:"targetType"`
+	TargetID     string          `json:"targetId"`
 	OwnerID      string          `json:"ownerId"`
 	Visibility   string          `json:"visibility"`
 	Locator      json.RawMessage `json:"locator"`
@@ -137,6 +140,9 @@ type Annotation struct {
 	CreatedAt    time.Time       `json:"createdAt"`
 	UpdatedAt    time.Time       `json:"updatedAt"`
 }
+
+// annotationTargetTypes are the media kinds an annotation may anchor to.
+var annotationTargetTypes = map[string]bool{"book": true, "media": true, "file": true}
 
 // AnnotationReply is one community reply on an annotation.
 type AnnotationReply struct {
@@ -147,8 +153,11 @@ type AnnotationReply struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 
-// CreateAnnotation inserts a new annotation (default private).
-func CreateAnnotation(ctx context.Context, bookID int64, ownerID, visibility string, locator json.RawMessage, selected, note string) (Annotation, error) {
+// CreateAnnotation inserts a new annotation on a target (default private).
+func CreateAnnotation(ctx context.Context, targetType, targetID, ownerID, visibility string, locator json.RawMessage, selected, note string) (Annotation, error) {
+	if !annotationTargetTypes[targetType] {
+		return Annotation{}, errAnnotationLocator
+	}
 	if visibility != "private" && visibility != "community" {
 		visibility = "private"
 	}
@@ -157,27 +166,27 @@ func CreateAnnotation(ctx context.Context, bookID int64, ownerID, visibility str
 	}
 	var a Annotation
 	err := dbPool.QueryRow(ctx, `
-		INSERT INTO annotations (book_id, user_id, visibility, locator, selected_text, note)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6)
-		RETURNING id::text, book_id, user_id::text, visibility, locator, selected_text, note, created_at, updated_at
-	`, bookID, ownerID, visibility, locator, selected, note).Scan(
-		&a.ID, &a.BookID, &a.OwnerID, &a.Visibility, &a.Locator, &a.SelectedText, &a.Note, &a.CreatedAt, &a.UpdatedAt)
+		INSERT INTO annotations (target_type, target_id, user_id, visibility, locator, selected_text, note)
+		VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
+		RETURNING id::text, target_type, target_id, user_id::text, visibility, locator, selected_text, note, created_at, updated_at
+	`, targetType, targetID, ownerID, visibility, locator, selected, note).Scan(
+		&a.ID, &a.TargetType, &a.TargetID, &a.OwnerID, &a.Visibility, &a.Locator, &a.SelectedText, &a.Note, &a.CreatedAt, &a.UpdatedAt)
 	return a, err
 }
 
 // ListAnnotations returns the viewer's own annotations plus community ones for a
-// book, newest first. Another user's private annotation is never returned.
-func ListAnnotations(ctx context.Context, bookID int64, viewerID string, limit int) ([]Annotation, error) {
+// target, newest first. Another user's private annotation is never returned.
+func ListAnnotations(ctx context.Context, targetType, targetID, viewerID string, limit int) ([]Annotation, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 100
 	}
 	rows, err := dbPool.Query(ctx, `
-		SELECT id::text, book_id, user_id::text, visibility, locator, selected_text, note, created_at, updated_at
+		SELECT id::text, target_type, target_id, user_id::text, visibility, locator, selected_text, note, created_at, updated_at
 		FROM annotations
-		WHERE book_id = $1 AND (visibility = 'community' OR user_id = $2)
+		WHERE target_type = $1 AND target_id = $2 AND (visibility = 'community' OR user_id = $3)
 		ORDER BY created_at DESC, id DESC
-		LIMIT $3
-	`, bookID, viewerID, limit)
+		LIMIT $4
+	`, targetType, targetID, viewerID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +194,7 @@ func ListAnnotations(ctx context.Context, bookID int64, viewerID string, limit i
 	out := []Annotation{}
 	for rows.Next() {
 		var a Annotation
-		if err := rows.Scan(&a.ID, &a.BookID, &a.OwnerID, &a.Visibility, &a.Locator, &a.SelectedText, &a.Note, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		if err := rows.Scan(&a.ID, &a.TargetType, &a.TargetID, &a.OwnerID, &a.Visibility, &a.Locator, &a.SelectedText, &a.Note, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -263,9 +272,8 @@ func CreateReply(ctx context.Context, annotationID, authorID, body string) (Anno
 	}
 	defer tx.Rollback(ctx)
 
-	var ownerID, visibility string
-	var bookID int64
-	err = tx.QueryRow(ctx, `SELECT user_id::text, visibility, book_id FROM annotations WHERE id = $1 FOR UPDATE`, annotationID).Scan(&ownerID, &visibility, &bookID)
+	var ownerID, visibility, targetType, targetID string
+	err = tx.QueryRow(ctx, `SELECT user_id::text, visibility, target_type, target_id FROM annotations WHERE id = $1 FOR UPDATE`, annotationID).Scan(&ownerID, &visibility, &targetType, &targetID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return AnnotationReply{}, errAnnotationNotFound
 	}
@@ -289,7 +297,7 @@ func CreateReply(ctx context.Context, annotationID, authorID, body string) (Anno
 	// Notify the annotation owner (idempotent by reply id); payload carries IDs
 	// and actor only — never the reply body or note text.
 	if ownerID != authorID {
-		payload, _ := json.Marshal(map[string]any{"annotationId": annotationID, "bookId": bookID})
+		payload, _ := json.Marshal(map[string]any{"annotationId": annotationID, "targetType": targetType, "targetId": targetID})
 		if _, err := RecordUserEvent(ctx, tx, UserEventInput{
 			RecipientID: ownerID, ActorID: authorID, Kind: "annotation_reply",
 			ResourceType: "annotation", ResourceID: annotationID,
