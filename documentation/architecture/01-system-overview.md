@@ -1,5 +1,13 @@
 # System Overview
 
+> **Superseded in part by the less-is-more redesign (2026-07).** Voice rooms,
+> LiveKit/TURN, Watch Parties, the notification inbox, and My List were removed;
+> Files were folded into the Library module (`?view=files`); annotations were
+> generalized to commentary on any media target. Passages below describing those
+> removed features — including the `livekit` service, the WebRTC/RTP media plane,
+> and voice flows — are historical. See
+> [beta-feature-status](../product/beta-feature-status.md).
+
 > Spec for AI coding agents and human developers. Statements are normative unless marked *(informative)*.
 
 ## 1. Problem

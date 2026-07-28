@@ -1,5 +1,10 @@
 # Deployment
 
+> **Superseded in part by the less-is-more redesign (2026-07).** The `livekit`
+> service, its WebRTC/TURN published ports, and the voice/Watch Party surfaces
+> were removed. References below to `livekit`, TURN ports, or LiveKit secrets are
+> historical. See [beta-feature-status](../product/beta-feature-status.md).
+
 > Spec for AI coding agents and human developers. Statements are normative
 > unless marked *(informative)*.
 

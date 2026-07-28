@@ -4,35 +4,38 @@
 > product surface must match this document; incomplete functionality must not
 > remain visible or advertised.
 
-Approved by the beta-readiness remediation design (2026-07-18). The beta ships
-the complete advertised non-AI product on one Internet-exposed,
-operator-controlled server for a trusted, invite-only community.
+Approved by the beta-readiness remediation design (2026-07-18) and refocused by
+the less-is-more redesign (2026-07-27). The beta ships a community library for
+commentary on and storage of media, on one Internet-exposed, operator-controlled
+server for a trusted, invite-only community. Three modules — Library, Stream,
+Chat — plus Settings.
 
 ## In the beta
 
 | Capability | Status |
 |---|---|
-| Invite-only accounts, first-owner bootstrap, sessions, roles/permissions | Shipping |
-| Channel chat with one-level threads, reactions, pins, presence | Shipping (threads land in Phase 5 of the remediation program) |
-| Durable in-app notification inbox (mentions, thread replies, shared-annotation replies, Watch Party invitations, security/admin events) | Shipping (Phase 5) |
-| Voice rooms (LiveKit, microphone audio only) | Shipping |
-| Jellyfin streaming with HLS player and durable per-user My List | Shipping (My List lands in Phase 5) |
-| Host-controlled synchronized Watch Parties linked to existing chat/voice | Shipping (Phase 5) |
-| E-book catalog (Grimmory), in-app EPUB reader with durable progress | Shipping |
-| In-app PDF reader with durable progress | Shipping (Phase 5) |
-| EPUB/PDF annotations — private by default, explicitly community-shareable, replies, author edit/delete, moderator removal | Shipping (Phase 5) |
-| File module: upload (scanned by ClamAV), folders, download, delete | Shipping |
-| Channel CRUD and role overrides via `manage_channels` | Shipping (Phase 5) |
-| Settings: profile, security, appearance (Synthwave/Ink themes), voice & audio, Credits; admin members/invites/roles | Shipping |
-| Encrypted off-node backups (14 daily / 8 weekly), documented restore | Shipping (Phase 3/7 of the remediation program) |
+| Invite-only accounts, first-owner bootstrap, sessions, roles/permissions (Owner / Administrator / Moderator / Member) | Shipping |
+| Channel chat with one-level threads, reactions, pins, presence, mentions | Shipping |
+| Recipient-scoped user-event stream (WebSocket catch-up + live delivery) for mentions and replies | Shipping |
+| Jellyfin streaming with an in-app HLS player (playback rate, Picture-in-Picture) | Shipping |
+| E-book catalog (Grimmory) in a Library with facet filtering; in-app EPUB and PDF readers with durable progress | Shipping |
+| Commentary on any media target — book highlights plus comments on streamed items and files — private by default, explicitly community-shareable, replies, author edit/delete, moderator removal | Shipping |
+| Files browser folded into Library (Books \| Files segment): upload (scanned by ClamAV), folders, download, delete | Shipping |
+| Channel CRUD and role overrides via `manage_channels` | Shipping |
+| Settings: profile, security, appearance (Synthwave/Ink themes), Credits; admin members/invites/roles/channels | Shipping |
+| Encrypted off-node backups (14 daily / 8 weekly), documented restore | Shipping |
 
 ## Outside beta scope
 
 | Capability | Status |
 |---|---|
+| Voice rooms, LiveKit, TURN | Removed in the less-is-more redesign. No endpoint, schema, container, or dependency remains. |
+| Host-controlled synchronized Watch Parties | Removed. No endpoint or schema remains. |
+| Durable notification inbox / bell | Removed. Mentions and replies are delivered over the user-event stream, not a stored inbox. |
+| My List (saved-media shelf) | Removed. |
 | Oracle, AI summaries, or any AI feature, API, runtime, or control | Removed. No beta endpoint or schema is reserved for a future AI module. |
 | OIDC federation / per-service user provisioning | Not available; not presented as an integration. |
-| Web Push or email notification delivery | Not available; notifications are in-app only. |
+| Web Push or email notification delivery | Not available; awareness is in-app only. |
 | Administrative password replacement | Not available; operators may disable an account, and members change a known current password. |
 | High availability / multi-node deployment | Not available; scheduled maintenance windows are the availability model. |
 
@@ -54,7 +57,6 @@ feature rather than opening an uncontrolled path.
 
 ## Support targets
 
-100 registered members, 25 concurrent authenticated users, 10 chat/annotation
-events per second, 5 concurrent Watch Parties, 25 voice participants; current
-desktop Chrome/Firefox/Safari/Edge and current iOS Safari / Android Chrome;
-RPO ≤ 24 h and RTO ≤ 4 h.
+100 registered members, 25 concurrent authenticated users, 10 chat/commentary
+events per second; current desktop Chrome/Firefox/Safari/Edge and current iOS
+Safari / Android Chrome; RPO ≤ 24 h and RTO ≤ 4 h.

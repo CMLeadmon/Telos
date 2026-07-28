@@ -1,5 +1,12 @@
 # Frontend Architecture
 
+> **Superseded in part by the less-is-more redesign (2026-07).** The
+> `useVoiceSessionStore` / `livekit-client` voice layer, the Watch Party and My
+> List stores, and the notification store were removed; navigation is three
+> modules (Chat / Stream / Library, with Files under Library) plus Settings.
+> Code samples below referencing `livekit-client` or voice/Watch Party stores are
+> historical. See [beta-feature-status](../product/beta-feature-status.md).
+
 > Spec for AI coding agents and human developers. Statements are normative unless marked *(informative)*.
 
 ## 1. Principle: State Separation

@@ -1,5 +1,12 @@
 # Gateway & API Integration
 
+> **Superseded in part by the less-is-more redesign (2026-07).** The voice token
+> and LiveKit webhook endpoints, Watch Party routes, and notification-inbox
+> routes were removed; annotations were generalized to `(target_type, target_id)`
+> with new `/media/items/{id}/comments` and `/files/{id}/comments` routes.
+> Passages below describing the removed endpoints are historical. See
+> [beta-feature-status](../product/beta-feature-status.md).
+
 > Spec for AI coding agents and human developers. Statements are normative unless marked *(informative)*.
 
 This document specifies how Telos routes traffic to its headless services, the Traefik configuration that makes routing possible, and the request-translation matrix `telos-core` implements over the headless Jellyfin and Grimmory APIs. For the service inventory and topology, see [`01-system-overview.md`](01-system-overview.md). For production deployment, see [`02-deployment.md`](02-deployment.md).

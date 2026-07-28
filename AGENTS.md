@@ -2,6 +2,8 @@
 
 This repository contains the Telos platform: the Go core gateway (`backend/`), the Next.js client (`frontend/`), the container orchestration (`docker-compose.yml`), and the normative specification (`documentation/`). The docs remain the buildable specification; where code and docs disagree, flag the discrepancy. The project is guided by two core slogans: "your server, your community" (community-facing) and "be on the net, but not of the net" (philosophical/technical).
 
+> **Note (less-is-more redesign, 2026-07):** Telos is a community library for commentary on and storage of media — three modules (Library, Stream, Chat) plus Settings. Voice rooms, LiveKit, Watch Parties, the notification inbox, and My List were removed; Files were folded into Library; annotations were generalized to commentary on any media target. Descriptions of those removed features below are historical.
+
 ---
 
 ## 1. Read This First
@@ -23,7 +25,7 @@ When implementing the system, execute the development phases in this sequence:
 1. **Phase 1: Chat Core** — Establish PostgreSQL schemas, Redis cache prefixes, and the WebSocket core gateway.
 2. **Phase 2: Storage & Media** — Mount shared volumes, set up headless Jellyfin, and integrate the custom HLS.js streaming player.
 3. **Phase 3: Catalog** — Build Grimmory integration, watch directory routines, and e-book reader controls.
-4. **Phase 4: Real-Time** — Provision the LiveKit server and hook up the Zustand voice session store.
+4. **Phase 4: Commentary** — Generalize annotations to any media target and surface commentary on media items and files. (The original Phase 4 real-time voice layer was removed in the less-is-more redesign.)
 
 ---
 
@@ -40,7 +42,7 @@ Every implementing agent must strictly comply with these core rules:
 `.env.example` is the canonical inventory of every environment variable the
 stack reads; `docker compose --env-file .env.example config --quiet` must
 succeed at all times. Production inputs (domain, ACME, database, Redis,
-LiveKit, Jellyfin, Grimmory credentials, `STORAGE_PATH`, `TELOS_BOOTSTRAP_TOKEN`)
+Jellyfin, Grimmory credentials, `STORAGE_PATH`, `TELOS_BOOTSTRAP_TOKEN`)
 appear in the file's production section with placeholder values only.
 Development-only inputs (`TELOS_ENV=development` plus the loopback-only
 `docker-compose.dev.yml` overlay) are listed in the development section and

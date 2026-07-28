@@ -3,7 +3,7 @@
 > "Your server, your community."
 > "Be on the net, but not of the net."
 
-Telos is a self-hosted, digital sovereignty platform that merges Discord-style chat/voice, Jellyfin-style streaming, Grimmory-style publication management, and direct file management into one single-origin, unified application.
+Telos is a self-hosted, digital-sovereignty platform: a community library for commentary on and storage of media. It merges Jellyfin-style streaming, Grimmory-style publication management, channel chat, and direct file management into one single-origin, unified application, so a community can read, watch, store, and discuss on a server it owns.
 
 Source repository: [https://github.com/CMLeadmon/Telos](https://github.com/CMLeadmon/Telos)
 
@@ -27,8 +27,8 @@ All normative architecture specifications, deployment guides, state stores, and 
 ## 2. Tech Stack Summary
 
 * **Backend / Gateway:** Go 1.26.5 + Gorilla WebSocket + pgx/v5 (PostgreSQL) + go-redis/v9 (Redis cache).
-* **Frontend Client:** React 19 + Next.js 16.2.10 (Node.js 24.18.0 LTS) + TypeScript + Zustand (real-time voice/theme stores) + TailwindCSS v4.
-* **Infrastructure Services:** Traefik v3 edge router (ACME TLS + file-provider routing), PostgreSQL 16.14 database, Redis 7 (pub/sub), MariaDB 10.11 (Grimmory catalog DB), Jellyfin (headless media transcoder), Grimmory (digital book server), LiveKit (WebRTC SFU), and ClamAV (upload malware scanning).
+* **Frontend Client:** React 19 + Next.js 16.2.10 (Node.js 24.18.0 LTS) + TypeScript + Zustand (chat/theme/preferences stores) + TailwindCSS v4.
+* **Infrastructure Services:** Traefik v3 edge router (ACME TLS + file-provider routing), PostgreSQL 16.14 database, Redis 7 (pub/sub), MariaDB 10.11 (Grimmory catalog DB), Jellyfin (headless media transcoder), Grimmory (digital book server), and ClamAV (upload malware scanning).
 
 ---
 
@@ -37,7 +37,7 @@ All normative architecture specifications, deployment guides, state stores, and 
 The Telos gateway and client in this repository are licensed under the
 [Apache License 2.0](./LICENSE) (see also [NOTICE](./NOTICE)).
 
-The bundled services (Jellyfin, Grimmory, LiveKit, ClamAV) and infrastructure
+The bundled services (Jellyfin, Grimmory, ClamAV) and infrastructure
 (Traefik, PostgreSQL, Redis, MariaDB) run as isolated processes behind
 container boundaries under their own licenses. The canonical attribution
 matrix — component, role, source, and license — lives in
