@@ -17,10 +17,9 @@ const (
 )
 
 var (
-	errChannelSlugInvalid  = errors.New("channel slug is invalid")
-	errChannelTypeInvalid  = errors.New("channel type is invalid")
-	errChannelNameTaken    = errors.New("channel name is taken")
-	errChannelInUseByParty = errors.New("channel is linked to an active watch party")
+	errChannelSlugInvalid = errors.New("channel slug is invalid")
+	errChannelTypeInvalid = errors.New("channel type is invalid")
+	errChannelNameTaken   = errors.New("channel name is taken")
 )
 
 // normalizeChannelSlug lowercases and validates a channel name/slug.
@@ -90,16 +89,8 @@ func UpdateChannel(ctx context.Context, actorID, id, name string) error {
 	return nil
 }
 
-// DeleteChannel deletes a channel, refusing when it is linked to an active
-// Watch Party (409).
+// DeleteChannel deletes a channel by id.
 func DeleteChannel(ctx context.Context, actorID, id string) error {
-	var linked bool
-	if err := dbPool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM watch_parties WHERE (text_channel_id=$1 OR voice_channel_id=$1) AND ended_at IS NULL)`, id).Scan(&linked); err != nil {
-		return err
-	}
-	if linked {
-		return errChannelInUseByParty
-	}
 	tag, err := dbPool.Exec(ctx, `DELETE FROM channels WHERE id = $1`, id)
 	if err != nil {
 		return err
@@ -253,8 +244,6 @@ func channelAdminErr(w http.ResponseWriter, r *http.Request, err error) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The channel name or type is invalid.")
 	case errors.Is(err, errChannelNameTaken):
 		writeAPIError(w, r, http.StatusConflict, "name_taken", "That channel name is taken.")
-	case errors.Is(err, errChannelInUseByParty):
-		writeAPIError(w, r, http.StatusConflict, "channel_in_use", "This channel is linked to an active Watch Party.")
 	case errors.Is(err, errChannelNotFound):
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 	default:

@@ -68,20 +68,20 @@ func (OutboxSecurityEventSink) Record(ctx context.Context, tx pgx.Tx, intent Sec
 		return err
 	}
 
-	// Materialize an account_security in-app notification for the affected user
-	// on the kinds the recipient should see. The public payload names only the
-	// event kind — never a credential or session token. An inactive recipient
-	// keeps the notification for their next authorized login.
+	// Append an account_security user event for the affected user on the kinds
+	// the recipient should see. The public payload names only the event kind —
+	// never a credential or session token. An inactive recipient keeps the
+	// event for their next authorized login.
 	if intent.SubjectID != "" && accountSecurityNotifyKinds[intent.Kind] {
-		notifPayload, _ := json.Marshal(map[string]string{"event": intent.Kind})
-		if _, err := CreateNotification(ctx, tx, NotificationInput{
+		evtPayload, _ := json.Marshal(map[string]string{"event": intent.Kind})
+		if _, err := RecordUserEvent(ctx, tx, UserEventInput{
 			RecipientID:    intent.SubjectID,
 			ActorID:        intent.ActorID,
-			Kind:           NotifyAccountSecurity,
+			Kind:           "account_security",
 			ResourceType:   "account",
 			ResourceID:     intent.SubjectID,
 			IdempotencyKey: "notif:" + key,
-			Payload:        notifPayload,
+			Payload:        evtPayload,
 		}); err != nil {
 			return err
 		}

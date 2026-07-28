@@ -19,7 +19,12 @@ GO_IMAGE="docker.io/library/golang:1.26.5"
 PG_IMAGE="docker.io/library/postgres:16.14-alpine"
 REDIS_IMAGE="docker.io/library/redis:7-alpine"
 if test -f release/images.lock; then
-	GO_IMAGE="$(awk '$1 == "golang-test" { print $2 }' release/images.lock)"
+	# images.lock is JSON and carries no "golang-test" key, so this lookup can
+	# legitimately come back empty. Only override the default when it does not,
+	# otherwise podman is handed an empty image reference and the whole suite
+	# dies with "repository name must have at least one component".
+	locked="$(awk '$1 == "golang-test" { print $2 }' release/images.lock)"
+	test -n "$locked" && GO_IMAGE="$locked"
 fi
 
 suite="${1:-all}"

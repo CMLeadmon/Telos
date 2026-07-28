@@ -475,11 +475,7 @@ func main() {
 	mux.Handle("DELETE /api/v1/folders/{id}", withAuth(http.HandlerFunc(handleDeleteFolder), "manage_files"))
 	mux.Handle("GET /api/v1/files/audit", withAuth(http.HandlerFunc(handleListFileAudit), "manage_files"))
 
-	// In-app notifications + recipient-scoped user-event stream.
-	mux.Handle("GET /api/v1/notifications", withAuth(http.HandlerFunc(handleListNotifications), ""))
-	mux.Handle("GET /api/v1/notifications/unread-count", withAuth(http.HandlerFunc(handleUnreadCount), ""))
-	mux.Handle("PUT /api/v1/notifications/{id}/read", withAuth(http.HandlerFunc(handleMarkNotificationRead), ""))
-	mux.Handle("PUT /api/v1/notifications/read-all", withAuth(http.HandlerFunc(handleMarkAllNotificationsRead), ""))
+	// Recipient-scoped user-event stream (WebSocket catch-up + live delivery).
 	mux.Handle("GET /api/v1/events", withAuth(http.HandlerFunc(handleEventsCatchUp), ""))
 	mux.Handle("GET /api/v1/events/ws", withAuth(http.HandlerFunc(handleEventsWS), ""))
 
@@ -497,24 +493,6 @@ func main() {
 	mux.Handle("POST /api/v1/users/me/media-list", withAuth(http.HandlerFunc(handleAddToMyList), "view_media"))
 	mux.Handle("DELETE /api/v1/users/me/media-list/{itemID}", withAuth(http.HandlerFunc(handleRemoveFromMyList), "view_media"))
 	mux.Handle("PUT /api/v1/users/me/media-list/order", withAuth(http.HandlerFunc(handleReorderMyList), "view_media"))
-
-	// Watch Parties (host-authoritative synchronized playback).
-	mux.Handle("POST /api/v1/watch-parties", withAuth(http.HandlerFunc(handleCreateWatchParty), "view_media"))
-	mux.Handle("GET /api/v1/watch-parties/{id}", withAuth(http.HandlerFunc(handleGetWatchParty), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/invitations", withAuth(http.HandlerFunc(handleInviteWatchParty), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/invitations/respond", withAuth(http.HandlerFunc(handleRespondWatchPartyInvite), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/join", withAuth(wpMemberStateHandler("joined"), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/leave", withAuth(wpMemberStateHandler("left"), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/detach", withAuth(wpMemberStateHandler("detached"), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/rejoin", withAuth(wpMemberStateHandler("joined"), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/end", withAuth(http.HandlerFunc(handleEndWatchParty), "view_media"))
-	mux.Handle("PUT /api/v1/watch-parties/{id}/host-lease", withAuth(http.HandlerFunc(handleWatchPartyHeartbeat), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/host-lease/claim", withAuth(http.HandlerFunc(handleWatchPartyClaimHost), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/host-transfer/offer", withAuth(http.HandlerFunc(handleWatchPartyOfferHost), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/host-transfer/accept", withAuth(http.HandlerFunc(handleWatchPartyAcceptHost), "view_media"))
-	mux.Handle("POST /api/v1/watch-parties/{id}/host-transfer/cancel", withAuth(http.HandlerFunc(handleWatchPartyCancelHost), "view_media"))
-	mux.Handle("GET /api/v1/watch-parties/{id}/state", withAuth(http.HandlerFunc(handleGetWatchPartyState), "view_media"))
-	mux.Handle("PUT /api/v1/watch-parties/{id}/state", withAuth(http.HandlerFunc(handlePutWatchPartyState), "view_media"))
 
 	// Frontend static assets handler
 	mux.Handle("/", fileServer)

@@ -44,6 +44,66 @@ func appendEvents(t *testing.T, db *pgxpool.Pool, recipientID string, n int) []i
 	return seqs
 }
 
+func TestRecordUserEventIsIdempotent(t *testing.T) {
+	db, recip, actor := eventFixture(t)
+	ctx := context.Background()
+
+	in := UserEventInput{
+		RecipientID:    recip,
+		ActorID:        actor,
+		Kind:           "mention",
+		ResourceType:   "message",
+		ResourceID:     "msg-1",
+		IdempotencyKey: "test:dedupe:1",
+		Payload:        json.RawMessage(`{"channelId":"c1"}`),
+	}
+
+	record := func() int64 {
+		t.Helper()
+		tx, err := db.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		defer tx.Rollback(ctx)
+		seq, err := RecordUserEvent(ctx, tx, in)
+		if err != nil {
+			t.Fatalf("RecordUserEvent: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+		return seq
+	}
+
+	first := record()
+	second := record() // replay with the same idempotency key
+
+	if first != second {
+		t.Fatalf("replay appended a new event: first=%d second=%d", first, second)
+	}
+
+	var events, outbox int
+	db.QueryRow(ctx, `SELECT count(*) FROM user_events WHERE idempotency_key=$1`, in.IdempotencyKey).Scan(&events)
+	db.QueryRow(ctx, `SELECT count(*) FROM outbox_events WHERE topic=$1`, "telos:user:"+recip).Scan(&outbox)
+	if events != 1 || outbox != 1 {
+		t.Fatalf("idempotency leaked: events=%d outbox=%d, want 1/1", events, outbox)
+	}
+
+	// The actor is folded into the payload since user_events has no actor column.
+	var payload []byte
+	db.QueryRow(ctx, `SELECT payload FROM user_events WHERE idempotency_key=$1`, in.IdempotencyKey).Scan(&payload)
+	var got map[string]any
+	if err := json.Unmarshal(payload, &got); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	if got["actorId"] != actor {
+		t.Fatalf("actorId not preserved in payload: %v", got["actorId"])
+	}
+	if got["channelId"] != "c1" {
+		t.Fatalf("caller payload lost: %v", got["channelId"])
+	}
+}
+
 func TestUserEventCatchUpMonotonicAndHighWater(t *testing.T) {
 	db, recip, _ := eventFixture(t)
 	ctx := context.Background()

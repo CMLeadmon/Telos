@@ -290,8 +290,8 @@ func CreateReply(ctx context.Context, annotationID, authorID, body string) (Anno
 	// and actor only — never the reply body or note text.
 	if ownerID != authorID {
 		payload, _ := json.Marshal(map[string]any{"annotationId": annotationID, "bookId": bookID})
-		if _, err := CreateNotification(ctx, tx, NotificationInput{
-			RecipientID: ownerID, ActorID: authorID, Kind: NotifyAnnotationReply,
+		if _, err := RecordUserEvent(ctx, tx, UserEventInput{
+			RecipientID: ownerID, ActorID: authorID, Kind: "annotation_reply",
 			ResourceType: "annotation", ResourceID: annotationID,
 			IdempotencyKey: "annreply:" + reply.ID, Payload: payload,
 		}); err != nil {

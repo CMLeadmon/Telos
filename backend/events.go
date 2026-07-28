@@ -117,3 +117,93 @@ func CatchUp(ctx context.Context, recipientID string, afterSequence, throughSequ
 	}
 	return out, nil
 }
+
+// UserEventInput is a request to append one durable, recipient-scoped event.
+// The actor is carried inside the payload rather than a column: user_events has
+// no actor of its own, and catch-up delivers the payload verbatim.
+type UserEventInput struct {
+	RecipientID    string
+	ActorID        string
+	Kind           string
+	ResourceType   string
+	ResourceID     string
+	IdempotencyKey string
+	Payload        json.RawMessage
+}
+
+var errUserEventInput = errors.New("user event input is incomplete")
+
+// withActor folds a valid UUID actor into the event payload under "actorId"
+// without overwriting an actor the caller already set. A non-UUID actor (a
+// system actor) is dropped rather than stored, matching the prior behaviour of
+// the notifications table's NULLIF cast.
+func withActor(payload json.RawMessage, actorID string) json.RawMessage {
+	if !looksLikeUUID(actorID) {
+		return payload
+	}
+	m := map[string]any{}
+	if len(payload) > 0 && string(payload) != "null" {
+		if err := json.Unmarshal(payload, &m); err != nil {
+			return payload
+		}
+	}
+	if _, exists := m["actorId"]; !exists {
+		m["actorId"] = actorID
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return payload
+	}
+	return b
+}
+
+// RecordUserEvent appends a durable event for the recipient and publishes a
+// telos:user:<recipient> delivery hint that handleEventsWS relays, exactly once
+// per IdempotencyKey. A replay returns the existing sequence and publishes no
+// second hint. WebSocket catch-up replays this stream, so a duplicate would be
+// a user-visible double delivery — the unique idx_user_events_idem index (added
+// in migration 0019) is what prevents it now that the notifications table, which
+// used to hold that guard, is gone.
+func RecordUserEvent(ctx context.Context, tx pgx.Tx, in UserEventInput) (int64, error) {
+	if in.RecipientID == "" || in.Kind == "" || in.IdempotencyKey == "" {
+		return 0, errUserEventInput
+	}
+	payload := withActor(in.Payload, in.ActorID)
+	if len(payload) == 0 || string(payload) == "null" {
+		payload = json.RawMessage("{}")
+	}
+
+	var seq int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO user_events (recipient_id, kind, resource_type, resource_id, payload, idempotency_key)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6)
+		ON CONFLICT (idempotency_key) DO NOTHING
+		RETURNING sequence
+	`, in.RecipientID, in.Kind, in.ResourceType, in.ResourceID, payload, in.IdempotencyKey).Scan(&seq)
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A prior insert already owns this key: return its sequence unchanged.
+		if err := tx.QueryRow(ctx,
+			`SELECT sequence FROM user_events WHERE idempotency_key = $1`,
+			in.IdempotencyKey).Scan(&seq); err != nil {
+			return 0, err
+		}
+		return seq, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+
+	// Delivery hint on the recipient's own channel (deduped by the outbox).
+	hint, _ := json.Marshal(map[string]any{"sequence": seq, "kind": in.Kind})
+	if _, err := EnqueueOutbox(ctx, tx, OutboxEvent{
+		Topic:          "telos:user:" + in.RecipientID,
+		EventType:      "user_event",
+		AggregateType:  "user",
+		AggregateID:    in.RecipientID,
+		IdempotencyKey: "evt:" + in.IdempotencyKey,
+		Payload:        hint,
+	}); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}

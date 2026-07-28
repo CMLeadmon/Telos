@@ -92,7 +92,6 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 		`DELETE FROM book_progress WHERE user_id = $1`,
 		`DELETE FROM message_reactions WHERE user_id = $1`,
 		`DELETE FROM channel_reads WHERE user_id = $1`,
-		`DELETE FROM notifications WHERE user_id = $1`,
 		`DELETE FROM user_events WHERE recipient_id = $1`,
 		`DELETE FROM annotations WHERE user_id = $1 AND visibility = 'private'`,
 		`DELETE FROM media_list_entries WHERE user_id = $1`,
@@ -103,11 +102,6 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 		if _, err := tx.Exec(ctx, stmt, userID); err != nil {
 			return DeletionReceipt{}, err
 		}
-	}
-
-	// End hosted Watch Parties and purge the user's party references.
-	if err := PurgeUserWatchParties(ctx, tx, userID); err != nil {
-		return DeletionReceipt{}, err
 	}
 
 	// Anonymize the user row; public chat authorship is retained as

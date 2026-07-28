@@ -222,7 +222,6 @@ func init() {
 		{"admin.sessions", "created_desc"},
 		{"channel.members", "joined_desc"},
 		{"files.audit", "created_desc"},
-		{"notifications", "created_desc"},
 		{"channel.roots", "created_desc"},
 		{"channel.replies", "created_asc"},
 		{"media.list", "position_asc"},

@@ -110,18 +110,3 @@ func TestChannelOverrideDenyPrecedence(t *testing.T) {
 		t.Fatal("Owner must bypass channel overrides")
 	}
 }
-
-func TestChannelDeleteWatchPartyConflict(t *testing.T) {
-	db, actor := channelAdminFixture(t)
-	ctx := context.Background()
-
-	id, _ := CreateChannel(ctx, actor, "party-chan", "text")
-	// An active Watch Party links the channel as its text channel.
-	if _, err := CreateParty(ctx, actor, "movie1", id, ""); err != nil {
-		t.Fatalf("create party: %v", err)
-	}
-	if err := DeleteChannel(ctx, actor, id); err != errChannelInUseByParty {
-		t.Fatalf("delete linked channel = %v, want in-use conflict", err)
-	}
-	_ = db
-}

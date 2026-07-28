@@ -152,20 +152,20 @@ func TestReplyNotificationToRootAuthor(t *testing.T) {
 	mustCreate(t, db, generalChannel, replier, "thanks", "", &root)
 
 	var kind string
-	err := db.QueryRow(ctx, `SELECT kind FROM notifications WHERE user_id=$1 AND kind='thread_reply'`, author).Scan(&kind)
+	err := db.QueryRow(ctx, `SELECT kind FROM user_events WHERE recipient_id=$1 AND kind='thread_reply'`, author).Scan(&kind)
 	if err == pgx.ErrNoRows {
-		t.Fatal("root author did not receive a thread_reply notification")
+		t.Fatal("root author did not receive a thread_reply event")
 	}
 	if err != nil {
-		t.Fatalf("notif query: %v", err)
+		t.Fatalf("event query: %v", err)
 	}
 
-	// A @mention notifies the mentioned user.
+	// A @mention records an event for the mentioned user.
 	mustCreate(t, db, generalChannel, replier, "hey @author look", "", nil)
 	var mentions int
-	db.QueryRow(ctx, `SELECT COUNT(*) FROM notifications WHERE user_id=$1 AND kind='mention'`, author).Scan(&mentions)
+	db.QueryRow(ctx, `SELECT COUNT(*) FROM user_events WHERE recipient_id=$1 AND kind='mention'`, author).Scan(&mentions)
 	if mentions != 1 {
-		t.Fatalf("mention notifications = %d, want 1", mentions)
+		t.Fatalf("mention events = %d, want 1", mentions)
 	}
 }
 

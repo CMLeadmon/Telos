@@ -76,14 +76,14 @@ func TestAnnotationRepliesOnlyOnCommunityAndNotify(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reply: %v", err)
 	}
-	// The owner is notified (annotation_reply); the payload holds no bodies.
+	// The owner gets an annotation_reply user event; the payload holds no bodies.
 	var kind string
 	var payload []byte
-	if err := db.QueryRow(ctx, `SELECT kind, payload FROM notifications WHERE user_id=$1 AND kind='annotation_reply'`, owner).Scan(&kind, &payload); err != nil {
+	if err := db.QueryRow(ctx, `SELECT kind, payload FROM user_events WHERE recipient_id=$1 AND kind='annotation_reply'`, owner).Scan(&kind, &payload); err != nil {
 		t.Fatalf("owner not notified: %v", err)
 	}
 	if string(payload) == "" || strings.Contains(string(payload), "great highlight") {
-		t.Fatalf("notification payload leaked the reply body: %s", payload)
+		t.Fatalf("user event payload leaked the reply body: %s", payload)
 	}
 	// Replies list the new reply.
 	replies, _ := ListReplies(ctx, comm.ID, 100)

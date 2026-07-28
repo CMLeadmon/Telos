@@ -270,7 +270,7 @@ func createChatMessageTx(ctx context.Context, tx pgx.Tx, channelID, authorID, co
 	if err = appendChannelChangeTx(ctx, tx, channelID, "message.created", id); err != nil {
 		return "", time.Time{}, false, err
 	}
-	if err = notifyForMessageTx(ctx, tx, channelID, authorID, id, content, threadRootID); err != nil {
+	if err = recordMessageEventsTx(ctx, tx, channelID, authorID, id, content, threadRootID); err != nil {
 		return "", time.Time{}, false, err
 	}
 	return id, ts, true, nil
@@ -285,10 +285,10 @@ func appendChannelChangeTx(ctx context.Context, tx pgx.Tx, channelID, kind, mess
 	return err
 }
 
-// notifyForMessageTx creates thread-reply and @mention notifications for a new
-// message. Notifications are idempotent by key and never notify the author of
-// their own message.
-func notifyForMessageTx(ctx context.Context, tx pgx.Tx, channelID, authorID, messageID, content string, threadRootID *string) error {
+// recordMessageEventsTx appends thread-reply and @mention user events for a new
+// message. Events are idempotent by key and never target the author of their
+// own message.
+func recordMessageEventsTx(ctx context.Context, tx pgx.Tx, channelID, authorID, messageID, content string, threadRootID *string) error {
 	notified := map[string]struct{}{authorID: {}}
 
 	// Thread reply: notify the root author.
@@ -299,8 +299,8 @@ func notifyForMessageTx(ctx context.Context, tx pgx.Tx, channelID, authorID, mes
 			if _, dup := notified[rootAuthor]; !dup {
 				notified[rootAuthor] = struct{}{}
 				payload, _ := json.Marshal(map[string]string{"channelId": channelID, "rootId": *threadRootID})
-				if _, err := CreateNotification(ctx, tx, NotificationInput{
-					RecipientID: rootAuthor, ActorID: authorID, Kind: NotifyThreadReply,
+				if _, err := RecordUserEvent(ctx, tx, UserEventInput{
+					RecipientID: rootAuthor, ActorID: authorID, Kind: "thread_reply",
 					ResourceType: "message", ResourceID: messageID,
 					IdempotencyKey: "threadreply:" + messageID + ":" + rootAuthor, Payload: payload,
 				}); err != nil {
@@ -329,8 +329,8 @@ func notifyForMessageTx(ctx context.Context, tx pgx.Tx, channelID, authorID, mes
 		}
 		notified[uid] = struct{}{}
 		payload, _ := json.Marshal(map[string]string{"channelId": channelID})
-		if _, err := CreateNotification(ctx, tx, NotificationInput{
-			RecipientID: uid, ActorID: authorID, Kind: NotifyMention,
+		if _, err := RecordUserEvent(ctx, tx, UserEventInput{
+			RecipientID: uid, ActorID: authorID, Kind: "mention",
 			ResourceType: "message", ResourceID: messageID,
 			IdempotencyKey: "mention:" + messageID + ":" + uid, Payload: payload,
 		}); err != nil {
