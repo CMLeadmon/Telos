@@ -1,0 +1,143 @@
+/* Mobile layout pass — phone-scale reflow of the authenticated shell.
+   Imported last so it overrides the desktop-first module CSS. Everything here
+   is gated on the phone breakpoint (--bp-sm 720px); tablet/desktop are
+   untouched. Complements the token layer added in scale.css. */
+
+/* ── Bottom nav: force it visible below the tablet breakpoint. app.css declares
+   the plain `.mobile-bottom-nav{display:none}` AFTER its own @media flex rule,
+   so at equal specificity source order made `none` always win and the nav never
+   actually appeared. mobile.css loads last, so this wins cleanly. ── */
+@media (max-width: 900px) {
+  .mobile-bottom-nav {
+    display: flex;
+  }
+}
+
+@media (max-width: 720px) {
+  /* ── The vaporwave scene is an absolute, full-arena backdrop; with transparent
+     content areas its sun and palms bleed through chat/library and wreck
+     readability on the light theme. It is pure ambiance, so drop it on phones —
+     the solid theme canvas shows through instead. ── */
+  .scene {
+    display: none;
+  }
+
+  /* ── Topbar: a compact mobile header. The desktop bar reserves a fixed 220px
+     brand block and a 62px logo, which crowd a 390px screen. ── */
+  .topbar {
+    height: 52px;
+    gap: 10px;
+    padding: 0 12px;
+    padding-top: var(--safe-top);
+  }
+  .brand {
+    width: auto;
+    gap: 8px;
+  }
+  .brand img {
+    height: 30px;
+    width: 30px;
+  }
+  /* The wordmark is redundant next to the logo on a phone. */
+  .brand .word {
+    display: none;
+  }
+  .searchbar {
+    max-width: none;
+  }
+  .searchbar input {
+    padding: 9px 12px 9px 36px;
+    font-size: var(--fs-sm);
+  }
+  /* The online-count and username chips are noise on a narrow bar; the bottom
+     nav and settings carry identity. Keep only the icon actions. */
+  .topacts .chip {
+    display: none;
+  }
+  .topacts {
+    gap: 2px;
+  }
+
+  /* ── Module header + banner ── */
+  .arenahead {
+    height: 52px;
+    padding: 0 14px;
+    gap: 8px;
+  }
+  .banner {
+    display: none;
+  }
+
+  /* ── Chat: reclaim the desktop 32px side padding and tighten rhythm. ── */
+  .msgs {
+    padding: 14px 14px;
+    gap: 16px;
+  }
+  .composer {
+    padding: 10px 12px calc(10px + var(--safe-bottom));
+    gap: 8px;
+  }
+
+  /* ── Stream: the 452px hero with 44px padding and a 420px sun swallows the
+     viewport. Shrink it to a phone-scale banner. ── */
+  .hero2 {
+    height: 260px;
+    padding: 20px;
+  }
+  .hero2 .scene .sun {
+    width: 240px;
+    height: 240px;
+  }
+  .hero2 .hc {
+    max-width: 100%;
+  }
+  .streamscroll,
+  .streammain {
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  /* ── Library: hide the facet rail (title/author search stays for filtering).
+     library.css intends this but declares the @media hide BEFORE the base rule,
+     so the base display wins; mobile.css loads last and takes precedence. ── */
+  .library-rail {
+    display: none;
+  }
+  .library-main {
+    padding: 12px;
+  }
+  .library-grid {
+    grid-template-columns: repeat(auto-fill, minmax(128px, 1fr));
+    gap: 12px;
+  }
+  .library-tools {
+    flex-wrap: wrap;
+  }
+
+  /* ── Files table: the desktop row grid reserves ~460px of fixed columns
+     (size/scan/added), overflowing a phone. Collapse to icon + name + actions
+     and drop the metadata columns. ── */
+  .ftable .frow {
+    grid-template-columns: 36px minmax(0, 1fr) auto;
+    gap: 8px;
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .ftable .frow .fmeta,
+  .ftable .frow .scanpill {
+    display: none;
+  }
+  /* The column-label header adds nothing once size/scan/added are gone. */
+  .ftable .frow.head {
+    display: none;
+  }
+
+  /* ── Generic arena content: give scroll areas breathing room above the
+     bottom nav so the last row is never hidden behind it. ── */
+  .arena .streamscroll,
+  .arena .setpanel,
+  .arena .library-main,
+  .arena .files-main {
+    scroll-padding-bottom: 72px;
+  }
+}

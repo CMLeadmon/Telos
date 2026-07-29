@@ -8,6 +8,7 @@ import "@/styles/files.css";
 import "@/styles/settings.css";
 import "@/styles/library.css";
 import "@/styles/commentary.css";
+import "@/styles/mobile.css";
 import { ThemeSync } from "@/components/ThemeSync";
 
 export const metadata: Metadata = {
