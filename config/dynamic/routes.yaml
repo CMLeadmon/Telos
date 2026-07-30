@@ -30,14 +30,18 @@ http:
     # Streaming media and uploads: never spool a request body at the edge —
     # the gateway authorizes and admits first, then bounds the stream itself.
     telos-streaming:
+      # Every line must stay at this exact indentation: YAML only folds newlines
+      # into spaces for lines level with the first one, and Traefik's rule
+      # parser rejects an embedded newline ("expected ')', found newline").
       rule: >-
-        Host(`{{ env "TELOS_DOMAIN" }}`) && (
-          PathPrefix(`/api/v1/stream`) ||
-          PathPrefix(`/api/v1/media`) ||
-          PathPrefix(`/api/v1/files`) ||
-          PathRegexp(`^/api/v1/users/[^/]+/avatar$`) ||
-          Path(`/api/v1/users/me/avatar`) ||
-          PathRegexp(`^/api/v1/library/books/[^/]+/(content|cover)$`)
+        Host(`{{ env "TELOS_DOMAIN" }}`) &&
+        (
+        PathPrefix(`/api/v1/stream`) ||
+        PathPrefix(`/api/v1/media`) ||
+        PathPrefix(`/api/v1/files`) ||
+        PathRegexp(`^/api/v1/users/[^/]+/avatar$`) ||
+        Path(`/api/v1/users/me/avatar`) ||
+        PathRegexp(`^/api/v1/library/books/[^/]+/(content|cover)$`)
         )
       entryPoints:
         - websecure
