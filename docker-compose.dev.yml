@@ -11,6 +11,3 @@ services:
       - TELOS_TRUSTED_PROXY_CIDRS=${TELOS_TRUSTED_PROXY_CIDRS:-}
     ports:
       - "127.0.0.1:8080:8080"
-  livekit:
-    ports:
-      - "127.0.0.1:7880:7880"

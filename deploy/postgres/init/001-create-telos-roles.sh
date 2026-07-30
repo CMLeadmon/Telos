@@ -31,7 +31,7 @@ END
 -- The owner owns the schema; the runtime may use it but not create in it.
 ALTER SCHEMA public OWNER TO telos_owner;
 -- Let the owner install trusted extensions (pg_trgm) during migration.
-GRANT CREATE ON DATABASE :"POSTGRES_DB" TO telos_owner;
+GRANT CREATE ON DATABASE "${POSTGRES_DB}" TO telos_owner;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 GRANT USAGE ON SCHEMA public TO telos_runtime;
 

@@ -11,7 +11,7 @@ set -eu
 
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
 
-psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
+psql -v ON_ERROR_STOP=1 -v POSTGRES_DB="$POSTGRES_DB" --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" <<'SQL'
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 DO $$
@@ -30,8 +30,8 @@ GRANT SELECT ON pg_stat_statements TO telos_observer;
 -- Deny statistics text and the reset function to PUBLIC and the runtime role.
 REVOKE ALL ON pg_stat_statements FROM PUBLIC;
 REVOKE ALL ON pg_stat_statements FROM telos_runtime;
-REVOKE EXECUTE ON FUNCTION pg_stat_statements_reset() FROM PUBLIC;
-REVOKE EXECUTE ON FUNCTION pg_stat_statements_reset() FROM telos_runtime;
+REVOKE EXECUTE ON FUNCTION pg_stat_statements_reset(oid, oid, bigint) FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION pg_stat_statements_reset(oid, oid, bigint) FROM telos_runtime;
 SQL
 
 echo "telos: created telos_observer role and pg_stat_statements"
