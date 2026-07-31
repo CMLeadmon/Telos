@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# uninstall.sh — remove what install.sh added, and nothing else.
+#
+# Removes the PATH symlink and (optionally) the application tree. Your .env,
+# your storage directory, and your container volumes are NEVER touched here:
+# those are node data, not installed files. Removing them is a separate,
+# explicit act (`telos stop --volumes`, and deleting STORAGE_PATH by hand).
+set -uo pipefail
+
+SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$SOURCE_DIR"
+# shellcheck source=cli/lib/common.sh
+. "$SOURCE_DIR/cli/lib/common.sh"
+
+LINK_CANDIDATES=("/usr/local/bin/telos" "$HOME/.local/bin/telos" "/usr/bin/telos")
+PURGE=0
+ASSUME_YES=0
+
+usage() {
+  cat <<'EOF'
+uninstall.sh — remove the telos CLI
+
+Usage:
+  ./uninstall.sh [--purge] [--yes]
+
+Options:
+  --purge   Also delete the installed application directory
+  --yes     Do not prompt
+
+Never removed by this script:
+  .env, your STORAGE_PATH data, and container volumes. Those are node data.
+  To destroy the database and volumes:  telos stop --volumes
+EOF
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --purge)  PURGE=1 ;;
+    --yes|-y) ASSUME_YES=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option '$1'" ;;
+  esac
+  shift
+done
+
+printf '%sTelos uninstaller%s\n\n' "$C_BOLD" "$C_OFF"
+
+# Find links that actually point into a Telos tree; leave unrelated files alone.
+FOUND=()
+for link in "${LINK_CANDIDATES[@]}"; do
+  [ -L "$link" ] || continue
+  target="$(readlink -f "$link" 2>/dev/null)"
+  case "$target" in
+    */telos) FOUND+=("$link") ;;
+  esac
+done
+
+if [ ${#FOUND[@]} -eq 0 ]; then
+  info "No telos symlink found in ${LINK_CANDIDATES[*]}"
+else
+  printf 'Will remove:\n'
+  for link in "${FOUND[@]}"; do printf '  %s -> %s\n' "$link" "$(readlink "$link")"; done
+fi
+
+if [ "$PURGE" -eq 1 ]; then
+  printf '  %s%s (entire directory)%s\n' "$C_BAD" "$SOURCE_DIR" "$C_OFF"
+fi
+printf '\n'
+
+if [ "$ASSUME_YES" -eq 0 ]; then
+  printf 'Proceed? [y/N] '
+  read -r reply
+  case "$reply" in [yY]|[yY][eE][sS]) ;; *) info "Aborted."; exit 1 ;; esac
+fi
+
+for link in "${FOUND[@]}"; do
+  if [ -w "$(dirname "$link")" ]; then rm -f "$link"; else sudo rm -f "$link"; fi
+  info "removed $link"
+done
+
+if [ "$PURGE" -eq 1 ]; then
+  if [ -f "$SOURCE_DIR/.env" ]; then
+    warn "$SOURCE_DIR/.env exists — it holds this node's credentials."
+    printf 'Purge would delete it. Copy it somewhere safe first if you want it.\n'
+    printf 'Delete anyway? [y/N] '
+    read -r reply
+    case "$reply" in [yY]|[yY][eE][sS]) ;; *) info "Kept $SOURCE_DIR."; exit 0 ;; esac
+  fi
+  cd / || exit 1
+  rm -rf "$SOURCE_DIR" && info "removed $SOURCE_DIR"
+fi
+
+printf '\n%s%s telos uninstalled%s\n' "$C_OK" "$I_OK" "$C_OFF"
+note "Container volumes were not touched. Remove them with: podman volume ls"
