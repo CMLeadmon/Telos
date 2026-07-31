@@ -12,6 +12,7 @@
 #
 #   ./install.sh                 install to ~/.local/share/telos, link into /usr/local/bin
 #   ./install.sh --dir /srv/telos
+#   ./install.sh --link-only     run in place from this directory (development)
 #   ./install.sh --user          link into ~/.local/bin instead (no sudo)
 #   ./install.sh --check         run prerequisite checks only, change nothing
 set -uo pipefail
@@ -32,6 +33,7 @@ LINK_DIR="/usr/local/bin"
 USER_MODE=0
 CHECK_ONLY=0
 ASSUME_YES=0
+LINK_ONLY=0
 
 usage() {
   cat <<EOF
@@ -41,19 +43,23 @@ Usage:
   ./install.sh [options]
 
 Options:
-  --dir DIR    Install the application tree here (default: $DEFAULT_DIR)
-  --user       Link into ~/.local/bin instead of /usr/local/bin (no sudo)
-  --check      Run prerequisite checks only; change nothing
-  --yes        Do not prompt for confirmation
-  -h, --help   Show this help
+  --dir DIR     Install the application tree here (default: $DEFAULT_DIR)
+  --link-only   Do not copy anything; make 'telos' global from THIS directory.
+                For a git checkout you are developing in — edits take effect
+                immediately, with no reinstall step.
+  --user        Link into ~/.local/bin instead of /usr/local/bin (no sudo)
+  --check       Run prerequisite checks only; change nothing
+  --yes         Do not prompt for confirmation
+  -h, --help    Show this help
 
 What it does:
   1. Verifies host prerequisites, printing the exact fix command for your
      distribution if anything is missing. It never installs system packages
      for you.
   2. Copies the application tree to a stable directory, so the download you
-     extracted stays disposable.
-  3. Symlinks 'telos' onto your PATH.
+     extracted stays disposable. (Skipped with --link-only.)
+  3. Symlinks 'telos' into $LINK_DIR, which is on the PATH of every user on
+     this machine — so 'telos' works from any directory.
 
 It does not create .env, generate secrets, or touch your data. That is
 'telos init', which you run next.
@@ -63,6 +69,7 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --dir)   [ $# -ge 2 ] || die "--dir needs a path"; INSTALL_DIR="$2"; shift ;;
+    --link-only) LINK_ONLY=1 ;;
     --user)  USER_MODE=1; LINK_DIR="$HOME/.local/bin" ;;
     --check) CHECK_ONLY=1 ;;
     --yes|-y) ASSUME_YES=1 ;;
@@ -90,24 +97,33 @@ for required in telos cli/lib/common.sh docker-compose.yml .env.example; do
     || die "this does not look like a Telos tree (missing $required)"
 done
 
-# Refuse to "install" a tree onto itself.
-if [ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd)" = "$SOURCE_DIR" ]; then
-  die "source and install directory are the same ($SOURCE_DIR); nothing to do"
+# Installing a tree onto itself is what --link-only is for; point at it rather
+# than failing on something the user plainly meant.
+if [ "$LINK_ONLY" -eq 0 ] \
+   && [ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd)" = "$SOURCE_DIR" ]; then
+  die "source and install directory are the same ($SOURCE_DIR) — use --link-only"
 fi
+
+[ "$LINK_ONLY" -eq 1 ] && INSTALL_DIR="$SOURCE_DIR"
 
 # --- 3. confirm ------------------------------------------------------------
 UPGRADE=0
-[ -d "$INSTALL_DIR" ] && UPGRADE=1
+[ -d "$INSTALL_DIR" ] && [ "$LINK_ONLY" -eq 0 ] && UPGRADE=1
 
 printf '%sPlan%s\n' "$C_BOLD" "$C_OFF"
-printf '  source       %s\n' "$SOURCE_DIR"
-if [ "$UPGRADE" -eq 1 ]; then
+if [ "$LINK_ONLY" -eq 1 ]; then
+  printf '  run from     %s %s(in place — nothing copied)%s\n' \
+    "$SOURCE_DIR" "$C_DIM" "$C_OFF"
+elif [ "$UPGRADE" -eq 1 ]; then
+  printf '  source       %s\n' "$SOURCE_DIR"
   printf '  install to   %s %s(exists — app files replaced, .env and data kept)%s\n' \
     "$INSTALL_DIR" "$C_WARN" "$C_OFF"
 else
+  printf '  source       %s\n' "$SOURCE_DIR"
   printf '  install to   %s\n' "$INSTALL_DIR"
 fi
-printf '  link         %s/telos\n' "$LINK_DIR"
+printf '  link         %s/telos %s(global — on every user'\''s PATH)%s\n' \
+  "$LINK_DIR" "$C_DIM" "$C_OFF"
 [ "$USER_MODE" -eq 0 ] && printf '  %ssudo required for the link step%s\n' "$C_DIM" "$C_OFF"
 printf '\n'
 
@@ -119,6 +135,9 @@ if [ "$ASSUME_YES" -eq 0 ]; then
 fi
 
 # --- 4. copy the tree ------------------------------------------------------
+if [ "$LINK_ONLY" -eq 1 ]; then
+  info "Link-only: running from $SOURCE_DIR, nothing copied."
+else
 info "Installing application tree..."
 mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
 
@@ -139,6 +158,8 @@ tar -C "$SOURCE_DIR" \
     -cf - . 2>/dev/null | tar -C "$INSTALL_DIR" -xf - \
   || die "failed to copy the application tree to $INSTALL_DIR"
 
+fi
+
 chmod +x "$INSTALL_DIR/telos" "$INSTALL_DIR/install.sh" 2>/dev/null
 [ -f "$INSTALL_DIR/uninstall.sh" ] && chmod +x "$INSTALL_DIR/uninstall.sh"
 
@@ -151,6 +172,9 @@ link_cmd() {
     mkdir -p "$LINK_DIR" && ln -sfn "$INSTALL_DIR/telos" "$LINK_PATH"
   else
     command -v sudo >/dev/null 2>&1 || return 1
+    # Say why the password prompt is about to appear; an unexplained sudo
+    # prompt from an installer is exactly what users should be wary of.
+    note "  $LINK_DIR needs root to write; sudo will prompt for the symlink only."
     sudo mkdir -p "$LINK_DIR" && sudo ln -sfn "$INSTALL_DIR/telos" "$LINK_PATH"
   fi
 }
@@ -182,7 +206,18 @@ case ":$PATH:" in
 esac
 
 printf '%sNext:%s\n' "$C_BOLD" "$C_OFF"
-printf '    telos init     %sgenerate .env and create the storage tree%s\n' "$C_DIM" "$C_OFF"
-printf '    telos start    %sbring the stack up%s\n' "$C_DIM" "$C_OFF"
-printf '    telos status   %scheck what came up%s\n\n' "$C_DIM" "$C_OFF"
-printf '%sThe directory you extracted can now be deleted.%s\n' "$C_DIM" "$C_OFF"
+if [ -f "$INSTALL_DIR/.env" ]; then
+  printf '    telos doctor   %sthis node is already initialized — check it%s\n' "$C_DIM" "$C_OFF"
+  printf '    telos start    %sbring the stack up%s\n\n' "$C_DIM" "$C_OFF"
+else
+  printf '    telos init     %sgenerate .env and create the storage tree%s\n' "$C_DIM" "$C_OFF"
+  printf '    telos start    %sbring the stack up%s\n' "$C_DIM" "$C_OFF"
+  printf '    telos status   %scheck what came up%s\n\n' "$C_DIM" "$C_OFF"
+fi
+
+if [ "$LINK_ONLY" -eq 1 ]; then
+  note "Link-only: telos runs straight from $INSTALL_DIR, so edits there take"
+  note "effect immediately. Moving or deleting that directory breaks the command."
+else
+  note "The directory you extracted can now be deleted."
+fi
