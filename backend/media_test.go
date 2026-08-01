@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -124,6 +125,71 @@ func TestLegacyJellyfinIDResolvesBeforeAuthorizationAndUpstream(t *testing.T) {
 	want := []string{"resolve:legacy-movie", "authorize:current-movie", "upstream:/Items/current-movie/Images/Primary"}
 	if strings.Join(events, "|") != strings.Join(want, "|") {
 		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestFreshLegacyJellyfinDeepLinkDiscoversCurrentAuthorizedItem(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000121"
+	var observed CatalogObservation
+	oldObserve, oldResolve := observeCatalogIdentity, resolveCatalogIdentity
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		observed = in
+		return CatalogResolution{ID: canonicalID, Provider: in.Provider, UpstreamID: in.UpstreamID,
+			LibraryID: in.LibraryID, Surface: in.Surface, Kind: in.Kind, Active: true, Available: true}, nil
+	}
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		if rawID == "fresh-movie" {
+			return CatalogResolution{}, errCatalogNotFound
+		}
+		if rawID == canonicalID {
+			return CatalogResolution{ID: canonicalID, Provider: ProviderJellyfin, UpstreamID: "fresh-movie",
+				LibraryID: "lib-allowed", Surface: surface, Kind: "video", Active: true, Available: true}, nil
+		}
+		return CatalogResolution{}, errors.New("unexpected catalog identifier")
+	}
+	t.Cleanup(func() { observeCatalogIdentity, resolveCatalogIdentity = oldObserve, oldResolve })
+
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{items: map[string]resolvedItem{
+		"fresh-movie": {AncestorIDs: []string{"lib-allowed"}},
+	}}, []string{"lib-allowed"})
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	providerPaths := []string{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerPaths = append(providerPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "user-1", "Name": "admin"}})
+		case "/Users/user-1/Items/fresh-movie":
+			json.NewEncoder(w).Encode(map[string]any{"Id": "fresh-movie", "Name": "Fresh movie", "Type": "Movie", "IsFolder": false})
+		case "/Items/fresh-movie/Images/Primary":
+			fmt.Fprint(w, "jpeg")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = upstream.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/fresh-movie/cover", nil)
+	req.SetPathValue("id", "fresh-movie")
+	rec := httptest.NewRecorder()
+	handleMediaItemCover(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if observed.Provider != ProviderJellyfin || observed.UpstreamID != "fresh-movie" ||
+		observed.LibraryID != "lib-allowed" || observed.Kind != "video" {
+		t.Fatalf("observation=%+v, want current authorized Jellyfin movie", observed)
+	}
+	for _, path := range providerPaths {
+		if strings.Contains(path, canonicalID) {
+			t.Fatalf("canonical UUID reached Jellyfin: %q", path)
+		}
 	}
 }
 
