@@ -93,7 +93,8 @@ expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --i
 set_traefik_ports "$ports_fixture" '8080:80' '8443:443'
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-sed -i '/^    image: redis:7\.4\.8-alpine$/a\    ports:\n      - "6379:6379"' \
+set_traefik_ports "$ports_fixture" '80:80' '443:443'
+sed -i '/^  redis:$/a\    ports:\n      - "6379:6379"' \
 	"$ports_fixture/docker-compose.yml"
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
