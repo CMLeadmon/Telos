@@ -297,31 +297,23 @@ func (r *CatalogRepository) Resolve(ctx context.Context, rawID string) (CatalogR
 	}
 
 	rows, err := r.db.Query(ctx, `
-		SELECT item.id::text, item.surface, item.kind, source.provider,
-			source.upstream_id, source.upstream_library_id, source.active,
-			source.available, item.revision, matched.provider
-		FROM catalog_sources AS matched
-		JOIN catalog_items AS item ON item.id = matched.catalog_item_id
-		JOIN catalog_sources AS source
-		  ON source.catalog_item_id = item.id AND source.active
-		WHERE matched.upstream_id = $1
-		ORDER BY matched.provider, item.id
+		SELECT catalog_item_id::text, provider
+		FROM catalog_sources
+		WHERE upstream_id = $1
+		ORDER BY provider, catalog_item_id
 		LIMIT 3`, rawID)
 	if err != nil {
 		return CatalogResolution{}, err
 	}
 	defer rows.Close()
 	type legacyMatch struct {
-		resolution    CatalogResolution
-		aliasProvider CatalogProvider
+		itemID   string
+		provider CatalogProvider
 	}
 	var matches []legacyMatch
 	for rows.Next() {
 		var match legacyMatch
-		out := &match.resolution
-		if err := rows.Scan(&out.ID, &out.Surface, &out.Kind, &out.Provider,
-			&out.UpstreamID, &out.LibraryID, &out.Active, &out.Available, &out.Revision,
-			&match.aliasProvider); err != nil {
+		if err := rows.Scan(&match.itemID, &match.provider); err != nil {
 			return CatalogResolution{}, err
 		}
 		matches = append(matches, match)
@@ -333,11 +325,11 @@ func (r *CatalogRepository) Resolve(ctx context.Context, rawID string) (CatalogR
 	case 0:
 		return CatalogResolution{}, errCatalogNotFound
 	case 1:
-		return matches[0].resolution, nil
+		return r.resolveCanonical(ctx, matches[0].itemID)
 	default:
 		providers := make(map[CatalogProvider]struct{}, len(matches))
 		for _, match := range matches {
-			providers[match.aliasProvider] = struct{}{}
+			providers[match.provider] = struct{}{}
 		}
 		for provider := range providers {
 			_ = recordCatalogReconciled(provider, CatalogOutcomeAmbiguous, 1)

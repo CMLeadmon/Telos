@@ -124,6 +124,20 @@ func TestCatalogResolveRejectsProviderCollision(t *testing.T) {
 	}
 }
 
+func TestCatalogResolveRejectsProviderCollisionWhenOneItemHasNoActiveSource(t *testing.T) {
+	repo, db := catalogFixture(t)
+	observeCatalog(t, repo, ProviderGrimmory, "inactive-collision", "books", SurfaceLibrary, "epub")
+	inactive := observeCatalog(t, repo, ProviderJellyfin, "inactive-collision", "music", SurfaceStream, "audio")
+	if _, err := db.Exec(t.Context(), `
+		UPDATE catalog_sources SET active = false WHERE catalog_item_id = $1::uuid`, inactive.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := repo.Resolve(t.Context(), "inactive-collision"); !errors.Is(err, errCatalogInvalid) {
+		t.Fatalf("collision error = %v, want errCatalogInvalid", err)
+	}
+}
+
 func TestCatalogObserveSupportsFolderKind(t *testing.T) {
 	repo, _ := catalogFixture(t)
 	got := observeCatalog(t, repo, ProviderGrimmory, "folder-1", "books", SurfaceLibrary, "folder")
