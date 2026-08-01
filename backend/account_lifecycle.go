@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // DeletionReceipt is the idempotent record of a completed account deletion.
@@ -36,7 +37,8 @@ var assetRemover AssetRemover = noopAssetRemover{}
 // security event and physical-asset jobs, and records a receipt. Sockets are
 // closed before success is reported, and asset jobs run after commit.
 func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) {
-	tx, err := dbPool.Begin(ctx)
+	pool, remover := dbPool, assetRemover
+	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return DeletionReceipt{}, err
 	}
@@ -149,15 +151,15 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 
 	// Run asset deletion jobs after commit (best-effort; reconciliation retries
 	// any that fail).
-	go runAssetDeletionJobs(context.Background(), userID)
+	go runAssetDeletionJobs(context.Background(), pool, remover, userID)
 
 	return receipt, nil
 }
 
 // runAssetDeletionJobs removes physical assets and marks jobs done. Failures
 // remain pending for the reconciliation pass.
-func runAssetDeletionJobs(ctx context.Context, userID string) {
-	rows, err := dbPool.Query(ctx, `SELECT id::text, area, storage_key FROM asset_deletion_jobs WHERE user_id = $1 AND status = 'pending'`, userID)
+func runAssetDeletionJobs(ctx context.Context, pool *pgxpool.Pool, remover AssetRemover, userID string) {
+	rows, err := pool.Query(ctx, `SELECT id::text, area, storage_key FROM asset_deletion_jobs WHERE user_id = $1 AND status = 'pending'`, userID)
 	if err != nil {
 		return
 	}
@@ -170,11 +172,11 @@ func runAssetDeletionJobs(ctx context.Context, userID string) {
 	}
 	rows.Close()
 	for _, j := range jobs {
-		if err := assetRemover.Remove(ctx, j.area, j.key); err != nil {
-			dbPool.Exec(ctx, `UPDATE asset_deletion_jobs SET attempts = attempts + 1 WHERE id = $1`, j.id)
+		if err := remover.Remove(ctx, j.area, j.key); err != nil {
+			pool.Exec(ctx, `UPDATE asset_deletion_jobs SET attempts = attempts + 1 WHERE id = $1`, j.id)
 			log.Printf("asset deletion job %s failed: %v", j.id, err)
 			continue
 		}
-		dbPool.Exec(ctx, `UPDATE asset_deletion_jobs SET status='done', completed_at=NOW(), attempts=attempts+1 WHERE id=$1`, j.id)
+		pool.Exec(ctx, `UPDATE asset_deletion_jobs SET status='done', completed_at=NOW(), attempts=attempts+1 WHERE id=$1`, j.id)
 	}
 }

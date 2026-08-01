@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -11,6 +12,37 @@ import (
 type recordingRemover struct {
 	mu   sync.Mutex
 	seen []string
+}
+
+type gatedRemover struct {
+	calls    chan string
+	releases chan struct{}
+}
+
+func newGatedRemover() *gatedRemover {
+	return &gatedRemover{
+		calls:    make(chan string, 3),
+		releases: make(chan struct{}),
+	}
+}
+
+func (r *gatedRemover) Remove(_ context.Context, area, key string) error {
+	r.calls <- area + ":" + key
+	<-r.releases
+	return nil
+}
+
+func awaitDeletionCall(t *testing.T, expected, redirected <-chan string) string {
+	t.Helper()
+	select {
+	case got := <-expected:
+		return got
+	case got := <-redirected:
+		t.Fatalf("asset removal was redirected after dispatch: %s", got)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for asset deletion worker")
+	}
+	return ""
 }
 
 func (r *recordingRemover) Remove(_ context.Context, area, key string) error {
@@ -92,6 +124,72 @@ func TestAccountDeletionMatrix(t *testing.T) {
 	}
 	if receipt2.RequestID != receipt.RequestID {
 		t.Fatalf("repeat deletion changed the receipt: %s vs %s", receipt2.RequestID, receipt.RequestID)
+	}
+}
+
+func TestAccountDeletionWorkerKeepsDispatchDependencies(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+	oldSink, oldRemover := securityEvents, assetRemover
+	securityEvents = OutboxSecurityEventSink{}
+	capturedRemover := newGatedRemover()
+	redirectedRemover := &gatedRemover{
+		calls:    make(chan string, 3),
+		releases: make(chan struct{}, 3),
+	}
+	assetRemover = capturedRemover
+	t.Cleanup(func() {
+		dbPool = f.DB
+		securityEvents, assetRemover = oldSink, oldRemover
+	})
+
+	closedPool, err := pgxpool.NewWithConfig(ctx, f.DB.Config().Copy())
+	if err != nil {
+		t.Fatalf("create replacement pool: %v", err)
+	}
+	closedPool.Close()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('worker-race','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO files (filename, sha256, uploader_id, scan_status, storage_key, size_bytes, mime_type, purpose)
+		VALUES
+			('one.bin', 'worker-race-1', $1, 'clean', 'private/one.bin', 1, 'application/octet-stream', 'book_ingest'),
+			('two.bin', 'worker-race-2', $1, 'clean', 'private/two.bin', 1, 'application/octet-stream', 'book_ingest'),
+			('three.bin', 'worker-race-3', $1, 'clean', 'private/three.bin', 1, 'application/octet-stream', 'book_ingest')
+	`, userID); err != nil {
+		t.Fatalf("seed private assets: %v", err)
+	}
+
+	if _, err := DeleteAccount(ctx, userID); err != nil {
+		t.Fatalf("DeleteAccount: %v", err)
+	}
+
+	first := awaitDeletionCall(t, capturedRemover.calls, redirectedRemover.calls)
+	dbPool = closedPool
+	assetRemover = redirectedRemover
+	capturedRemover.releases <- struct{}{}
+
+	second := awaitDeletionCall(t, capturedRemover.calls, redirectedRemover.calls)
+	assertAssetDeletionStatus(t, f.DB, first, "done")
+	capturedRemover.releases <- struct{}{}
+
+	awaitDeletionCall(t, capturedRemover.calls, redirectedRemover.calls)
+	assertAssetDeletionStatus(t, f.DB, second, "done")
+	capturedRemover.releases <- struct{}{}
+}
+
+func assertAssetDeletionStatus(t *testing.T, pool *pgxpool.Pool, asset, want string) {
+	t.Helper()
+	storageKey := asset[len("upload:"):]
+	var got string
+	if err := pool.QueryRow(context.Background(), `SELECT status FROM asset_deletion_jobs WHERE storage_key=$1`, storageKey).Scan(&got); err != nil {
+		t.Fatalf("query asset deletion status for %q: %v", storageKey, err)
+	}
+	if got != want {
+		t.Fatalf("asset deletion status for %q = %q, want %q", storageKey, got, want)
 	}
 }
 
