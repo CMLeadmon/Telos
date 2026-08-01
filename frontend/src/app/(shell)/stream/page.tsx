@@ -21,6 +21,8 @@ import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { HlsPlayer } from "@/components/stream/HlsPlayer";
 import { CommentaryPanel } from "@/components/CommentaryPanel";
+import { MediaShelf } from "@/components/stream/MediaShelf";
+import { StreamItemDetail } from "@/components/stream/StreamItemDetail";
 
 const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
 const DARK_TEXT = new Set(["c2", "c6"]);
@@ -137,6 +139,8 @@ export default function StreamPage() {
     activeLibraryId,
     itemsByParent,
     itemsStatusByParent,
+    continueItems,
+    recentItems,
     path,
     rootLibrary,
     nowPlaying,
@@ -145,6 +149,8 @@ export default function StreamPage() {
     refreshProgress,
     refreshNotice,
     fetchLibraries,
+    fetchContinue,
+    fetchRecent,
     refresh,
     clearRefreshNotice,
     open,
@@ -152,10 +158,13 @@ export default function StreamPage() {
     play,
     stop,
   } = useMediaStore();
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (libraryStatus === "idle") void fetchLibraries();
-  }, [libraryStatus, fetchLibraries]);
+    void fetchContinue();
+    void fetchRecent();
+  }, [libraryStatus, fetchLibraries, fetchContinue, fetchRecent]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -378,6 +387,22 @@ export default function StreamPage() {
           </div>
         )}
 
+        {continueItems.length > 0 && (
+          <MediaShelf
+            title="Continue Watching"
+            items={continueItems}
+            onSelectItem={(item) => setDetailItemId(item.id)}
+          />
+        )}
+
+        {recentItems.length > 0 && (
+          <MediaShelf
+            title="Recently Added"
+            items={recentItems}
+            onSelectItem={(item) => setDetailItemId(item.id)}
+          />
+        )}
+
         {libraries.map((lib) => {
           const items = itemsByParent[lib.id] ?? [];
           const status = itemsStatusByParent[lib.id] ?? "idle";
@@ -396,12 +421,30 @@ export default function StreamPage() {
               <PosterGrid
                 items={items}
                 status={status}
-                onOpen={(item) => open(item, lib)}
+                onOpen={(item) => {
+                  if (item.isFolder) {
+                    open(item, lib);
+                  } else {
+                    setDetailItemId(item.id);
+                  }
+                }}
               />
             </section>
           );
         })}
       </div>
+
+      {detailItemId && (
+        <StreamItemDetail
+          itemId={detailItemId}
+          onClose={() => setDetailItemId(null)}
+          onPlay={(item) => {
+            setDetailItemId(null);
+            const lib = activeLibrary || libraries[0] || { id: "root", name: "Shared Stream", type: "video" };
+            play(item, lib);
+          }}
+        />
+      )}
     </div>
   );
 }
