@@ -27,25 +27,25 @@ func BackfillCatalogReferences(ctx context.Context, db DBTX) (CatalogBackfillRep
 
 	var report CatalogBackfillReport
 	progress, err := runCatalogBackfill(ctx, beginner, backfillProgressSQL)
+	report.Progress = progress
+	report.Updated = report.Progress
 	if err != nil {
 		return report, err
 	}
-	report.Progress = progress
 
 	annotations, err := runCatalogBackfill(ctx, beginner, backfillAnnotationsSQL)
+	report.Annotations = annotations
+	report.Updated = report.Progress + report.Annotations
 	if err != nil {
-		report.Updated = report.Progress
 		return report, err
 	}
-	report.Annotations = annotations
 
 	embeds, err := runCatalogBackfill(ctx, beginner, backfillEmbedsSQL)
-	if err != nil {
-		report.Updated = report.Progress + report.Annotations
-		return report, err
-	}
 	report.Embeds = embeds
 	report.Updated = report.Progress + report.Annotations + report.Embeds
+	if err != nil {
+		return report, err
+	}
 	return report, nil
 }
 

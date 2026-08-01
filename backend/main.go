@@ -1850,9 +1850,14 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) (string, []byte, 
 		if err != nil || resolution.Provider != ProviderGrimmory {
 			return "", nil, errors.New("book not found")
 		}
-		book, err := fetchGrimmoryBook(ctx, resolution.UpstreamID)
+		requestCtx, cancel := upstreamRequestContext(ctx)
+		defer cancel()
+		book, err := fetchGrimmoryBook(requestCtx, resolution.UpstreamID)
 		if err != nil {
-			return "", nil, err
+			if errors.Is(err, errGrimmoryBookNotFound) {
+				return "", nil, errors.New("book not found")
+			}
+			return "", nil, fmt.Errorf("%w: grimmory", errUpstreamUnavailable)
 		}
 		if strconv.FormatInt(book.UpstreamID, 10) != resolution.UpstreamID {
 			return "", nil, errors.New("book not found")
@@ -2006,11 +2011,11 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 		k, ref := body.Embed.Kind, body.Embed.Ref
 		canonicalRef, snap, err := buildEmbedSnapshot(r.Context(), k, ref)
 		if err != nil {
-			status := http.StatusBadRequest
 			if errors.Is(err, errUpstreamUnavailable) {
-				status = http.StatusServiceUnavailable
+				http.Error(w, "embed source unavailable", http.StatusServiceUnavailable)
+				return
 			}
-			http.Error(w, "invalid embed: "+err.Error(), status)
+			http.Error(w, "invalid embed: "+err.Error(), http.StatusBadRequest)
 			return
 		}
 		embed = messageEmbedInput{Kind: &k, Ref: &canonicalRef, Snapshot: snap}

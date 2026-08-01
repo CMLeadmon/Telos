@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -208,4 +209,63 @@ func mustJSON(t *testing.T, value any) string {
 		t.Fatalf("marshal JSON comparison value: %v", err)
 	}
 	return string(raw)
+}
+
+func TestBackfillCatalogReferencesReportsCommittedBatchesBeforeFailure(t *testing.T) {
+	f := testutil.Setup(t)
+	ctx := t.Context()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash)
+		VALUES ('partial-backfill-member', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	repo := NewCatalogRepository(f.DB)
+	for _, upstreamID := range []string{"good-book", "failing-book"} {
+		if _, err := repo.Observe(ctx, CatalogObservation{
+			Provider: ProviderGrimmory, UpstreamID: upstreamID, LibraryID: "library-a",
+			Surface: SurfaceLibrary, Kind: "epub",
+		}); err != nil {
+			t.Fatalf("observe %s: %v", upstreamID, err)
+		}
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO annotations (id, target_type, target_id, user_id, visibility, note)
+		SELECT ('00000000-0000-0000-0000-' || lpad(n::text, 12, '0'))::uuid,
+			'book', 'good-book', $1::uuid, 'community', 'good batch'
+		FROM generate_series(1, 200) AS n`, userID); err != nil {
+		t.Fatalf("seed committed batch: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO annotations (id, target_type, target_id, user_id, visibility, note)
+		VALUES ('ffffffff-ffff-ffff-ffff-ffffffffffff', 'book', 'failing-book', $1::uuid, 'community', 'fail batch')`, userID); err != nil {
+		t.Fatalf("seed failing batch: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		ALTER TABLE annotations ADD CONSTRAINT task5_fail_later_annotation_batch
+		CHECK (note <> 'fail batch' OR target_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')`); err != nil {
+		t.Fatalf("install failure constraint: %v", err)
+	}
+	t.Cleanup(func() {
+		f.DB.Exec(context.Background(), `ALTER TABLE annotations DROP CONSTRAINT IF EXISTS task5_fail_later_annotation_batch`)
+	})
+
+	report, err := BackfillCatalogReferences(ctx, f.DB)
+	if err == nil {
+		t.Fatal("backfill succeeded despite the forced later-batch failure")
+	}
+	if report.Annotations != 200 || report.Updated != 200 {
+		t.Fatalf("report after committed batch = %+v, want annotations=200 updated=200", report)
+	}
+	var canonicalized int
+	if err := f.DB.QueryRow(ctx, `
+		SELECT count(*) FROM annotations
+		WHERE note = 'good batch' AND target_id <> 'good-book'`).Scan(&canonicalized); err != nil {
+		t.Fatalf("count committed rows: %v", err)
+	}
+	if canonicalized != 200 {
+		t.Fatalf("committed canonical rows = %d, want 200", canonicalized)
+	}
 }

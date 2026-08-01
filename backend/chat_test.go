@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,10 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
 
 func seedChannel(t *testing.T, name string) string {
 	t.Helper()
@@ -214,5 +219,103 @@ func TestSendMessageCanonicalizesEmbedBeforeFetchAndWrite(t *testing.T) {
 	wantEvents := "resolve:legacy-film:stream|upstream:/Users|upstream:/Users/jf-user/Items/current-film"
 	if gotEvents := strings.Join(events, "|"); gotEvents != wantEvents {
 		t.Fatalf("events = %s, want %s", gotEvents, wantEvents)
+	}
+}
+
+func TestBuildBookEmbedBoundsUpstreamRequest(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000142"
+	oldResolve, oldClient, oldBase := resolveCatalogIdentity, upstreamHTTPClient, grimmoryBaseURL
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: surface, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "42", LibraryID: "library-a", Active: true, Available: true,
+		}, nil
+	}
+	grimmoryBaseURL = "http://grimmory.test"
+	t.Setenv("GRIMMORY_ADMIN_USER", "gateway")
+	t.Setenv("GRIMMORY_ADMIN_PASSWORD", "secret")
+	var bookDeadline time.Time
+	upstreamHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `{"accessToken":"test-token","expires":7200}`
+		if req.URL.Path == "/api/v1/books/42" {
+			bookDeadline, _ = req.Context().Deadline()
+			body = `{"id":42,"libraryId":1,"metadata":{"title":"Bounded Book"},"primaryFile":{"bookType":"EPUB"}}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(body)), Request: req,
+		}, nil
+	})}
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		resolveCatalogIdentity, upstreamHTTPClient, grimmoryBaseURL = oldResolve, oldClient, oldBase
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	ref, _, err := buildEmbedSnapshot(t.Context(), "library_book", "42")
+	if err != nil {
+		t.Fatalf("build book embed: %v", err)
+	}
+	if ref != canonicalID {
+		t.Fatalf("canonical ref = %q, want %q", ref, canonicalID)
+	}
+	remaining := time.Until(bookDeadline)
+	if bookDeadline.IsZero() || remaining <= 0 || remaining > 16*time.Second {
+		t.Fatalf("book request deadline = %v (remaining %v), want a live deadline within 16s", bookDeadline, remaining)
+	}
+}
+
+func TestSendMessageClassifiesGrimmoryEmbedOutage(t *testing.T) {
+	_, author, _ := chatFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000143"
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: surface, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "43", LibraryID: "library-a", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			json.NewEncoder(w).Encode(map[string]any{"accessToken": "outage-token", "expires": 7200})
+		case "/api/v1/books/43":
+			http.Error(w, "private provider diagnostic", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase := grimmoryBaseURL
+	grimmoryBaseURL = upstream.URL
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		grimmoryBaseURL = oldBase
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+generalChannel+"/messages", strings.NewReader(`{"content":"read this","embed":{"kind":"library_book","ref":"43"}}`))
+	req.SetPathValue("id", generalChannel)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"Member"}}))
+	rec := httptest.NewRecorder()
+	handleSendMessage(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%q, want 503", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); body != "embed source unavailable\n" {
+		t.Fatalf("public outage body = %q, want generic response", body)
 	}
 }
