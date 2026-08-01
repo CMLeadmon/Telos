@@ -48,6 +48,55 @@ expect_exit() {
 	[ "$rc" -eq "$expected" ] || fail "expected exit $expected from '$*', got $rc"
 }
 
+set_traefik_ports() {
+	local fixture="$1"
+	local http_port="$2"
+	local https_port="$3"
+	local updated
+	updated="$(mktemp "$fixture/docker-compose.yml.XXXXXX")"
+	awk -v http_port="$http_port" -v https_port="$https_port" '
+		/^  [a-zA-Z0-9_-]+:/ {
+			service=$1
+			sub(":", "", service)
+		}
+		service == "traefik" && /^    ports:/ {
+			print
+			getline
+			print "      - \"" http_port "\""
+			getline
+			print "      - \"" https_port "\""
+			next
+		}
+		{ print }
+	' "$fixture/docker-compose.yml" >"$updated"
+	mv "$updated" "$fixture/docker-compose.yml"
+}
+
+# --- exact Traefik production-port allowlist -------------------------------
+ports_fixture="$tmp/ports-fixture"
+make_fixture "$ports_fixture"
+
+expect_exit 0 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+set_traefik_ports "$ports_fixture" '80:80' '443:443'
+expect_exit 0 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+set_traefik_ports "$ports_fixture" '${WRONG_HTTP_PORT:-80}:80' '${TRAEFIK_HTTPS_PORT:-443}:443'
+expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-80}:8080' '${TRAEFIK_HTTPS_PORT:-443}:443'
+expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-8080}:80' '${TRAEFIK_HTTPS_PORT:-443}:443'
+expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+set_traefik_ports "$ports_fixture" '8080:80' '8443:443'
+expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
+sed -i '/^    image: redis:7\.4\.8-alpine$/a\    ports:\n      - "6379:6379"' \
+	"$ports_fixture/docker-compose.yml"
+expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
+
 # --- exit 10: missing required route provider -------------------------------
 fixture="$tmp/fixture"
 make_fixture "$fixture"
