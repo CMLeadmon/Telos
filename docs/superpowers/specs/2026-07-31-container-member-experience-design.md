@@ -124,6 +124,7 @@ CREATE TABLE catalog_items (
     kind        TEXT NOT NULL CHECK (
                   kind IN ('epub', 'pdf', 'audiobook', 'video', 'audio', 'folder')
                 ),
+    revision    BIGINT NOT NULL DEFAULT 1,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -134,8 +135,10 @@ CREATE TABLE catalog_sources (
     upstream_id        TEXT NOT NULL,
     upstream_library_id TEXT NOT NULL,
     active             BOOLEAN NOT NULL DEFAULT true,
+    available          BOOLEAN NOT NULL DEFAULT true,
     first_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    missing_since      TIMESTAMPTZ,
     PRIMARY KEY (provider, upstream_id),
     UNIQUE (catalog_item_id, provider, upstream_id)
 );
@@ -151,9 +154,12 @@ catalog item. Old source rows remain as inactive aliases. A request containing
 an old Jellyfin audiobook ID therefore resolves to the same Telos UUID whose
 active source is now Grimmory.
 
-Catalog reconciliation upserts provider records and marks a source missing only
-after a completed provider scan. A transient provider failure never deletes an
-identity or makes a previously known item disappear permanently.
+Catalog reconciliation upserts provider records and marks a source unavailable
+only after a completed provider scan. Observation restores availability and
+clears `missing_since`. A transient provider failure never deletes an identity
+or makes a previously known item disappear permanently. Activating another
+source increments the catalog revision so cache keys cannot reuse bytes or
+metadata from the previous provider.
 
 Provider library authorization is still evaluated on every sensitive catalog,
 content, artwork, commentary, and stream request. Resolving a valid UUID is not
