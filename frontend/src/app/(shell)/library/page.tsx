@@ -14,6 +14,8 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
+import { AudiobookPlayer } from "@/components/library/AudiobookPlayer";
+import { LibraryItemDetail } from "@/components/library/LibraryItemDetail";
 import { FilesBrowser } from "@/components/library/FilesBrowser";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
@@ -258,6 +260,8 @@ export default function LibraryPage() {
   );
   const [reading, setReading] = useState<LibraryBook | null>(null);
   const [managing, setManaging] = useState<LibraryBook | null>(null);
+  const [audioPlayerId, setAudioPlayerId] = useState<string | null>(null);
+  const [detailItem, setDetailItem] = useState<LibraryBook | null>(null);
   // Initialize the active segment from the URL once (the ?view=files deep link
   // and the /files redirect both land here). A lazy initializer avoids a
   // setState-in-effect and the books-first flash it would cause.
@@ -431,7 +435,13 @@ export default function LibraryPage() {
                   key={b.id}
                   book={b}
                   canManage={canManage}
-                  onRead={() => setReading(b)}
+                  onRead={() => {
+                    if (b.kind === "audiobook" || b.format === "AUDIOBOOK") {
+                      setAudioPlayerId(b.id);
+                    } else {
+                      setReading(b);
+                    }
+                  }}
                   onManage={() => setManaging(b)}
                 />
               ))}
@@ -451,6 +461,26 @@ export default function LibraryPage() {
         <BookManageModal
           book={managing}
           onClose={() => setManaging(null)}
+        />
+      )}
+      {audioPlayerId && (
+        <AudiobookPlayer
+          itemId={audioPlayerId}
+          onClose={() => setAudioPlayerId(null)}
+        />
+      )}
+      {detailItem && (
+        <LibraryItemDetail
+          item={detailItem}
+          onClose={() => setDetailItem(null)}
+          onOpenItem={(item) => {
+            setDetailItem(null);
+            if (item.kind === "audiobook") {
+              setAudioPlayerId(item.id);
+            } else {
+              setReading(item);
+            }
+          }}
         />
       )}
     </>

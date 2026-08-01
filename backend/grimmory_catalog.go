@@ -5,6 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -230,3 +234,293 @@ func (c *GrimmoryCatalog) GetItem(ctx context.Context, userID, rawID string) (Li
 	}
 	return items[0], resolution, nil
 }
+
+type LibraryAuthor struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	BookCount int    `json:"bookCount"`
+}
+
+type LibrarySeries struct {
+	Name      string `json:"name"`
+	BookCount int    `json:"bookCount"`
+}
+
+type grimmoryAuthorDTO struct {
+	ID        json.RawMessage `json:"id"`
+	Name      string          `json:"name"`
+	BookCount int             `json:"bookCount"`
+}
+
+type grimmoryAuthorsPageDTO struct {
+	Content []grimmoryAuthorDTO `json:"content"`
+	HasNext bool                `json:"hasNext"`
+}
+
+type grimmorySeriesDTO struct {
+	Name      string `json:"name"`
+	BookCount int    `json:"bookCount"`
+}
+
+type grimmorySeriesPageDTO struct {
+	Content []grimmorySeriesDTO `json:"content"`
+	HasNext bool                `json:"hasNext"`
+}
+
+type grimmoryBooksPageDTO struct {
+	Content []LibraryBook `json:"content"`
+	HasNext bool          `json:"hasNext"`
+}
+
+func (c *GrimmoryCatalog) Continue(ctx context.Context, userID string) ([]LibraryItem, error) {
+	if continuityRepo == nil {
+		return []LibraryItem{}, nil
+	}
+	itemIDs, err := continuityRepo.Continue(ctx, userID, SurfaceLibrary, 20)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	items := make([]LibraryItem, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		item, _, err := c.GetItem(ctx, userID, id)
+		if err != nil {
+			log.Printf("warn: library continue item %s resolution failed: %v", id, err)
+			continue
+		}
+		items = append(items, item)
+	}
+	return items, nil
+}
+
+func (c *GrimmoryCatalog) Recent(ctx context.Context, userID string, limit int) ([]LibraryItem, error) {
+	if limit <= 0 || limit > 20 {
+		limit = 20
+	}
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	resp, err := grimmoryGET(requestCtx, fmt.Sprintf("/api/v1/app/books/recently-added?limit=%d", limit))
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
+	}
+	var rawBooks []LibraryBook
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
+		var page grimmoryBooksPageDTO
+		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
+			rawBooks = page.Content
+		} else {
+			return nil, libraryCatalogError(err)
+		}
+	}
+	items := make([]LibraryItem, 0, len(rawBooks))
+	for _, book := range rawBooks {
+		item, err := normalizedLibraryItem(book)
+		if errors.Is(err, errUnsupportedLibraryKind) {
+			continue
+		}
+		if err != nil {
+			return nil, libraryCatalogError(err)
+		}
+		items = append(items, item)
+	}
+	reader, err := c.progressReader()
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	return items, nil
+}
+
+func (c *GrimmoryCatalog) Authors(ctx context.Context) ([]LibraryAuthor, error) {
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	resp, err := grimmoryGET(requestCtx, "/api/v1/app/authors")
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	var dtos []grimmoryAuthorDTO
+	if err := json.Unmarshal(bodyBytes, &dtos); err != nil {
+		var page grimmoryAuthorsPageDTO
+		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
+			dtos = page.Content
+		} else {
+			return nil, libraryCatalogError(err)
+		}
+	}
+	authors := make([]LibraryAuthor, 0, len(dtos))
+	for _, dto := range dtos {
+		idStr := strings.Trim(string(dto.ID), `"`)
+		if idStr == "" || idStr == "null" {
+			continue
+		}
+		authors = append(authors, LibraryAuthor{
+			ID:        idStr,
+			Name:      dto.Name,
+			BookCount: dto.BookCount,
+		})
+	}
+	return authors, nil
+}
+
+func (c *GrimmoryCatalog) AuthorBooks(ctx context.Context, userID, authorID string) ([]LibraryItem, error) {
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	// First fetch author detail to get exact name
+	respAuth, err := grimmoryGET(requestCtx, fmt.Sprintf("/api/v1/app/authors/%s", url.PathEscape(authorID)))
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer respAuth.Body.Close()
+	if respAuth.StatusCode == http.StatusNotFound {
+		return nil, errCatalogNotFound
+	}
+	if respAuth.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", respAuth.StatusCode))
+	}
+	var authorDTO grimmoryAuthorDTO
+	if err := json.NewDecoder(respAuth.Body).Decode(&authorDTO); err != nil {
+		return nil, libraryCatalogError(err)
+	}
+
+	// Fetch author's books
+	resp, err := grimmoryGET(requestCtx, fmt.Sprintf("/api/v1/app/books?authors=%s", url.QueryEscape(authorDTO.Name)))
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	var rawBooks []LibraryBook
+	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
+		var page grimmoryBooksPageDTO
+		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
+			rawBooks = page.Content
+		} else {
+			return nil, libraryCatalogError(err)
+		}
+	}
+	items := make([]LibraryItem, 0, len(rawBooks))
+	for _, book := range rawBooks {
+		item, err := normalizedLibraryItem(book)
+		if errors.Is(err, errUnsupportedLibraryKind) {
+			continue
+		}
+		if err != nil {
+			return nil, libraryCatalogError(err)
+		}
+		items = append(items, item)
+	}
+	reader, err := c.progressReader()
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	return items, nil
+}
+
+func (c *GrimmoryCatalog) Series(ctx context.Context) ([]LibrarySeries, error) {
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	resp, err := grimmoryGET(requestCtx, "/api/v1/app/series")
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	var dtos []grimmorySeriesDTO
+	if err := json.Unmarshal(bodyBytes, &dtos); err != nil {
+		var page grimmorySeriesPageDTO
+		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
+			dtos = page.Content
+		} else {
+			return nil, libraryCatalogError(err)
+		}
+	}
+	seriesList := make([]LibrarySeries, 0, len(dtos))
+	for _, dto := range dtos {
+		seriesList = append(seriesList, LibrarySeries{
+			Name:      dto.Name,
+			BookCount: dto.BookCount,
+		})
+	}
+	return seriesList, nil
+}
+
+func (c *GrimmoryCatalog) SeriesBooks(ctx context.Context, userID, name string) ([]LibraryItem, error) {
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	resp, err := grimmoryGET(requestCtx, fmt.Sprintf("/api/v1/app/series/%s/books", url.PathEscape(name)))
+	if err != nil {
+		return nil, libraryProviderError(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errCatalogNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
+	}
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	var rawBooks []LibraryBook
+	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
+		var page grimmoryBooksPageDTO
+		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
+			rawBooks = page.Content
+		} else {
+			return nil, libraryCatalogError(err)
+		}
+	}
+	items := make([]LibraryItem, 0, len(rawBooks))
+	for _, book := range rawBooks {
+		item, err := normalizedLibraryItem(book)
+		if errors.Is(err, errUnsupportedLibraryKind) {
+			continue
+		}
+		if err != nil {
+			return nil, libraryCatalogError(err)
+		}
+		items = append(items, item)
+	}
+	reader, err := c.progressReader()
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	return items, nil
+}
+

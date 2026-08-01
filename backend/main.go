@@ -482,9 +482,18 @@ func main() {
 	// Library module routes (Grimmory-backed catalog)
 	mux.Handle("GET /api/v1/library/books", withAuth(http.HandlerFunc(handleLibraryBooks), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleLibraryBookByID), "view_library"))
+	mux.Handle("GET /api/v1/library/continue", withAuth(http.HandlerFunc(handleLibraryContinue), "view_library"))
+	mux.Handle("GET /api/v1/library/recent", withAuth(http.HandlerFunc(handleLibraryRecent), "view_library"))
+	mux.Handle("GET /api/v1/library/authors", withAuth(http.HandlerFunc(handleLibraryAuthors), "view_library"))
+	mux.Handle("GET /api/v1/library/authors/{id}/books", withAuth(http.HandlerFunc(handleLibraryAuthorBooks), "view_library"))
+	mux.Handle("GET /api/v1/library/series", withAuth(http.HandlerFunc(handleLibrarySeries), "view_library"))
+	mux.Handle("GET /api/v1/library/series/{name}/books", withAuth(http.HandlerFunc(handleLibrarySeriesBooks), "view_library"))
 	mux.Handle("GET /api/v1/library/facets", withAuth(http.HandlerFunc(handleLibraryFacets), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/cover", withAuth(http.HandlerFunc(handleLibraryBookCover), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/content", withAuth(http.HandlerFunc(handleLibraryBookContent), "view_library"))
+	mux.Handle("GET /api/v1/library/audiobooks/{id}/info", withAuth(http.HandlerFunc(handleAudiobookInfo), "view_library"))
+	mux.Handle("GET /api/v1/library/audiobooks/{id}/stream", withAuth(http.HandlerFunc(handleAudiobookStream), "view_library"))
+	mux.Handle("GET /api/v1/library/audiobooks/{id}/tracks/{index}/stream", withAuth(http.HandlerFunc(handleAudiobookTrackStream), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handleGetBookProgress), "view_library"))
 	mux.Handle("PUT /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handlePutBookProgress), "view_library"))
 	mux.Handle("PUT /api/v1/library/books/{id}/metadata", withAuth(http.HandlerFunc(handleUpdateLibraryBookMetadata), "manage_library"))
@@ -3476,19 +3485,29 @@ func handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	processUpload(w, r, user.ID, false)
 }
 
-func handleUploadBook(w http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value(userContextKey).(*UserContext)
-	processUpload(w, r, user.ID, true)
-}
-
 var defaultUploadExts = map[string]bool{
 	".pdf": true, ".epub": true, ".jpg": true, ".jpeg": true,
 	".png": true, ".webp": true, ".mp3": true, ".m4a": true,
 	".ogg": true, ".wav": true, ".mp4": true, ".webm": true,
+	".m4b": true, ".opus": true,
+}
+
+var bookdropExts = map[string]bool{
+	".pdf": true, ".epub": true,
+	".m4b": true, ".m4a": true, ".mp3": true, ".opus": true,
+}
+
+func handleUploadBook(w http.ResponseWriter, r *http.Request) {
+	user := r.Context().Value(userContextKey).(*UserContext)
+	processUploadWithLimits(w, r, user.ID, true, 104857600, bookdropExts, true)
 }
 
 func processUpload(w http.ResponseWriter, r *http.Request, uploaderID string, isBook bool) {
-	processUploadWithLimits(w, r, uploaderID, isBook, 104857600, defaultUploadExts, true)
+	exts := defaultUploadExts
+	if isBook {
+		exts = bookdropExts
+	}
+	processUploadWithLimits(w, r, uploaderID, isBook, 104857600, exts, true)
 }
 
 // processUploadWithLimits stages, scans, and stores a multipart upload. On
@@ -3522,8 +3541,8 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 		return "", false
 	}
 
-	if isBook && ext != ".pdf" && ext != ".epub" {
-		http.Error(w, "Only PDF and EPUB are allowed for book uploads", http.StatusBadRequest)
+	if isBook && !bookdropExts[ext] {
+		http.Error(w, "Only PDF, EPUB, M4B, M4A, MP3, and OPUS are allowed for book uploads", http.StatusBadRequest)
 		return "", false
 	}
 

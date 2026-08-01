@@ -597,3 +597,94 @@ func TestGrimmoryCatalogGetItemDiscoversLegacyNumericID(t *testing.T) {
 		t.Fatalf("GetMany calls=%d ids=%v", progress.calls, progress.itemIDs)
 	}
 }
+
+func TestGrimmoryCatalogRecentAndAuthors(t *testing.T) {
+	cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/app/books/recently-added":
+			_, _ = fmt.Fprint(w, `[
+				{
+					"id":"00000000-0000-4000-8000-000000000101",
+					"title":"Recent Audio Book",
+					"format":"AUDIOBOOK",
+					"authors":["Voice Artist"]
+				}
+			]`)
+		case "/api/v1/app/authors":
+			_, _ = fmt.Fprint(w, `[
+				{"id": 42, "name": "Voice Artist", "bookCount": 3}
+			]`)
+		case "/api/v1/app/authors/42":
+			_, _ = fmt.Fprint(w, `{"id": 42, "name": "Voice Artist", "bookCount": 3}`)
+		case "/api/v1/app/books":
+			_, _ = fmt.Fprint(w, `[
+				{
+					"id":"00000000-0000-4000-8000-000000000101",
+					"title":"Recent Audio Book",
+					"format":"AUDIOBOOK",
+					"authors":["Voice Artist"]
+				}
+			]`)
+		case "/api/v1/app/series":
+			_, _ = fmt.Fprint(w, `[
+				{"name": "Vaporwave Series", "bookCount": 2}
+			]`)
+		case "/api/v1/app/series/Vaporwave Series/books", "/api/v1/app/series/Vaporwave%20Series/books":
+			_, _ = fmt.Fprint(w, `[
+				{
+					"id":"00000000-0000-4000-8000-000000000101",
+					"title":"Recent Audio Book",
+					"format":"AUDIOBOOK",
+					"authors":["Voice Artist"]
+				}
+			]`)
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+
+	progress := &recordingLibraryProgressReader{}
+	cat := &GrimmoryCatalog{continuity: progress}
+
+	items, err := cat.Recent(t.Context(), "user-1", 10)
+	if err != nil {
+		t.Fatalf("Recent error: %v", err)
+	}
+	if len(items) != 1 || items[0].Kind != "audiobook" {
+		t.Fatalf("Recent items=%+v", items)
+	}
+
+	authors, err := cat.Authors(t.Context())
+	if err != nil {
+		t.Fatalf("Authors error: %v", err)
+	}
+	if len(authors) != 1 || authors[0].ID != "42" || authors[0].Name != "Voice Artist" {
+		t.Fatalf("Authors=%+v", authors)
+	}
+
+	authorBooks, err := cat.AuthorBooks(t.Context(), "user-1", "42")
+	if err != nil {
+		t.Fatalf("AuthorBooks error: %v", err)
+	}
+	if len(authorBooks) != 1 || authorBooks[0].Title != "Recent Audio Book" {
+		t.Fatalf("AuthorBooks=%+v", authorBooks)
+	}
+
+	seriesList, err := cat.Series(t.Context())
+	if err != nil {
+		t.Fatalf("Series error: %v", err)
+	}
+	if len(seriesList) != 1 || seriesList[0].Name != "Vaporwave Series" {
+		t.Fatalf("Series=%+v", seriesList)
+	}
+
+	seriesBooks, err := cat.SeriesBooks(t.Context(), "user-1", "Vaporwave Series")
+	if err != nil {
+		t.Fatalf("SeriesBooks error: %v", err)
+	}
+	if len(seriesBooks) != 1 || seriesBooks[0].Title != "Recent Audio Book" {
+		t.Fatalf("SeriesBooks=%+v", seriesBooks)
+	}
+}
+

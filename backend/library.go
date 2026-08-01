@@ -445,6 +445,130 @@ func handleLibraryBookByID(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(book)
 }
 
+func handleLibraryContinue(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	items, err := catalog.Continue(r.Context(), user.ID)
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if items == nil {
+		items = []LibraryItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func handleLibraryRecent(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	items, err := catalog.Recent(r.Context(), user.ID, 20)
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if items == nil {
+		items = []LibraryItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func handleLibraryAuthors(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	authors, err := catalog.Authors(r.Context())
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if authors == nil {
+		authors = []LibraryAuthor{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(authors)
+}
+
+func handleLibraryAuthorBooks(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	authorID := r.PathValue("id")
+	if authorID == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_id", "Author ID required.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	items, err := catalog.AuthorBooks(r.Context(), user.ID, authorID)
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if items == nil {
+		items = []LibraryItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
+func handleLibrarySeries(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	seriesList, err := catalog.Series(r.Context())
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if seriesList == nil {
+		seriesList = []LibrarySeries{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(seriesList)
+}
+
+func handleLibrarySeriesBooks(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_name", "Series name required.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	items, err := catalog.SeriesBooks(r.Context(), user.ID, name)
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
+		return
+	}
+	if items == nil {
+		items = []LibraryItem{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(items)
+}
+
 func writeLibraryMemberError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errLibraryProviderUnavailable):
