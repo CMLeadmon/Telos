@@ -226,3 +226,39 @@ func TestContinuityRepositoryEnforcesBatchAndContinueLimits(t *testing.T) {
 		t.Fatalf("Continue invalid surface error = %v, want errProgressInvalid", err)
 	}
 }
+
+func TestContinuityContinueUsesCatalogIDTieBreakAtLimitBoundary(t *testing.T) {
+	f := withFixture(t)
+	repo := NewContinuityRepository(f.DB)
+	userID := createContinuityUser(t, "continuity-tie-break", f.DB)
+	const total = 51
+	if _, err := f.DB.Exec(t.Context(), `
+		WITH items AS (
+			INSERT INTO catalog_items (id, surface, kind)
+			SELECT ('00000000-0000-4000-8000-' || lpad(n::text, 12, '0'))::uuid,
+				'stream', 'video'
+			FROM generate_series(1, $2) AS n
+			RETURNING id
+		)
+		INSERT INTO member_progress (user_id, catalog_item_id, updated_at)
+		SELECT $1::uuid, id, '2026-08-01T12:00:00Z'::timestamptz FROM items`, userID, total); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.Continue(t.Context(), userID, SurfaceStream, 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 50 {
+		t.Fatalf("Continue returned %d items, want exact limit 50", len(got))
+	}
+	for i, id := range got {
+		want := fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1)
+		if id != want {
+			t.Fatalf("Continue[%d] = %q, want catalog ID tie-break %q", i, id, want)
+		}
+	}
+	if got[len(got)-1] == "00000000-0000-4000-8000-000000000051" {
+		t.Fatal("limit boundary included the 51st catalog ID")
+	}
+}

@@ -274,7 +274,12 @@ func canonicalizeGrimmoryBook(ctx context.Context, book LibraryBook) (LibraryBoo
 	if err != nil {
 		return LibraryBook{}, err
 	}
-	book.ID = resolution.ID
+	current, err := resolveCatalogIdentity(ctx, resolution.ID, SurfaceLibrary)
+	if err != nil || current.Provider != ProviderGrimmory || current.UpstreamID != strconv.FormatInt(book.UpstreamID, 10) ||
+		!current.Active || !current.Available {
+		return LibraryBook{}, errBookNotAuthorized
+	}
+	book.ID = current.ID
 	book.LibraryID = libraryID
 	return book, nil
 }
@@ -296,14 +301,24 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	const maxGrimmoryRecords = 5000
 	var raw []grimmoryBook
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGrimmoryBytes)).Decode(&raw); err != nil {
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, 0)
 		return nil, err
 	}
 	if len(raw) > maxGrimmoryRecords {
-		raw = raw[:maxGrimmoryRecords]
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, 0)
+		return nil, errors.New("Grimmory catalog enumeration exceeded the safe record limit")
 	}
 	books := make([]LibraryBook, 0, len(raw))
+	observations := make([]CatalogObservation, 0, len(raw))
+	librarySet := map[string]struct{}{}
+	if grimmoryAuthorizer != nil {
+		for libraryID := range grimmoryAuthorizer.allowed {
+			librarySet[libraryID] = struct{}{}
+		}
+	}
 	for _, b := range raw {
-		book, err := canonicalizeGrimmoryBook(ctx, libraryBookFromGrimmory(b))
+		mapped := libraryBookFromGrimmory(b)
+		book, err := canonicalizeGrimmoryBook(ctx, mapped)
 		if errors.Is(err, errBookNotAuthorized) || errors.Is(err, errUnsupportedGrimmoryFormat) {
 			continue
 		}
@@ -311,7 +326,24 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 			return nil, err
 		}
 		books = append(books, book)
+		librarySet[book.LibraryID] = struct{}{}
+		kind, _ := grimmoryCatalogKind(book.Format)
+		observations = append(observations, CatalogObservation{
+			Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(book.UpstreamID, 10),
+			LibraryID: book.LibraryID, Surface: SurfaceLibrary, Kind: kind,
+		})
 	}
+	libraries := make([]string, 0, len(librarySet))
+	for libraryID := range librarySet {
+		libraries = append(libraries, libraryID)
+	}
+	report, err := reconcileCatalogEnumeration(ctx, CatalogEnumeration{
+		Provider: ProviderGrimmory, Libraries: libraries, Observations: observations,
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("catalog reconciliation provider=grimmory observed=%d scans=%d backfill_updated=%d", report.Observed, len(report.Scans), report.Backfill.Updated)
 	return books, nil
 }
 
@@ -886,7 +918,21 @@ func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
 	}
 	invalidateLibraryCache(r.Context())
 	if dbPool != nil {
-		if _, err := dbPool.Exec(r.Context(), `DELETE FROM book_progress WHERE book_id = $1`, id); err != nil {
+		tx, err := dbPool.Begin(r.Context())
+		if err != nil {
+			writeLibraryError(w, http.StatusInternalServerError, "book deleted but progress cleanup failed")
+			return
+		}
+		defer tx.Rollback(r.Context())
+		if _, err := tx.Exec(r.Context(), `DELETE FROM book_progress WHERE book_id = $1`, id); err != nil {
+			writeLibraryError(w, http.StatusInternalServerError, "book deleted but progress cleanup failed")
+			return
+		}
+		if _, err := tx.Exec(r.Context(), `DELETE FROM member_progress WHERE catalog_item_id = $1::uuid`, resolution.ID); err != nil {
+			writeLibraryError(w, http.StatusInternalServerError, "book deleted but progress cleanup failed")
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
 			writeLibraryError(w, http.StatusInternalServerError, "book deleted but progress cleanup failed")
 			return
 		}

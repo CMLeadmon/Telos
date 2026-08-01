@@ -248,8 +248,8 @@ func TestCommentCreateResolvesBeforeAuthorization(t *testing.T) {
 	if !resolved {
 		t.Fatal("target authorization ran before catalog resolution")
 	}
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403", rec.Code)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want target denial hidden as 404", rec.Code)
 	}
 }
 
@@ -277,7 +277,7 @@ func TestAuthorizeAnnotationTargetCanonicalizesLegacyRow(t *testing.T) {
 	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/library/annotations/"+annotationID, nil)
-	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: owner}))
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: owner, Roles: []string{"Owner"}}))
 	rec := httptest.NewRecorder()
 	targetType, targetID, ok := authorizeAnnotationTarget(rec, req, annotationID)
 	if !ok {
@@ -327,5 +327,65 @@ func TestBookAnnotationCreateResolvesBeforeAuthorization(t *testing.T) {
 	}
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestMediaCommentaryHidesUnavailableResolvedTarget(t *testing.T) {
+	db, owner, _ := annotationFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000177"
+	if _, err := db.Exec(t.Context(), `
+		INSERT INTO annotations (target_type, target_id, user_id, visibility, note)
+		VALUES ('media', $1, $2::uuid, 'community', 'private catalog commentary')`, canonicalID, owner); err != nil {
+		t.Fatalf("seed media commentary: %v", err)
+	}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: "video",
+			Provider: ProviderJellyfin, UpstreamID: "unavailable-film", LibraryID: "movies",
+			Active: true, Available: false,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/"+canonicalID+"/comments", nil)
+	req.SetPathValue("id", canonicalID)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: owner, Roles: []string{"Owner"}}))
+	rec := httptest.NewRecorder()
+	commentListHandler("media").ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want unavailable target hidden as 404", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "private catalog commentary") {
+		t.Fatal("unavailable target leaked commentary")
+	}
+}
+
+func TestMediaCommentaryAppliesTightenedProviderAllowlist(t *testing.T) {
+	_, owner, _ := annotationFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000178"
+	oldResolve, oldAuthorizer := resolveCatalogIdentity, jellyfinAuthorizer
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: "video",
+			Provider: ProviderJellyfin, UpstreamID: "moved-film", LibraryID: "removed-library",
+			Active: true, Available: true,
+		}, nil
+	}
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{items: map[string]resolvedItem{
+		"moved-film": {AncestorIDs: []string{"removed-library"}},
+	}}, []string{"current-library"})
+	t.Cleanup(func() {
+		resolveCatalogIdentity, jellyfinAuthorizer = oldResolve, oldAuthorizer
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/"+canonicalID+"/comments", nil)
+	req.SetPathValue("id", canonicalID)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: owner, Roles: []string{"Owner"}}))
+	rec := httptest.NewRecorder()
+	commentListHandler("media").ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want tightened allowlist hidden as 404", rec.Code, rec.Body.String())
 	}
 }

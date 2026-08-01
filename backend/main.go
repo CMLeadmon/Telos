@@ -1846,8 +1846,8 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) (string, []byte, 
 
 	switch kind {
 	case "library_book":
-		resolution, err := canonicalAnnotationTarget(ctx, "book", ref)
-		if err != nil || resolution.Provider != ProviderGrimmory {
+		resolution, err := resolveAuthorizedCatalogTarget(ctx, "book", ref)
+		if err != nil {
 			return "", nil, errors.New("book not found")
 		}
 		requestCtx, cancel := upstreamRequestContext(ctx)
@@ -1869,8 +1869,8 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) (string, []byte, 
 		ref = resolution.ID
 
 	case "stream_film":
-		resolution, err := canonicalAnnotationTarget(ctx, "media", ref)
-		if err != nil || resolution.Provider != ProviderJellyfin || !validJellyfinID(resolution.UpstreamID) {
+		resolution, err := resolveAuthorizedCatalogTarget(ctx, "media", ref)
+		if err != nil || !validJellyfinID(resolution.UpstreamID) {
 			return "", nil, errors.New("invalid media id")
 		}
 		userID, err := getJellyfinUserID(ctx)
@@ -2823,6 +2823,12 @@ func monitorJellyfinRefresh(taskID, previousEndTime string, observedRunning bool
 
 			if strings.EqualFold(task.LastExecutionResult.Status, "Completed") {
 				setMediaRefreshResponse("refreshing", "Refreshing the Telos media catalog.", nil)
+				report, err := reconcileJellyfinCatalog(ctx)
+				if err != nil {
+					log.Printf("WARN: Jellyfin catalog reconciliation failed after observed=%d scans=%d backfill_updated=%d: %v", report.Observed, len(report.Scans), report.Backfill.Updated, err)
+					setMediaRefreshResponse("failed", "Jellyfin scan completed, but Telos catalog reconciliation failed.", nil)
+					return
+				}
 				cacheCtx, cacheCancel := context.WithTimeout(context.Background(), upstreamRequestTimeout)
 				invalidateJellyfinCache(cacheCtx)
 				cacheCancel()

@@ -242,10 +242,19 @@ func observeJellyfinCatalogItem(ctx context.Context, upstreamID, libraryID, medi
 	if !ok {
 		return CatalogResolution{}, errCatalogInvalid
 	}
-	return observeCatalogIdentity(ctx, CatalogObservation{
+	observed, err := observeCatalogIdentity(ctx, CatalogObservation{
 		Provider: ProviderJellyfin, UpstreamID: upstreamID, LibraryID: libraryID,
 		Surface: SurfaceStream, Kind: kind,
 	})
+	if err != nil {
+		return CatalogResolution{}, err
+	}
+	current, err := resolveCatalogIdentity(ctx, observed.ID, SurfaceStream)
+	if err != nil || current.Provider != ProviderJellyfin || current.UpstreamID != upstreamID ||
+		!current.Active || !current.Available {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	return current, nil
 }
 
 type jellyfinItemDetail struct {

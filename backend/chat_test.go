@@ -257,7 +257,8 @@ func TestBuildBookEmbedBoundsUpstreamRequest(t *testing.T) {
 		grimmoryTok.mu.Unlock()
 	})
 
-	ref, _, err := buildEmbedSnapshot(t.Context(), "library_book", "42")
+	ctx := context.WithValue(t.Context(), userContextKey, &UserContext{Roles: []string{"Owner"}})
+	ref, _, err := buildEmbedSnapshot(ctx, "library_book", "42")
 	if err != nil {
 		t.Fatalf("build book embed: %v", err)
 	}
@@ -317,5 +318,55 @@ func TestSendMessageClassifiesGrimmoryEmbedOutage(t *testing.T) {
 	}
 	if body := rec.Body.String(); body != "embed source unavailable\n" {
 		t.Fatalf("public outage body = %q, want generic response", body)
+	}
+}
+
+func TestSendMessageChatOnlyRoleCannotEmbedStreamMetadata(t *testing.T) {
+	db, author, _ := chatFixture(t)
+	for _, seed := range []struct {
+		statement string
+		args      []any
+	}{
+		{`INSERT INTO roles (id, name) VALUES ('ChatOnly', 'Chat only')`, nil},
+		{`INSERT INTO role_permissions (role_id, permission_id) VALUES ('ChatOnly', 'view_channel'), ('ChatOnly', 'send_messages')`, nil},
+		{`INSERT INTO user_roles (user_id, role_id) VALUES ($1::uuid, 'ChatOnly')`, []any{author}},
+	} {
+		if _, err := db.Exec(t.Context(), seed.statement, seed.args...); err != nil {
+			t.Fatalf("seed chat-only role: %v", err)
+		}
+	}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: "00000000-0000-4000-8000-000000000188", Surface: SurfaceStream,
+			Kind: "video", Provider: ProviderJellyfin, UpstreamID: "restricted-film",
+			LibraryID: "movies", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	providerItemRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "jf-user", "Name": "admin"}})
+		case "/Users/jf-user/Items/restricted-film":
+			providerItemRequests++
+			json.NewEncoder(w).Encode(map[string]any{"Id": "restricted-film", "Name": "Restricted", "Type": "Movie"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = upstream.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	ctx := context.WithValue(t.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"ChatOnly"}})
+	if _, _, err := buildEmbedSnapshot(ctx, "stream_film", "restricted-film"); err == nil {
+		t.Fatal("chat-only member received stream embed metadata")
+	}
+	if providerItemRequests != 0 {
+		t.Fatalf("provider metadata requests=%d, want authorization before fetch", providerItemRequests)
 	}
 }

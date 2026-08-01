@@ -61,17 +61,17 @@ certificatesResolvers:
 
 | Component | Telos endpoint | Internal headless request | Aggregation logic |
 | --- | --- | --- | --- |
-| Media Stream | `GET /api/v1/media` | Jellyfin `GET /Users/{userId}/Views` | Lists the user's available media libraries (views) as Telos media sections. |
-| Media Catalog | `GET /api/v1/media/items` | Jellyfin `GET /Users/{userId}/Items` | Lists playable items within a library for the Telos media browser. |
-| Media Item | `GET /api/v1/media/items/{id}` | Jellyfin `GET /Users/{userId}/Items/{id}` | Returns one real upstream item or an explicit 404/502/503; it never fabricates content. |
-| Media Refresh | `POST /api/v1/media/refresh`, `GET /api/v1/media/refresh/status` (`manage_files`) | Jellyfin `POST /Library/Refresh`, `GET /ScheduledTasks[/{taskId}]` | Starts or joins one manual administrative scan, reports its progress, and clears gateway media caches only after Jellyfin reports successful completion; ordinary viewers cannot invoke it. |
+| Media Stream | `GET /api/v1/media` | Jellyfin `GET /Users/{userId}/Views` | Lists allowed media libraries with stable Telos catalog UUIDs. |
+| Media Catalog | `GET /api/v1/media/items` | Jellyfin `GET /Users/{userId}/Items` | Lists playable items with stable Telos catalog UUIDs after current-source and library authorization. |
+| Media Item | `GET /api/v1/media/items/{id}` | Jellyfin `GET /Users/{userId}/Items/{id}` | Accepts a canonical UUID or compatible legacy Jellyfin ID, resolves the active authorized source, and returns the canonical UUID; it never fabricates content. |
+| Media Refresh | `POST /api/v1/media/refresh`, `GET /api/v1/media/refresh/status` (`manage_files`) | Jellyfin `POST /Library/Refresh`, `GET /ScheduledTasks[/{taskId}]` | Starts or joins one manual administrative scan, reports its progress, then performs a complete Telos source reconciliation and reference backfill only after Jellyfin reports successful completion. |
 | Audio Stream | `GET /api/v1/stream/audio/{id}` | Jellyfin `GET /Audio/{itemId}/stream` | Proxies a direct audio stream for the requested item. |
 | Video Playback | `GET /api/v1/stream/video/{id}` | Jellyfin `GET /Videos/{itemId}/main.m3u8?PlaySessionId={sessionId}` | Proxies the HLS playlist and segment stream for adaptive video playback. |
-| Digital Library | `GET /api/v1/library/books` | Grimmory `GET /api/v1/books` | Lists the book catalog for the Telos library view. |
+| Digital Library | `GET /api/v1/library/books` | Grimmory `GET /api/v1/books` | Lists authorized EPUB, PDF, and audiobook records with stable Telos catalog UUIDs. |
 | Library Facets | `GET /api/v1/library/facets` | *(derived, no upstream call)* | The deployed Grimmory build has no `/api/v1/books/facets` endpoint (500s) — `telos-core` derives author/category/language/format facets from the cached book list instead. |
 | Book Cover | `GET /api/v1/library/books/{id}/cover` | Grimmory `GET /api/v1/media/book/{id}/thumbnail` | Proxies the cover image; the upstream response is mislabeled `application/json`, so the gateway forces `image/jpeg`. |
 | Book Content | `GET /api/v1/library/books/{id}/content` | Grimmory `GET /api/v1/books/{id}/content` | Streams the raw EPUB/PDF bytes for the in-app reader or a PDF download. |
-| Read Progress | `GET`/`PUT /api/v1/library/books/{id}/progress` | *(none — stored in `telos-core` Postgres)* | Grimmory is reached over a single shared admin-credential JWT (see below), so per-user reading progress cannot live upstream; it's stored locally against the Telos user id and Grimmory's numeric book id. |
+| Member Progress | `GET`/`PUT /api/v1/library/books/{id}/progress` | *(none — stored in `telos-core` Postgres)* | Latest per-member continuity is owned by `member_progress` and keyed by `(user_id, catalog_item_id)`; EPUB/PDF writes also maintain `book_progress` temporarily for compatibility. |
 | Edit Book Metadata | `PUT /api/v1/library/books/{id}/metadata` (`manage_library`) | Grimmory `PUT /api/v1/books/{id}/metadata` | Forwards only the Telos metadata whitelist with `REPLACE_WHEN_PROVIDED`, preserving every unlisted upstream field, then invalidates the Grimmory catalog cache. |
 | Fetch Book Metadata | `POST /api/v1/library/books/{id}/metadata/fetch` (`manage_library`) | Grimmory `POST /api/v1/books/{id}/metadata/prospective` | Converts Grimmory's provider SSE stream into a normalized, read-only candidate list; applying values remains a separate client-side review step. |
 | Replace Book Cover | `PUT /api/v1/library/books/{id}/cover` (`manage_library`) | Grimmory `POST /api/v1/books/{id}/metadata/cover/upload` | Accepts a JPEG/PNG upload or downloads a reviewed candidate cover through a 5 MB, public-address-only SSRF boundary, then sends a whitelisted multipart request upstream. |
@@ -87,12 +87,36 @@ Book management is a shared-catalog operation, not a per-user ownership
 operation. Every management route requires `manage_library`; the Librarian
 role and roles holding `manage_community` receive that permission. A successful
 delete affects every member and removes both the Grimmory record and its file.
+After Grimmory confirms a deletion, Telos transactionally removes both legacy
+`book_progress` and canonical `member_progress` rows for the resolved item.
 
 Grimmory (a BookLore-derived image) does not accept a static bearer token — every request needs a JWT minted via `POST /api/v1/auth/login`, which `telos-core` performs on startup and on token expiry using `GRIMMORY_ADMIN_USER`/`GRIMMORY_ADMIN_PASSWORD` credentials, caching the resulting ~2-hour token in memory. This supersedes the OIDC federation model described for Grimmory below: Grimmory is addressed as a single admin account, and Telos-side identity/permissions (the `view_library` permission) gate access instead.
 
-Audiobooks are not served by Grimmory. They're ordinary Jellyfin audio libraries (see the Media Stream/Catalog rows above); the Library module's audiobook shelf filters Jellyfin's reported libraries down to ones whose name contains "audiobook", since Jellyfin (verified on 10.11.11) does not reliably surface a distinct audiobook `CollectionType` through `/Users/{id}/Views`.
+### 3.1 Stable catalog identity and compatibility
 
-### 3.1 Manual media reconciliation
+Member-visible Library and Stream IDs are UUIDs from `catalog_items`, not
+provider record IDs. `catalog_sources` retains Grimmory and Jellyfin aliases,
+including inactive rollback aliases, while permitting only one active source
+per catalog item. Observation refreshes source availability; only a successful,
+complete provider/library enumeration may mark unseen sources unavailable.
+Failed, truncated, or partial enumeration leaves current availability intact.
+
+New responses, commentary targets, and chat embed references use the canonical
+UUID. During the compatibility period, narrow item routes also accept validated
+legacy Grimmory or Jellyfin IDs and return/store the canonical UUID. Resolution
+does not grant access: every sensitive route requires an active and available
+source, the relevant `view_library` or `view_media` capability, and current
+membership in `GRIMMORY_LIBRARY_IDS` or `JELLYFIN_LIBRARY_IDS`. Missing,
+unavailable, denied, and out-of-scope targets are all reported as not found.
+
+Grimmory is the authoritative catalog for audiobook records. Phase 1 catalogs
+supported audiobooks in Library under stable IDs; it does not yet ship the
+Library audiobook player or a completed Jellyfin-to-Grimmory migration. Player
+and resume work remains in member-experience Phase 2, and verified item-scoped
+migration/cutover remains Phase 4. Until those stages ship, this document does
+not claim audiobook playback through Grimmory.
+
+### 3.2 Manual media reconciliation
 
 Media reconciliation is completion-aware and manual-only. An authorized user
 starts it from the Stream page; clients must not periodically start scans or
@@ -110,8 +134,10 @@ be shown only for `complete`, never merely because the initial `POST` was
 accepted. Failure and timeout leave the currently displayed catalog intact and
 surface an actionable error.
 
-Jellyfin is authoritative for movies, television, audio, and audiobook catalog
-membership. After a successful scan, `telos-core` deletes every
+Jellyfin is authoritative for Stream movies, television, video, and audio
+membership. After a successful scan, `telos-core` recursively enumerates each
+allowed library, observes every supported source, completes the source scan,
+runs the idempotent legacy-reference backfill, and only then deletes every
 `telos:jellyfin:*` cache entry and the Stream client discards and rebuilds its
 library, item, and nested-folder caches. Consequently, media deleted from the
 shared storage disappears when Jellyfin's completed scan stops returning it.
@@ -119,6 +145,12 @@ If a removed folder was open, the client returns to Stream home; if a removed
 item was playing, playback stops with a removal notice. Direct links to an item
 that Jellyfin now reports as missing show a clear unavailable state rather than
 fabricating or retaining media metadata.
+
+The complete Grimmory `/api/v1/books` enumeration uses the same ordering:
+observe supported authorized sources, complete each allowed-library scan, then
+backfill compatible `book_progress`, annotation targets, and chat embed
+references. Backfill is bounded, resumable, and preserves unresolved,
+ambiguous, or incompatible legacy rows for operator review.
 
 ## 4. Upstream credential boundary
 

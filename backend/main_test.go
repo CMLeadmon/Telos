@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +26,7 @@ type catalogIdentityTestState struct {
 func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
 	t.Helper()
 	state := &catalogIdentityTestState{items: map[string]CatalogResolution{}}
-	oldObserve, oldResolve := observeCatalogIdentity, resolveCatalogIdentity
+	oldObserve, oldResolve, oldReconcile := observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration
 	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
 		key := string(in.Provider) + "\x00" + in.UpstreamID
 		if existing, ok := state.items[key]; ok {
@@ -55,8 +56,11 @@ func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
 		}
 		return observeCatalogIdentity(context.Background(), observation)
 	}
+	reconcileCatalogEnumeration = func(_ context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Observed: len(enumeration.Observations), Scans: map[string]CatalogScanReport{}}, nil
+	}
 	t.Cleanup(func() {
-		observeCatalogIdentity, resolveCatalogIdentity = oldObserve, oldResolve
+		observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration = oldObserve, oldResolve, oldReconcile
 	})
 	return state
 }
@@ -498,12 +502,17 @@ func configureMediaRefreshTest(t *testing.T) {
 	oldPollInterval := mediaRefreshPollInterval
 	oldMaxDuration := mediaRefreshMaxDuration
 	oldResponse := getMediaRefreshResponse()
+	oldReconcile := reconcileJellyfinCatalog
 	mediaRefreshPollInterval = 2 * time.Millisecond
 	mediaRefreshMaxDuration = 200 * time.Millisecond
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Scans: map[string]CatalogScanReport{}}, nil
+	}
 	setMediaRefreshResponse("idle", "No Jellyfin scan is running.", nil)
 	t.Cleanup(func() {
 		mediaRefreshPollInterval = oldPollInterval
 		mediaRefreshMaxDuration = oldMaxDuration
+		reconcileJellyfinCatalog = oldReconcile
 		mediaRefreshState.Lock()
 		mediaRefreshState.response = oldResponse
 		mediaRefreshState.Unlock()
@@ -584,6 +593,63 @@ func TestHandleMediaRefreshWaitsForJellyfinCompletion(t *testing.T) {
 	}
 	if refreshPosts.Load() != 1 {
 		t.Errorf("refresh posts = %d, want 1", refreshPosts.Load())
+	}
+}
+
+func TestMonitorJellyfinRefreshReconcilesBeforeReportingComplete(t *testing.T) {
+	configureMediaRefreshTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ScheduledTasks/refresh-task" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: "2026-07-15T12:01:00Z"},
+		})
+	}))
+	defer server.Close()
+	oldBase, oldReconcile, oldRedis := jellyfinBaseURL, reconcileJellyfinCatalog, redisClient
+	jellyfinBaseURL, redisClient = server.URL, nil
+	events := []string{}
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		events = append(events, "reconcile")
+		if status := getMediaRefreshResponse().Status; status != "refreshing" {
+			t.Fatalf("status during reconciliation = %q, want refreshing", status)
+		}
+		return CatalogReconciliationReport{Observed: 2, Backfill: CatalogBackfillReport{Updated: 1}}, nil
+	}
+	t.Cleanup(func() {
+		jellyfinBaseURL, reconcileJellyfinCatalog, redisClient = oldBase, oldReconcile, oldRedis
+	})
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	events = append(events, "status:"+getMediaRefreshResponse().Status)
+	if got, want := strings.Join(events, ","), "reconcile,status:complete"; got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+func TestMonitorJellyfinRefreshReportsReconciliationFailure(t *testing.T) {
+	configureMediaRefreshTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: "2026-07-15T12:01:00Z"},
+		})
+	}))
+	defer server.Close()
+	oldBase, oldReconcile := jellyfinBaseURL, reconcileJellyfinCatalog
+	jellyfinBaseURL = server.URL
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Observed: 1}, errors.New("forced incomplete enumeration")
+	}
+	t.Cleanup(func() { jellyfinBaseURL, reconcileJellyfinCatalog = oldBase, oldReconcile })
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	response := getMediaRefreshResponse()
+	if response.Status != "failed" || response.Message != "Jellyfin scan completed, but Telos catalog reconciliation failed." {
+		t.Fatalf("response = %+v", response)
 	}
 }
 

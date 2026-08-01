@@ -41,6 +41,13 @@ func TestBackfillCatalogReferencesMigratesOnlyResolvableLegacyRows(t *testing.T)
 	if err != nil {
 		t.Fatalf("observe media: %v", err)
 	}
+	incompatible, err := repo.Observe(ctx, CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "43", LibraryID: "library-a",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatalf("observe incompatible progress source: %v", err)
+	}
 	for _, observation := range []CatalogObservation{
 		{Provider: ProviderGrimmory, UpstreamID: "77", LibraryID: "library-a", Surface: SurfaceLibrary, Kind: "epub"},
 		{Provider: ProviderJellyfin, UpstreamID: "77", LibraryID: "movies", Surface: SurfaceStream, Kind: "video"},
@@ -53,12 +60,13 @@ func TestBackfillCatalogReferencesMigratesOnlyResolvableLegacyRows(t *testing.T)
 	if _, err := f.DB.Exec(ctx, `
 		INSERT INTO book_progress (user_id, book_id, locator, percent)
 		VALUES ($1::uuid, 42, '{"cfi":"epubcfi(/6/4)"}'::jsonb, 0.37),
+		       ($1::uuid, 43, '{"page":9,"zoom":2}'::jsonb, 42),
 		       ($1::uuid, 77, '{"cfi":"ambiguous"}'::jsonb, 0.77),
 		       ($1::uuid, 404, '{"cfi":"unresolved"}'::jsonb, 0.81)`, userID); err != nil {
 		t.Fatalf("seed progress: %v", err)
 	}
 
-	var bookAnnotationID, mediaAnnotationID, ambiguousAnnotationID, unresolvedAnnotationID, canonicalAnnotationID string
+	var bookAnnotationID, mediaAnnotationID, fileAnnotationID, ambiguousAnnotationID, unresolvedAnnotationID, canonicalAnnotationID string
 	if err := f.DB.QueryRow(ctx, `
 		INSERT INTO annotations
 			(target_type, target_id, user_id, visibility, locator, selected_text, note)
@@ -77,6 +85,12 @@ func TestBackfillCatalogReferencesMigratesOnlyResolvableLegacyRows(t *testing.T)
 		VALUES ('media', 'jf-film-7', $1::uuid, 'private', 'media note')
 		RETURNING id::text`, userID).Scan(&mediaAnnotationID); err != nil {
 		t.Fatalf("seed media annotation: %v", err)
+	}
+	if err := f.DB.QueryRow(ctx, `
+		INSERT INTO annotations (target_type, target_id, user_id, visibility, locator, selected_text, note)
+		VALUES ('file', 'file-legacy-ref', $1::uuid, 'community', '{"page":3}'::jsonb, 'file selection', 'file note')
+		RETURNING id::text`, userID).Scan(&fileAnnotationID); err != nil {
+		t.Fatalf("seed file annotation: %v", err)
 	}
 	if err := f.DB.QueryRow(ctx, `
 		INSERT INTO annotations (target_type, target_id, user_id, visibility, note)
@@ -150,6 +164,16 @@ func TestBackfillCatalogReferencesMigratesOnlyResolvableLegacyRows(t *testing.T)
 	if unresolvedProgress != 1 {
 		t.Fatalf("member progress rows = %d, want 1", unresolvedProgress)
 	}
+	var incompatibleLegacyRows, incompatibleCanonicalRows int
+	if err := f.DB.QueryRow(ctx, `SELECT count(*) FROM book_progress WHERE user_id=$1::uuid AND book_id=43 AND percent=42`, userID).Scan(&incompatibleLegacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.QueryRow(ctx, `SELECT count(*) FROM member_progress WHERE user_id=$1::uuid AND catalog_item_id=$2::uuid`, userID, incompatible.ID).Scan(&incompatibleCanonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if incompatibleLegacyRows != 1 || incompatibleCanonicalRows != 0 {
+		t.Fatalf("incompatible progress legacy/canonical=%d/%d, want preserved legacy only", incompatibleLegacyRows, incompatibleCanonicalRows)
+	}
 
 	annotationCases := []struct {
 		id, wantTarget, wantVisibility string
@@ -169,6 +193,29 @@ func TestBackfillCatalogReferencesMigratesOnlyResolvableLegacyRows(t *testing.T)
 		if targetID != tc.wantTarget || visibility != tc.wantVisibility {
 			t.Errorf("annotation %s target=%q visibility=%q, want %q/%q", tc.id, targetID, visibility, tc.wantTarget, tc.wantVisibility)
 		}
+	}
+	var preservedTarget, preservedVisibility, preservedSelected, preservedNote string
+	var preservedLocator []byte
+	if err := f.DB.QueryRow(ctx, `
+		SELECT target_id, visibility, locator, selected_text, note
+		FROM annotations WHERE id=$1::uuid`, bookAnnotationID).Scan(
+		&preservedTarget, &preservedVisibility, &preservedLocator, &preservedSelected, &preservedNote); err != nil {
+		t.Fatal(err)
+	}
+	if preservedTarget != book.ID || preservedVisibility != "community" ||
+		string(preservedLocator) != `{"cfi": "epubcfi(/6/4)", "kind": "epub"}` ||
+		preservedSelected != "passage" || preservedNote != "book note" {
+		t.Fatalf("canonicalized annotation changed non-target fields: target=%q visibility=%q locator=%s selected=%q note=%q", preservedTarget, preservedVisibility, preservedLocator, preservedSelected, preservedNote)
+	}
+	if err := f.DB.QueryRow(ctx, `
+		SELECT target_id, visibility, locator, selected_text, note
+		FROM annotations WHERE id=$1::uuid`, fileAnnotationID).Scan(
+		&preservedTarget, &preservedVisibility, &preservedLocator, &preservedSelected, &preservedNote); err != nil {
+		t.Fatal(err)
+	}
+	if preservedTarget != "file-legacy-ref" || preservedVisibility != "community" ||
+		string(preservedLocator) != `{"page": 3}` || preservedSelected != "file selection" || preservedNote != "file note" {
+		t.Fatalf("file annotation changed during catalog backfill: target=%q visibility=%q locator=%s selected=%q note=%q", preservedTarget, preservedVisibility, preservedLocator, preservedSelected, preservedNote)
 	}
 	var replyBody string
 	if err := f.DB.QueryRow(ctx, `SELECT body FROM annotation_replies WHERE annotation_id = $1::uuid`, bookAnnotationID).Scan(&replyBody); err != nil {

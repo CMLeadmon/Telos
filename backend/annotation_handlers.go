@@ -35,18 +35,12 @@ func authorizeAnnotationAccess(w http.ResponseWriter, r *http.Request, targetTyp
 
 func authorizeResolvedAnnotationAccess(w http.ResponseWriter, r *http.Request, targetType string, resolution CatalogResolution) bool {
 	switch targetType {
-	case "book":
-		if resolution.Provider != ProviderGrimmory {
+	case "book", "media":
+		if err := authorizeResolvedCatalogTarget(r.Context(), targetType, resolution); err != nil {
 			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 			return false
 		}
-		return authorizeBookHTTP(w, r, resolution.UpstreamID, BookRead)
-	case "media":
-		if resolution.Provider != ProviderJellyfin {
-			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
-			return false
-		}
-		return requireCapabilityHTTP(w, r, "view_media")
+		return true
 	case "file":
 		return requireCapabilityHTTP(w, r, "view_files")
 	default:
@@ -82,7 +76,7 @@ func handleListAnnotations(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	if !authorizeBookHTTP(w, r, resolution.UpstreamID, BookRead) {
+	if !authorizeResolvedAnnotationAccess(w, r, "book", resolution) {
 		return
 	}
 	items, err := ListAnnotations(r.Context(), "book", resolution.ID, user.ID, 100)
@@ -105,7 +99,7 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	if !authorizeBookHTTP(w, r, resolution.UpstreamID, BookRead) {
+	if !authorizeResolvedAnnotationAccess(w, r, "book", resolution) {
 		return
 	}
 	var body struct {

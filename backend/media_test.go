@@ -193,6 +193,51 @@ func TestFreshLegacyJellyfinDeepLinkDiscoversCurrentAuthorizedItem(t *testing.T)
 	}
 }
 
+func TestObserveJellyfinCatalogItemSuppressesInactiveAliasAfterLibraryCutover(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000221"
+	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, jellyfinAuthorizer
+	jellyfinAuthorizer = nil
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: in.Kind, Provider: ProviderJellyfin,
+			UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Active: false, Available: true,
+		}, nil
+	}
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{}, errCatalogWrongSurface
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity, jellyfinAuthorizer = oldObserve, oldResolve, oldAuthorizer
+	})
+
+	if _, err := observeJellyfinCatalogItem(t.Context(), "legacy-film", "movies", "Movie", false); err == nil {
+		t.Fatal("inactive Jellyfin alias remained visible after active source moved to Library")
+	}
+}
+
+func TestObserveJellyfinCatalogItemPublishesAliasAfterStreamRollback(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000222"
+	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, jellyfinAuthorizer
+	jellyfinAuthorizer = nil
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		return CatalogResolution{ID: canonicalID, Provider: in.Provider, UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Surface: in.Surface, Kind: in.Kind}, nil
+	}
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: "video", Provider: ProviderJellyfin,
+			UpstreamID: "film", LibraryID: "movies", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity, jellyfinAuthorizer = oldObserve, oldResolve, oldAuthorizer
+	})
+
+	resolution, err := observeJellyfinCatalogItem(t.Context(), "film", "movies", "Movie", false)
+	if err != nil || resolution.ID != canonicalID {
+		t.Fatalf("rollback resolution = %+v, err=%v", resolution, err)
+	}
+}
+
 type eventJellyfinResolver struct{ events *[]string }
 
 func (r *eventJellyfinResolver) ResolveItems(_ context.Context, ids []string) (map[string]resolvedItem, error) {
