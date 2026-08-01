@@ -52,6 +52,12 @@ func (r *recordingRemover) Remove(_ context.Context, area, key string) error {
 	return nil
 }
 
+func (r *recordingRemover) removedAssets() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.seen...)
+}
+
 func TestAccountDeletionMatrix(t *testing.T) {
 	f := withFixture(t)
 	ctx := context.Background()
@@ -179,6 +185,82 @@ func TestAccountDeletionWorkerKeepsDispatchDependencies(t *testing.T) {
 	awaitDeletionCall(t, capturedRemover.calls, redirectedRemover.calls)
 	assertAssetDeletionStatus(t, f.DB, second, "done")
 	capturedRemover.releases <- struct{}{}
+}
+
+func TestAssetDeletionWorkerUsesOnlyExplicitDependencies(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('explicit-worker','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO asset_deletion_jobs (user_id, area, storage_key)
+		VALUES ($1, 'upload', 'explicit/job.bin')
+	`, userID); err != nil {
+		t.Fatalf("seed deletion job: %v", err)
+	}
+
+	invalidGlobalPool, err := pgxpool.NewWithConfig(ctx, f.DB.Config().Copy())
+	if err != nil {
+		t.Fatalf("create invalid global pool: %v", err)
+	}
+	invalidGlobalPool.Close()
+	explicitRemover := &recordingRemover{}
+	globalRemover := &recordingRemover{}
+	oldPool, oldRemover := dbPool, assetRemover
+	dbPool, assetRemover = invalidGlobalPool, globalRemover
+	t.Cleanup(func() { dbPool, assetRemover = oldPool, oldRemover })
+
+	runAssetDeletionJobs(ctx, f.DB, explicitRemover, userID)
+
+	assertAssetDeletionStatus(t, f.DB, "upload:explicit/job.bin", "done")
+	if got := explicitRemover.removedAssets(); len(got) != 1 || got[0] != "upload:explicit/job.bin" {
+		t.Fatalf("explicit remover calls = %v, want [upload:explicit/job.bin]", got)
+	}
+	if got := globalRemover.removedAssets(); len(got) != 0 {
+		t.Fatalf("global remover received calls: %v", got)
+	}
+}
+
+func TestAssetDeletionWorkerClosedPoolLeavesJobPending(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('closed-worker','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO asset_deletion_jobs (user_id, area, storage_key)
+		VALUES ($1, 'upload', 'closed/job.bin')
+	`, userID); err != nil {
+		t.Fatalf("seed deletion job: %v", err)
+	}
+
+	closedWorkerPool, err := pgxpool.NewWithConfig(ctx, f.DB.Config().Copy())
+	if err != nil {
+		t.Fatalf("create worker pool: %v", err)
+	}
+	closedWorkerPool.Close()
+	remover := &recordingRemover{}
+	done := make(chan struct{})
+	go func() {
+		runAssetDeletionJobs(ctx, closedWorkerPool, remover, userID)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not return after its captured pool closed")
+	}
+
+	assertAssetDeletionStatus(t, f.DB, "upload:closed/job.bin", "pending")
+	if got := remover.removedAssets(); len(got) != 0 {
+		t.Fatalf("remover called after worker pool closed: %v", got)
+	}
 }
 
 func assertAssetDeletionStatus(t *testing.T, pool *pgxpool.Pool, asset, want string) {
