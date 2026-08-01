@@ -220,6 +220,10 @@ func main() {
 		runMigrateCommand()
 		return
 	}
+	if mode == "audiobook-migrate" {
+		runAudiobookMigrateCommand(os.Args[2:])
+		return
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
