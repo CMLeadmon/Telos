@@ -189,6 +189,13 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			},
 		},
 		{
+			name: "epub fraction must be a number token",
+			kind: "epub",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"cfi":"x","fraction":"0.5"}`),
+			},
+		},
+		{
 			name: "pdf page just above maximum does not round into range",
 			kind: "pdf",
 			in: ProgressInput{
@@ -196,10 +203,24 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			},
 		},
 		{
+			name: "pdf page must be a number token",
+			kind: "pdf",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"page":"1","zoom":1}`),
+			},
+		},
+		{
 			name: "large fractional audiobook track does not round to integer",
 			kind: "audiobook",
 			in: ProgressInput{
 				Locator: json.RawMessage(`{"trackIndex":9007199254740992.5}`),
+			},
+		},
+		{
+			name: "audiobook track must be a number token",
+			kind: "audiobook",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"trackIndex":"2"}`),
 			},
 		},
 		{
@@ -221,6 +242,13 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			kind: "pdf",
 			in: ProgressInput{
 				Locator: json.RawMessage(`{"page":1,"zoom":10.000000000000000001}`),
+			},
+		},
+		{
+			name: "pdf zoom must be a number token",
+			kind: "pdf",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"page":1,"zoom":"1.25"}`),
 			},
 		},
 		{

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -94,8 +95,14 @@ func validAudiobookProgressLocator(locator map[string]json.RawMessage) bool {
 }
 
 func validProgressNumber(raw json.RawMessage, min, max string, integer bool) bool {
-	var number json.Number
-	if len(raw) == 0 || json.Unmarshal(raw, &number) != nil || number.String() == "" {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var token any
+	if len(raw) == 0 || decoder.Decode(&token) != nil {
+		return false
+	}
+	number, ok := token.(json.Number)
+	if !ok || number.String() == "" {
 		return false
 	}
 	value, ok := new(big.Rat).SetString(number.String())
