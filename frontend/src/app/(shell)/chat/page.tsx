@@ -14,7 +14,7 @@ import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { api } from "@/lib/api";
 
 interface ShareItemMetadata {
-  id: string | number;
+  id: string;
   title: string;
 }
 
@@ -54,15 +54,15 @@ export default function ChatPage() {
     if (shareKind && shareRef) {
       const kind = shareKind as "library_book" | "stream_film";
       const url = kind === "library_book"
-        ? `/api/v1/library/books/${shareRef}`
-        : `/api/v1/media/items/${shareRef}`;
+        ? `/api/v1/library/books/${encodeURIComponent(shareRef)}`
+        : `/api/v1/media/items/${encodeURIComponent(shareRef)}`;
 
       api<ShareItemMetadata>(url)
         .then((item) => {
           if (item) {
             setStagedEmbed({
               kind,
-              ref: shareRef,
+              ref: item.id,
               title: item.title,
             });
           }

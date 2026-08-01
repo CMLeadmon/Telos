@@ -2,7 +2,9 @@ import { create } from "zustand";
 import { api } from "@/lib/api";
 
 export interface LibraryBook {
-  id: number;
+  // Catalog IDs are opaque gateway-issued strings. Browser code must not
+  // infer or reconstruct the upstream provider identity they resolve to.
+  id: string;
   title: string;
   subtitle: string;
   authors: string[] | null;

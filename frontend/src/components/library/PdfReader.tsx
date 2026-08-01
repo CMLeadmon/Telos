@@ -94,7 +94,9 @@ export function PdfReader({
         ).toString();
         pdfjsRef.current = pdfjs;
 
-        const progress = await api<Progress>(`/api/v1/library/books/${book.id}/progress`);
+        const progress = await api<Progress>(
+          `/api/v1/library/books/${encodeURIComponent(book.id)}/progress`,
+        );
         // withCredentials lets PDF.js issue authenticated range requests.
         const doc = (await pdfjs.getDocument({
           url: libraryContentUrl(book.id),
@@ -140,7 +142,7 @@ export function PdfReader({
     onPercent(total > 0 ? page / total : 0);
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      void api(`/api/v1/library/books/${book.id}/progress`, {
+      void api(`/api/v1/library/books/${encodeURIComponent(book.id)}/progress`, {
         method: "PUT",
         body: JSON.stringify(pdfProgressPayload(page, zoom, total)),
       }).catch(() => {});

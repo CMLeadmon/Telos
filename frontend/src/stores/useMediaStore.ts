@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { api, ApiError } from "@/lib/api";
 
 export interface MediaLibrary {
+  // Catalog IDs are opaque gateway-issued strings, never provider IDs.
   id: string;
   name: string;
   type: "video" | "audio";
@@ -9,6 +10,7 @@ export interface MediaLibrary {
 }
 
 export interface MediaItem {
+  // Preserve this value exactly and encode it only at URL boundaries.
   id: string;
   title: string;
   duration: string;

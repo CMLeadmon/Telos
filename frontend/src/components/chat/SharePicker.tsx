@@ -18,7 +18,7 @@ interface PickerItem {
 }
 
 interface PickerBook {
-  id: number;
+  id: string;
   title: string;
   authors: string[];
 }
@@ -48,7 +48,7 @@ export function SharePicker({ onClose, onPick, defaultTab }: SharePickerProps) {
     api<PickerBook[]>("/api/v1/library/books")
       .then((res) => {
         const mapped = (res || []).map((b) => ({
-          id: String(b.id),
+          id: b.id,
           title: b.title,
           subtitle: (b.authors || []).join(", "),
           kind: "library_book" as const,
@@ -63,7 +63,9 @@ export function SharePicker({ onClose, onPick, defaultTab }: SharePickerProps) {
         const allItems: PickerItem[] = [];
         for (const lib of libs || []) {
           try {
-            const items = await api<PickerMediaItem[]>(`/api/v1/media/items?parentId=${lib.id}`);
+            const items = await api<PickerMediaItem[]>(
+              `/api/v1/media/items?parentId=${encodeURIComponent(lib.id)}`,
+            );
             for (const item of items || []) {
               if (!item.isFolder) {
                 allItems.push({

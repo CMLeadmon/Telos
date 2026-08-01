@@ -107,7 +107,7 @@ function PosterGrid({
             {!item.isFolder && (
               <a
                 className="poster-share"
-                href={`/chat?share_kind=stream_film&share_ref=${item.id}`}
+                href={`/chat?share_kind=stream_film&share_ref=${encodeURIComponent(item.id)}`}
                 title="Share to chat"
                 aria-label={`share ${item.title} to chat`}
               >
@@ -161,7 +161,9 @@ export default function StreamPage() {
     const params = new URLSearchParams(window.location.search);
     const playId = params.get("play");
     if (playId) {
-      api<StreamItemResponse>(`/api/v1/media/items/${playId}`)
+      api<StreamItemResponse>(
+        `/api/v1/media/items/${encodeURIComponent(playId)}`,
+      )
         .then((item) => {
           if (item) {
             const mediaItem: MediaItem = {

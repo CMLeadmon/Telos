@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { BookOpen, Folder, ImageOff, Music, Settings, Share2 } from "lucide-react";
-import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { api, apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
   type FacetValue,
@@ -215,7 +215,7 @@ function BookCard({
             className="btn-ghost btn-sm"
             aria-label={`share ${book.title}`}
             title="Share to chat"
-            href={`/chat?share_kind=library_book&share_ref=${book.id}`}
+            href={`/chat?share_kind=library_book&share_ref=${encodeURIComponent(book.id)}`}
             onClick={(e) => e.stopPropagation()}
           >
             <Share2 size={12} />
@@ -289,9 +289,17 @@ export default function LibraryPage() {
     const params = new URLSearchParams(window.location.search);
     const readId = params.get("read");
     if (readId && books.length > 0) {
-      const found = books.find((b) => String(b.id) === readId);
+      const found = books.find((b) => b.id === readId);
       if (found) {
         setTimeout(() => setReading(found), 0);
+      } else {
+        api<LibraryBook>(
+          `/api/v1/library/books/${encodeURIComponent(readId)}`,
+        )
+          .then((resolved) => setReading(resolved))
+          .catch(() => {
+            // A stale or unauthorized deep link leaves the catalog usable.
+          });
       }
       const newUrl = window.location.pathname;
       window.history.replaceState({}, "", newUrl);

@@ -8,7 +8,7 @@ import { AnnotationEditor } from "./AnnotationEditor";
 // AnnotationPanel lists a book's annotations with mine/community filters,
 // owner edit/delete, capability-driven moderation, and community replies. It
 // never derives authorization from client fields — the server is authoritative.
-export function AnnotationPanel({ bookId, canModerate }: { bookId: number; canModerate: boolean }) {
+export function AnnotationPanel({ bookId, canModerate }: { bookId: string; canModerate: boolean }) {
   const user = useAuthStore((s) => s.user);
   const annotations = useAnnotationStore((s) => s.annotations);
   const error = useAnnotationStore((s) => s.error);

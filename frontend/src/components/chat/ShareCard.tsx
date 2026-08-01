@@ -30,11 +30,14 @@ export function ShareCard({ embed }: ShareCardProps) {
 
   const handleAction = () => {
     if (embed.kind === "library_book") {
-      router.push(`/library/?read=${embed.ref}`);
+      router.push(`/library/?read=${encodeURIComponent(embed.ref)}`);
     } else if (embed.kind === "stream_film") {
-      router.push(`/stream/?play=${embed.ref}`);
+      router.push(`/stream/?play=${encodeURIComponent(embed.ref)}`);
     } else if (embed.kind === "file") {
-      window.open(`${apiBase()}/api/v1/files/${embed.ref}/download`, "_blank");
+      window.open(
+        `${apiBase()}/api/v1/files/${encodeURIComponent(embed.ref)}/download`,
+        "_blank",
+      );
     }
   };
 

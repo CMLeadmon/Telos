@@ -186,3 +186,12 @@ backend/watchparty_integration_test.go
 backend/db/migrations/0018_channel_permission_overrides.sql
 backend/channel_admin.go
 backend/channel_admin_test.go
+backend/db/migrations/0022_catalog_identity_and_progress.sql
+backend/catalog.go
+backend/catalog_test.go
+backend/catalog_integration_test.go
+backend/continuity.go
+backend/continuity_test.go
+backend/continuity_integration_test.go
+backend/catalog_backfill.go
+backend/catalog_backfill_integration_test.go
