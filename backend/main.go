@@ -1835,7 +1835,7 @@ func publishChatEvent(ctx context.Context, channelID string, ev WSEvent) {
 	}
 }
 
-func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
+func buildEmbedSnapshot(ctx context.Context, kind, ref string) (string, []byte, error) {
 	var snapshot struct {
 		Title    string `json:"title"`
 		Subtitle string `json:"subtitle"`
@@ -1846,57 +1846,51 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 
 	switch kind {
 	case "library_book":
-		if !looksLikeUUID(ref) {
-			if _, err := strconv.ParseInt(ref, 10, 64); err != nil {
-				return nil, errors.New("invalid book id")
-			}
+		resolution, err := canonicalAnnotationTarget(ctx, "book", ref)
+		if err != nil || resolution.Provider != ProviderGrimmory {
+			return "", nil, errors.New("book not found")
 		}
-		books, err := getLibraryBooks(ctx)
+		book, err := fetchGrimmoryBook(ctx, resolution.UpstreamID)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
-		found := false
-		for _, b := range books {
-			if b.ID == ref || strconv.FormatInt(b.UpstreamID, 10) == ref {
-				snapshot.Title = b.Title
-				snapshot.Subtitle = strings.Join(b.Authors, ", ")
-				snapshot.Kicker = "Library Book"
-				snapshot.Cover = "/api/v1/library/books/" + b.ID + "/cover"
-				found = true
-				break
-			}
+		if strconv.FormatInt(book.UpstreamID, 10) != resolution.UpstreamID {
+			return "", nil, errors.New("book not found")
 		}
-		if !found {
-			return nil, errors.New("book not found")
-		}
+		snapshot.Title = book.Title
+		snapshot.Subtitle = strings.Join(book.Authors, ", ")
+		snapshot.Kicker = "Library Book"
+		snapshot.Cover = "/api/v1/library/books/" + resolution.ID + "/cover"
+		ref = resolution.ID
 
 	case "stream_film":
-		if !validJellyfinID(ref) {
-			return nil, errors.New("invalid media id")
+		resolution, err := canonicalAnnotationTarget(ctx, "media", ref)
+		if err != nil || resolution.Provider != ProviderJellyfin || !validJellyfinID(resolution.UpstreamID) {
+			return "", nil, errors.New("invalid media id")
 		}
 		userID, err := getJellyfinUserID(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
+			return "", nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
 		}
 
 		token := getJellyfinAdminToken()
-		reqURL := fmt.Sprintf("%s/Users/%s/Items/%s", jellyfinBaseURL, userID, ref)
+		reqURL := fmt.Sprintf("%s/Users/%s/Items/%s", jellyfinBaseURL, userID, resolution.UpstreamID)
 		requestCtx, cancel := upstreamRequestContext(ctx)
 		defer cancel()
 		req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 		req.Header.Set("X-Emby-Token", token)
 		req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
 
 		resp, err := upstreamHTTPClient.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
+			return "", nil, fmt.Errorf("%w: jellyfin: %v", errUpstreamUnavailable, err)
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%w: jellyfin returned %s", errUpstreamUnavailable, resp.Status)
+			return "", nil, fmt.Errorf("%w: jellyfin returned %s", errUpstreamUnavailable, resp.Status)
 		}
 
 		var rawItem struct {
@@ -1910,7 +1904,10 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 			} `json:"Studios"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&rawItem); err != nil {
-			return nil, err
+			return "", nil, err
+		}
+		if rawItem.ID != resolution.UpstreamID {
+			return "", nil, errors.New("media not found")
 		}
 
 		durationSec := rawItem.RunTimeTicks / 10000000
@@ -1928,8 +1925,9 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 		if rawItem.Type == "Audio" || rawItem.Type == "Audiobook" {
 			snapshot.Kicker = "Stream Audio"
 		}
-		snapshot.Cover = "/api/v1/media/items/" + rawItem.ID + "/cover"
+		snapshot.Cover = "/api/v1/media/items/" + resolution.ID + "/cover"
 		snapshot.Duration = durationStr
+		ref = resolution.ID
 
 		sub := ""
 		if len(rawItem.Studios) > 0 {
@@ -1952,7 +1950,7 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 			SELECT filename, size_bytes, mime_type FROM files WHERE id = $1
 		`, ref).Scan(&filename, &size, &mime)
 		if err != nil {
-			return nil, errors.New("file not found")
+			return "", nil, errors.New("file not found")
 		}
 
 		snapshot.Title = filename
@@ -1969,10 +1967,11 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 		snapshot.Subtitle = fmt.Sprintf("%s · %s", sizeStr, mime)
 
 	default:
-		return nil, errors.New("unsupported embed kind")
+		return "", nil, errors.New("unsupported embed kind")
 	}
 
-	return json.Marshal(snapshot)
+	raw, err := json.Marshal(snapshot)
+	return ref, raw, err
 }
 
 func handleSendMessage(w http.ResponseWriter, r *http.Request) {
@@ -2005,7 +2004,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	var embed messageEmbedInput
 	if body.Embed != nil {
 		k, ref := body.Embed.Kind, body.Embed.Ref
-		snap, err := buildEmbedSnapshot(r.Context(), k, ref)
+		canonicalRef, snap, err := buildEmbedSnapshot(r.Context(), k, ref)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.Is(err, errUpstreamUnavailable) {
@@ -2014,7 +2013,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid embed: "+err.Error(), status)
 			return
 		}
-		embed = messageEmbedInput{Kind: &k, Ref: &ref, Snapshot: snap}
+		embed = messageEmbedInput{Kind: &k, Ref: &canonicalRef, Snapshot: snap}
 	}
 
 	msgID, ts, ok := persistChatMessage(w, r, channelID, user.ID, body.Content, body.ClientMutationID, nil, embed)

@@ -36,6 +36,18 @@ func TestAccountDeletionMatrix(t *testing.T) {
 	f.DB.Exec(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ('doomed-sess',$1, NOW()+INTERVAL '1 hour')`, uid)
 	f.DB.Exec(ctx, `INSERT INTO user_preferences (user_id, prefs) VALUES ($1,'{"theme":"ink"}')`, uid)
 	f.DB.Exec(ctx, `INSERT INTO book_progress (user_id, book_id, percent) VALUES ($1,'b1',42)`, uid)
+	catalogItem, err := NewCatalogRepository(f.DB).Observe(ctx, CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "lifecycle-book", LibraryID: "library-a",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatalf("observe lifecycle catalog item: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO member_progress (user_id, catalog_item_id, locator, percent)
+		VALUES ($1::uuid, $2::uuid, '{"cfi":"x","fraction":0.4}'::jsonb, 0.4)`, uid, catalogItem.ID); err != nil {
+		t.Fatalf("seed member progress: %v", err)
+	}
 	f.DB.QueryRow(ctx, `INSERT INTO channels (name) VALUES ('c') RETURNING id`).Scan(&cid)
 	f.DB.QueryRow(ctx, `INSERT INTO messages (channel_id, user_id, content) VALUES ($1,$2,'public words') RETURNING id`, cid, uid).Scan(&mid)
 	// A private avatar file and a shared file.
@@ -53,11 +65,14 @@ func TestAccountDeletionMatrix(t *testing.T) {
 	// Private state is gone.
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM user_preferences WHERE user_id=$1`, uid, 0)
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM book_progress WHERE user_id=$1`, uid, 0)
+	assertCount(t, f.DB, `SELECT COUNT(*) FROM member_progress WHERE user_id=$1`, uid, 0)
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM user_roles WHERE user_id=$1`, uid, 0)
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM sessions WHERE user_id=$1 AND revoked_at IS NULL`, uid, 0)
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM files WHERE uploader_id=$1 AND purpose='avatar'`, uid, 0)
 	// Shared file is retained.
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM files WHERE uploader_id=$1 AND purpose='shared'`, uid, 1)
+	assertCount(t, f.DB, `SELECT COUNT(*) FROM catalog_items WHERE id=$1::uuid`, catalogItem.ID, 1)
+	assertCount(t, f.DB, `SELECT COUNT(*) FROM catalog_sources WHERE catalog_item_id=$1::uuid`, catalogItem.ID, 1)
 
 	// Public message survives, anonymized.
 	assertCount(t, f.DB, `SELECT COUNT(*) FROM messages WHERE id=$1`, mid, 1)

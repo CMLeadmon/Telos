@@ -90,6 +90,7 @@ func DeleteAccount(ctx context.Context, userID string) (DeletionReceipt, error) 
 		`UPDATE invites SET used_at = COALESCE(used_at, NOW()) WHERE creator_id = $1 AND used_at IS NULL`,
 		`DELETE FROM user_preferences WHERE user_id = $1`,
 		`DELETE FROM book_progress WHERE user_id = $1`,
+		`DELETE FROM member_progress WHERE user_id = $1`,
 		`DELETE FROM message_reactions WHERE user_id = $1`,
 		`DELETE FROM channel_reads WHERE user_id = $1`,
 		`DELETE FROM user_events WHERE recipient_id = $1`,

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -140,5 +141,78 @@ func TestWebSocketRevocationClosesLiveSocket(t *testing.T) {
 	}
 	if n := sessionRegistryInstance.LiveCount(userID); n != 0 {
 		t.Fatalf("handler did not release socket: live count %d", n)
+	}
+}
+
+func TestSendMessageCanonicalizesEmbedBeforeFetchAndWrite(t *testing.T) {
+	db, author, _ := chatFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000123"
+	events := []string{}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		events = append(events, "resolve:"+rawID+":"+string(surface))
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: "video",
+			Provider: ProviderJellyfin, UpstreamID: "current-film", LibraryID: "movies",
+			Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "upstream:"+r.URL.Path)
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "jf-user", "Name": "admin"}})
+		case "/Users/jf-user/Items/current-film":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Id": "current-film", "Name": "Current Film", "Type": "Movie",
+				"ProductionYear": 2026, "RunTimeTicks": int64(5_460_000_000),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = upstream.URL
+	t.Cleanup(func() { jellyfinBaseURL = oldBase })
+	if redisClient != nil {
+		redisClient.Del(t.Context(), "telos:jellyfin:userId")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+generalChannel+"/messages", strings.NewReader(`{"content":"watch this","embed":{"kind":"stream_film","ref":"legacy-film"}}`))
+	req.SetPathValue("id", generalChannel)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"Member"}}))
+	rec := httptest.NewRecorder()
+	handleSendMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var storedRef string
+	var snapshot []byte
+	if err := db.QueryRow(t.Context(), `
+		SELECT embed_ref, embed_snapshot
+		FROM messages
+		WHERE channel_id = $1::uuid AND user_id = $2::uuid`, generalChannel, author).Scan(&storedRef, &snapshot); err != nil {
+		t.Fatalf("read embedded message: %v", err)
+	}
+	if storedRef != canonicalID {
+		t.Fatalf("stored embed ref = %q, want %q (events=%v)", storedRef, canonicalID, events)
+	}
+	var got struct {
+		Title string `json:"title"`
+		Cover string `json:"cover"`
+	}
+	if err := json.Unmarshal(snapshot, &got); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if got.Title != "Current Film" || got.Cover != "/api/v1/media/items/"+canonicalID+"/cover" {
+		t.Fatalf("snapshot = %+v", got)
+	}
+	wantEvents := "resolve:legacy-film:stream|upstream:/Users|upstream:/Users/jf-user/Items/current-film"
+	if gotEvents := strings.Join(events, "|"); gotEvents != wantEvents {
+		t.Fatalf("events = %s, want %s", gotEvents, wantEvents)
 	}
 }
