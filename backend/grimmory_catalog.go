@@ -8,27 +8,56 @@ import (
 	"strings"
 )
 
-var errUnsupportedLibraryKind = errors.New("unsupported Grimmory Library kind")
+var (
+	errUnsupportedLibraryKind     = errors.New("unsupported Grimmory Library kind")
+	errLibraryProviderUnavailable = errors.New("Library provider unavailable")
+	errLibraryCatalogInternal     = errors.New("Library catalog internal failure")
+)
+
+func libraryProviderError(err error) error {
+	return fmt.Errorf("%w: %v", errLibraryProviderUnavailable, err)
+}
+
+func libraryCatalogError(err error) error {
+	return fmt.Errorf("%w: %v", errLibraryCatalogInternal, err)
+}
 
 // LibraryItem is the member-facing Library contract. Provider identifiers and
 // library names deliberately stay in the adapter's internal LibraryBook DTO.
 type LibraryItem struct {
-	ID            string         `json:"id"`
-	Title         string         `json:"title"`
-	Subtitle      string         `json:"subtitle"`
-	Authors       []string       `json:"authors"`
-	Narrator      string         `json:"narrator,omitempty"`
-	Categories    []string       `json:"categories"`
-	Description   string         `json:"description"`
-	Language      string         `json:"language"`
-	SeriesName    string         `json:"seriesName"`
-	SeriesNumber  *float64       `json:"seriesNumber"`
-	PublishedDate string         `json:"publishedDate"`
-	AddedOn       string         `json:"addedOn"`
-	Kind          CatalogKind    `json:"kind"`
-	DurationMS    int64          `json:"durationMs,omitempty"`
-	CoverURL      string         `json:"coverUrl"`
-	Progress      MemberProgress `json:"progress"`
+	ID            string      `json:"id"`
+	Title         string      `json:"title"`
+	Subtitle      string      `json:"subtitle"`
+	Authors       []string    `json:"authors"`
+	Narrator      string      `json:"narrator,omitempty"`
+	Categories    []string    `json:"categories"`
+	Description   string      `json:"description"`
+	Language      string      `json:"language"`
+	SeriesName    string      `json:"seriesName"`
+	SeriesNumber  *float64    `json:"seriesNumber"`
+	PublishedDate string      `json:"publishedDate"`
+	AddedOn       string      `json:"addedOn"`
+	Kind          CatalogKind `json:"kind"`
+	// Format is a temporary Task 1 compatibility projection for the existing
+	// EPUB/PDF reader UI. It is derived from Kind, never copied from a provider,
+	// and should be removed when Task 5 migrates the frontend to Kind.
+	Format     string         `json:"format"`
+	DurationMS int64          `json:"durationMs,omitempty"`
+	CoverURL   string         `json:"coverUrl"`
+	Progress   MemberProgress `json:"progress"`
+}
+
+func libraryFormatFromKind(kind CatalogKind) string {
+	switch kind {
+	case "epub":
+		return "EPUB"
+	case "pdf":
+		return "PDF"
+	case "audiobook":
+		return "AUDIOBOOK"
+	default:
+		return ""
+	}
 }
 
 type libraryProgressReader interface {
@@ -42,6 +71,14 @@ type libraryProgressReader interface {
 type GrimmoryCatalog struct {
 	repo       *CatalogRepository
 	continuity libraryProgressReader
+}
+
+func currentGrimmoryCatalog() *GrimmoryCatalog {
+	catalog := &GrimmoryCatalog{repo: catalogRepo}
+	if continuityRepo != nil {
+		catalog.continuity = continuityRepo
+	}
+	return catalog
 }
 
 func libraryKindFromGrimmory(format string) (CatalogKind, error) {
@@ -89,7 +126,7 @@ func normalizedLibraryItem(book LibraryBook) (LibraryItem, error) {
 		Description: book.Description, Language: book.Language,
 		SeriesName: book.SeriesName, SeriesNumber: book.SeriesNumber,
 		PublishedDate: book.PublishedDate, AddedOn: book.AddedOn,
-		Kind: kind, DurationMS: book.DurationMS,
+		Kind: kind, Format: libraryFormatFromKind(kind), DurationMS: book.DurationMS,
 		CoverURL: "/api/v1/library/books/" + book.ID + "/cover",
 		Progress: MemberProgress{ProgressInput: ProgressInput{Locator: json.RawMessage(`{}`)}},
 	}, nil
@@ -127,16 +164,16 @@ func (c *GrimmoryCatalog) ListItems(ctx context.Context, userID string) ([]Libra
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, libraryCatalogError(err)
 		}
 		items = append(items, item)
 	}
 	reader, err := c.progressReader()
 	if err != nil {
-		return nil, err
+		return nil, libraryCatalogError(err)
 	}
 	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
-		return nil, err
+		return nil, libraryCatalogError(err)
 	}
 	return items, nil
 }
@@ -154,11 +191,20 @@ func (c *GrimmoryCatalog) GetItem(ctx context.Context, userID, rawID string) (Li
 	} else {
 		resolution, err = resolveCatalogIdentity(ctx, rawID, SurfaceLibrary)
 	}
-	if err != nil || resolution.Provider != ProviderGrimmory || !resolution.Active || !resolution.Available {
-		if err == nil {
-			err = errCatalogNotFound
+	if errors.Is(err, errCatalogNotFound) && !looksLikeUUID(rawID) {
+		resolution, err = discoverLegacyGrimmoryBook(ctx, rawID)
+	}
+	if err != nil {
+		if errors.Is(err, errLibraryProviderUnavailable) {
+			return LibraryItem{}, CatalogResolution{}, err
 		}
-		return LibraryItem{}, CatalogResolution{}, err
+		if errors.Is(err, errCatalogNotFound) || errors.Is(err, errCatalogWrongSurface) || errors.Is(err, errCatalogInvalid) {
+			return LibraryItem{}, CatalogResolution{}, errCatalogNotFound
+		}
+		return LibraryItem{}, CatalogResolution{}, libraryCatalogError(err)
+	}
+	if resolution.Provider != ProviderGrimmory || !resolution.Active || !resolution.Available {
+		return LibraryItem{}, CatalogResolution{}, errCatalogNotFound
 	}
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
@@ -172,15 +218,15 @@ func (c *GrimmoryCatalog) GetItem(ctx context.Context, userID, rawID string) (Li
 	}
 	item, err := normalizedLibraryItem(book)
 	if err != nil {
-		return LibraryItem{}, CatalogResolution{}, err
+		return LibraryItem{}, CatalogResolution{}, libraryCatalogError(err)
 	}
 	reader, err := c.progressReader()
 	if err != nil {
-		return LibraryItem{}, CatalogResolution{}, err
+		return LibraryItem{}, CatalogResolution{}, libraryCatalogError(err)
 	}
 	items := []LibraryItem{item}
 	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
-		return LibraryItem{}, CatalogResolution{}, err
+		return LibraryItem{}, CatalogResolution{}, libraryCatalogError(err)
 	}
 	return items[0], resolution, nil
 }

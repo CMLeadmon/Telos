@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -55,6 +57,28 @@ func TestLibraryKindFromGrimmory(t *testing.T) {
 	for _, format := range []string{"CBX", "MOBI", "", "PHYSICAL"} {
 		if got, err := libraryKindFromGrimmory(format); got != "" || !errors.Is(err, errUnsupportedLibraryKind) {
 			t.Errorf("unsupported %q: got=%q err=%v", format, got, err)
+		}
+	}
+}
+
+func TestNormalizedLibraryFormatCompatibilityComesFromKind(t *testing.T) {
+	for _, tc := range []struct {
+		providerFormat string
+		wantKind       CatalogKind
+		wantFormat     string
+	}{
+		{providerFormat: "EPUB", wantKind: "epub", wantFormat: "EPUB"},
+		{providerFormat: "PDF", wantKind: "pdf", wantFormat: "PDF"},
+		{providerFormat: "AUDIOBOOK", wantKind: "audiobook", wantFormat: "AUDIOBOOK"},
+	} {
+		item, err := normalizedLibraryItem(LibraryBook{
+			ID: "00000000-0000-4000-8000-000000000001", Format: tc.providerFormat,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.providerFormat, err)
+		}
+		if item.Kind != tc.wantKind || item.Format != tc.wantFormat {
+			t.Errorf("%s normalized kind/format=%q/%q, want=%q/%q", tc.providerFormat, item.Kind, item.Format, tc.wantKind, tc.wantFormat)
 		}
 	}
 }
@@ -125,6 +149,9 @@ func TestGrimmoryCatalogListItemsNormalizesAudiobookAndBatchesProgress(t *testin
 	if audio.Kind != "audiobook" || audio.Title != "Braiding Sweetgrass" || audio.Subtitle != "Indigenous Wisdom" {
 		t.Fatalf("audiobook identity fields=%+v", audio)
 	}
+	if audio.Format != "AUDIOBOOK" || items[1].Format != "EPUB" {
+		t.Fatalf("temporary format compatibility audio/epub=%q/%q", audio.Format, items[1].Format)
+	}
 	if got := strings.Join(audio.Authors, ","); got != "Robin Wall Kimmerer" || audio.Narrator != "Robin Wall Kimmerer" {
 		t.Fatalf("audiobook people authors=%q narrator=%q", got, audio.Narrator)
 	}
@@ -167,6 +194,209 @@ func TestGrimmoryCatalogListItemsNormalizesAudiobookAndBatchesProgress(t *testin
 	if got := strings.Count(logs.String(), "unsupported=1"); got != 1 {
 		t.Fatalf("bounded unsupported-format observations=%d log=%q, want one aggregate count", got, logs.String())
 	}
+}
+
+func TestLibraryBookDetailRouteReturnsNormalizedMemberItem(t *testing.T) {
+	f := withFixture(t)
+	oldCatalog, oldContinuity, oldAuthorizer := catalogRepo, continuityRepo, grimmoryAuthorizer
+	catalogRepo, continuityRepo, grimmoryAuthorizer = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB), nil
+	t.Cleanup(func() {
+		catalogRepo, continuityRepo, grimmoryAuthorizer = oldCatalog, oldContinuity, oldAuthorizer
+	})
+	userID := createContinuityUser(t, "normalized-detail-reader", f.DB)
+	resolution, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "81", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "audiobook",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, err := ValidateProgress("audiobook", ProgressInput{
+		Locator: json.RawMessage(`{"trackIndex":2}`), PositionMS: 125_000,
+		DurationMS: 3_600_000, Percent: 0.034,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := continuityRepo.Put(t.Context(), userID, resolution.ID, progress); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream := http.NewServeMux()
+	upstream.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"accessToken": "detail-route-token", "expires": 7200})
+	})
+	upstream.HandleFunc("GET /api/v1/books/81", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `{
+			"id":81,"libraryId":1,"libraryName":"Provider Shelf","addedOn":"2026-07-31T10:00:00Z",
+			"metadata":{"title":"A Spoken Book","authors":["A. Writer"],"narrator":"N. Reader",
+				"description":"Member-safe description","audiobookMetadata":{"durationSeconds":3600}},
+			"primaryFile":{"bookType":"AUDIOBOOK","fileSizeKb":42}
+		}`)
+	})
+	server := httptest.NewServer(upstream)
+	defer server.Close()
+	oldURL := grimmoryBaseURL
+	grimmoryBaseURL = server.URL
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		grimmoryBaseURL = oldURL
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	routes := http.NewServeMux()
+	routes.Handle("GET /api/v1/library/books/{id}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		actor := &UserContext{ID: userID, Roles: []string{"Owner"}}
+		handleLibraryBookByID(w, r.WithContext(context.WithValue(r.Context(), userContextKey, actor)))
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/"+resolution.ID, nil)
+	rec := httptest.NewRecorder()
+	routes.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var item LibraryItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &item); err != nil {
+		t.Fatal(err)
+	}
+	if item.ID != resolution.ID || item.Kind != "audiobook" || item.Format != "AUDIOBOOK" ||
+		item.Narrator != "N. Reader" || item.DurationMS != 3_600_000 ||
+		item.Progress.PositionMS != 125_000 || item.CoverURL != "/api/v1/library/books/"+resolution.ID+"/cover" {
+		t.Fatalf("normalized detail=%+v", item)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, providerField := range []string{"upstreamId", "libraryId", "library", "publisher", "isbn10", "isbn13", "fileSizeKb"} {
+		if _, leaked := payload[providerField]; leaked {
+			t.Errorf("provider/management field %q leaked: %s", providerField, rec.Body.String())
+		}
+	}
+}
+
+func assertLibraryAPIError(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string, forbiddenDetails ...string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status=%d body=%s, want=%d", rec.Code, rec.Body.String(), wantStatus)
+	}
+	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("content-type=%q body=%s", contentType, rec.Body.String())
+	}
+	var body apiErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode API error: %v body=%q", err, rec.Body.String())
+	}
+	if body.Error.Code != wantCode {
+		t.Fatalf("error code=%q body=%s, want=%q", body.Error.Code, rec.Body.String(), wantCode)
+	}
+	for _, detail := range forbiddenDetails {
+		if strings.Contains(rec.Body.String(), detail) {
+			t.Errorf("internal detail %q leaked in %s", detail, rec.Body.String())
+		}
+	}
+}
+
+func TestLibraryMemberHandlersClassifyErrorsWithoutInternalDetails(t *testing.T) {
+	const userID = "00000000-0000-4000-8000-000000000099"
+	memberRequest := func(method, target string) *http.Request {
+		req := httptest.NewRequest(method, target, nil)
+		return req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	}
+
+	t.Run("list provider unavailable is terse 503", func(t *testing.T) {
+		oldURL, oldCatalog, oldContinuity, oldAuthorizer := grimmoryBaseURL, catalogRepo, continuityRepo, grimmoryAuthorizer
+		grimmoryBaseURL, catalogRepo, continuityRepo, grimmoryAuthorizer = "http://127.0.0.1:1", nil, nil, nil
+		grimmoryTok.mu.Lock()
+		oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+		grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+		grimmoryTok.mu.Unlock()
+		t.Cleanup(func() {
+			grimmoryBaseURL, catalogRepo, continuityRepo, grimmoryAuthorizer = oldURL, oldCatalog, oldContinuity, oldAuthorizer
+			grimmoryTok.mu.Lock()
+			grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+			grimmoryTok.mu.Unlock()
+		})
+		rec := httptest.NewRecorder()
+		handleLibraryBooks(rec, memberRequest(http.MethodGet, "/api/v1/library/books"))
+		assertLibraryAPIError(t, rec, http.StatusServiceUnavailable, "upstream_unavailable", "127.0.0.1", "connect")
+	})
+
+	t.Run("list local catalog failure is terse 500", func(t *testing.T) {
+		cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/books" {
+				_, _ = fmt.Fprint(w, `[]`)
+				return
+			}
+			http.NotFound(w, r)
+		})
+		defer cleanup()
+		oldReconcile := reconcileCatalogEnumeration
+		reconcileCatalogEnumeration = func(context.Context, CatalogEnumeration) (CatalogReconciliationReport, error) {
+			return CatalogReconciliationReport{}, errors.New("local catalog secret")
+		}
+		t.Cleanup(func() { reconcileCatalogEnumeration = oldReconcile })
+		rec := httptest.NewRecorder()
+		handleLibraryBooks(rec, memberRequest(http.MethodGet, "/api/v1/library/books"))
+		assertLibraryAPIError(t, rec, http.StatusInternalServerError, "internal_error", "local catalog secret")
+	})
+
+	t.Run("detail provider unavailable is terse 503", func(t *testing.T) {
+		cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/books/81" {
+				http.Error(w, "provider detail", http.StatusBadGateway)
+				return
+			}
+			http.NotFound(w, r)
+		})
+		defer cleanup()
+		oldCatalog, oldContinuity, oldResolve := catalogRepo, continuityRepo, resolveCatalogIdentity
+		catalogRepo, continuityRepo = nil, nil
+		resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+			return CatalogResolution{}, errCatalogNotFound
+		}
+		t.Cleanup(func() { catalogRepo, continuityRepo, resolveCatalogIdentity = oldCatalog, oldContinuity, oldResolve })
+		req := memberRequest(http.MethodGet, "/api/v1/library/books/81")
+		req.SetPathValue("id", "81")
+		rec := httptest.NewRecorder()
+		handleLibraryBookByID(rec, req)
+		assertLibraryAPIError(t, rec, http.StatusServiceUnavailable, "upstream_unavailable", "provider detail", "502")
+	})
+
+	t.Run("detail local continuity failure is terse 500", func(t *testing.T) {
+		const canonicalID = "00000000-0000-4000-8000-000000000081"
+		cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/books/81" {
+				_, _ = fmt.Fprint(w, `{"id":81,"libraryId":1,"metadata":{"title":"Local failure"},"primaryFile":{"bookType":"PDF"}}`)
+				return
+			}
+			http.NotFound(w, r)
+		})
+		defer cleanup()
+		oldCatalog, oldContinuity, oldObserve, oldResolve := catalogRepo, continuityRepo, observeCatalogIdentity, resolveCatalogIdentity
+		catalogRepo, continuityRepo = nil, nil
+		resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+			return CatalogResolution{ID: canonicalID, Surface: SurfaceLibrary, Kind: "pdf", Provider: ProviderGrimmory,
+				UpstreamID: "81", LibraryID: "1", Active: true, Available: true}, nil
+		}
+		observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+			return CatalogResolution{ID: canonicalID, Surface: in.Surface, Kind: in.Kind, Provider: in.Provider,
+				UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Active: true, Available: true}, nil
+		}
+		t.Cleanup(func() {
+			catalogRepo, continuityRepo, observeCatalogIdentity, resolveCatalogIdentity = oldCatalog, oldContinuity, oldObserve, oldResolve
+		})
+		req := memberRequest(http.MethodGet, "/api/v1/library/books/"+canonicalID)
+		req.SetPathValue("id", canonicalID)
+		rec := httptest.NewRecorder()
+		handleLibraryBookByID(rec, req)
+		assertLibraryAPIError(t, rec, http.StatusInternalServerError, "internal_error", "continuity repository")
+	})
 }
 
 func catalogEnumerationSamples(t *testing.T, result CatalogResult) uint64 {
@@ -212,6 +442,42 @@ func TestGrimmoryCatalogRecordsEnumerationOutcome(t *testing.T) {
 			t.Fatalf("failed enumeration samples=%d, want=%d", got, before+1)
 		}
 	})
+}
+
+func TestGrimmoryCatalogRejectsIncompleteOrOversizedDocumentsBeforeReconciliation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "over 8 MiB", body: `[]` + strings.Repeat(" ", 8<<20)},
+		{name: "valid array plus junk", body: `[] trailing-junk`},
+		{name: "multiple JSON values", body: `[] []`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			identity := installCatalogIdentityTest(t)
+			coordinatorCalls := 0
+			oldReconcile := reconcileCatalogEnumeration
+			reconcileCatalogEnumeration = func(context.Context, CatalogEnumeration) (CatalogReconciliationReport, error) {
+				coordinatorCalls++
+				return CatalogReconciliationReport{}, nil
+			}
+			t.Cleanup(func() { reconcileCatalogEnumeration = oldReconcile })
+			installGrimmoryEnumerationFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprint(w, tc.body)
+			})
+
+			failedBefore := catalogEnumerationSamples(t, CatalogResultFailed)
+			if _, err := fetchGrimmoryBooks(t.Context()); err == nil {
+				t.Fatal("unsafe complete-catalog document unexpectedly succeeded")
+			}
+			if coordinatorCalls != 0 || identity.next != 0 {
+				t.Fatalf("coordinator calls=%d observed identities=%d, want zero before full-document validation", coordinatorCalls, identity.next)
+			}
+			if got := catalogEnumerationSamples(t, CatalogResultFailed); got != failedBefore+1 {
+				t.Fatalf("failed enumeration samples=%d, want=%d", got, failedBefore+1)
+			}
+		})
+	}
 }
 
 func TestGrimmoryCatalogListItemsHydrates501ItemsWithOneBatch(t *testing.T) {
@@ -283,6 +549,48 @@ func TestGrimmoryCatalogGetItemUsesCanonicalIdentityAndMemberProgress(t *testing
 		t.Fatalf("GetItem: %v", err)
 	}
 	if resolution.ID != canonicalID || item.ID != canonicalID || item.Kind != "pdf" || item.Title != "A Single Book" {
+		t.Fatalf("item=%+v resolution=%+v", item, resolution)
+	}
+	if progress.calls != 1 || len(progress.itemIDs) != 1 || progress.itemIDs[0] != canonicalID {
+		t.Fatalf("GetMany calls=%d ids=%v", progress.calls, progress.itemIDs)
+	}
+}
+
+func TestGrimmoryCatalogGetItemDiscoversLegacyNumericID(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000081"
+	cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/81" {
+			_, _ = fmt.Fprint(w, `{
+				"id":81,"libraryId":1,"addedOn":"2026-07-31T10:00:00Z",
+				"metadata":{"title":"Legacy Deep Link","authors":["A. Writer"]},
+				"primaryFile":{"bookType":"PDF"}
+			}`)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	defer cleanup()
+
+	oldObserve, oldResolve := observeCatalogIdentity, resolveCatalogIdentity
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceLibrary, Kind: in.Kind, Provider: ProviderGrimmory,
+			UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Active: true, Available: true, Revision: 3,
+		}, nil
+	}
+	resolveCatalogIdentity = func(_ context.Context, _ string, _ CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{}, errCatalogNotFound
+	}
+	t.Cleanup(func() { observeCatalogIdentity, resolveCatalogIdentity = oldObserve, oldResolve })
+
+	progress := &recordingLibraryProgressReader{}
+	item, resolution, err := (&GrimmoryCatalog{continuity: progress}).GetItem(
+		t.Context(), "00000000-0000-4000-8000-000000000099", "81",
+	)
+	if err != nil {
+		t.Fatalf("GetItem legacy numeric ID: %v", err)
+	}
+	if resolution.ID != canonicalID || item.ID != canonicalID || item.Kind != "pdf" || item.Format != "PDF" {
 		t.Fatalf("item=%+v resolution=%+v", item, resolution)
 	}
 	if progress.calls != 1 || len(progress.itemIDs) != 1 || progress.itemIDs[0] != canonicalID {

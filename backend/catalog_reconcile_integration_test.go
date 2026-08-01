@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -175,18 +176,32 @@ func TestGrimmoryFailedEnumerationDoesNotCompleteScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	responseBody := ""
 	installGrimmoryEnumerationFixture(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`[{`))
+		_, _ = w.Write([]byte(responseBody))
 	})
 
-	if _, err := fetchGrimmoryBooks(context.Background()); err == nil {
-		t.Fatal("malformed enumeration unexpectedly succeeded")
-	}
-	resolved, err := catalogRepo.Resolve(t.Context(), known.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resolved.Available {
-		t.Fatal("failed enumeration marked a known source unavailable")
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "truncated", body: `[{`},
+		{name: "trailing junk", body: `[] junk`},
+		{name: "multiple values", body: `[] []`},
+		{name: "oversized", body: `[]` + strings.Repeat(" ", 8<<20)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			responseBody = tc.body
+			if _, err := fetchGrimmoryBooks(context.Background()); err == nil {
+				t.Fatal("unsafe enumeration unexpectedly succeeded")
+			}
+			resolved, err := catalogRepo.Resolve(t.Context(), known.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resolved.Available {
+				t.Fatal("failed enumeration marked a known source unavailable")
+			}
+		})
 	}
 }

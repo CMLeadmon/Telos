@@ -173,7 +173,7 @@ func TestHandleLibraryBooksReturnsCanonicalID(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(books) != 1 || books[0].Title != "Pride and Prejudice" ||
-		books[0].Kind != "epub" || books[0].Authors[0] != "Jane Austen" {
+		books[0].Kind != "epub" || books[0].Format != "EPUB" || books[0].Authors[0] != "Jane Austen" {
 		t.Fatalf("bad translation: %+v", books)
 	}
 	if !looksLikeUUID(fmt.Sprint(books[0].ID)) {

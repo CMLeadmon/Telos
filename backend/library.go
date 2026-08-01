@@ -289,30 +289,37 @@ func canonicalizeGrimmoryBook(ctx context.Context, book LibraryBook) (LibraryBoo
 
 func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	started := catalogMetricNow()
+	providerFailure := func(err error) ([]LibraryBook, error) {
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
+		return nil, libraryProviderError(err)
+	}
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
 	resp, err := grimmoryGET(requestCtx, "/api/v1/books")
 	if err != nil {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
-		return nil, err
+		return providerFailure(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
-		return nil, fmt.Errorf("grimmory books returned %s", resp.Status)
+		return providerFailure(fmt.Errorf("grimmory books returned %s", resp.Status))
 	}
 	// Bound the decoded catalog: at most 8 MiB of JSON and 5,000 records so a
 	// misbehaving or compromised upstream cannot exhaust memory.
 	const maxGrimmoryBytes = 8 << 20
 	const maxGrimmoryRecords = maxMemberProgressBatchItems
+	document, err := io.ReadAll(io.LimitReader(resp.Body, maxGrimmoryBytes+1))
+	if err != nil {
+		return providerFailure(fmt.Errorf("read Grimmory catalog: %w", err))
+	}
+	if len(document) > maxGrimmoryBytes {
+		return providerFailure(errors.New("Grimmory catalog document exceeded the safe byte limit"))
+	}
 	var raw []grimmoryBook
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGrimmoryBytes)).Decode(&raw); err != nil {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
-		return nil, err
+	if err := json.Unmarshal(document, &raw); err != nil {
+		return providerFailure(fmt.Errorf("decode complete Grimmory catalog: %w", err))
 	}
 	if len(raw) > maxGrimmoryRecords {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
-		return nil, errors.New("Grimmory catalog enumeration exceeded the safe record limit")
+		return providerFailure(errors.New("Grimmory catalog enumeration exceeded the safe record limit"))
 	}
 	_ = observeCatalogReconcileDuration(ProviderGrimmory, CatalogOperationEnumerate, CatalogResultSuccess, catalogMetricSince(started))
 	books := make([]LibraryBook, 0, len(raw))
@@ -346,7 +353,7 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, libraryCatalogError(err)
 		}
 		books = append(books, book)
 	}
@@ -361,7 +368,7 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 		Provider: ProviderGrimmory, Libraries: libraries, Observations: observations,
 	})
 	if err != nil {
-		return nil, err
+		return nil, libraryCatalogError(err)
 	}
 	log.Printf("catalog reconciliation provider=grimmory observed=%d scans=%d backfill_updated=%d", report.Observed, len(report.Scans), report.Backfill.Updated)
 	return books, nil
@@ -372,18 +379,18 @@ var errGrimmoryBookNotFound = errors.New("grimmory book not found")
 func fetchGrimmoryBook(ctx context.Context, id string) (LibraryBook, error) {
 	resp, err := grimmoryGET(ctx, "/api/v1/books/"+id+"?withDescription=true")
 	if err != nil {
-		return LibraryBook{}, err
+		return LibraryBook{}, libraryProviderError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return LibraryBook{}, errGrimmoryBookNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return LibraryBook{}, fmt.Errorf("grimmory book returned %s", resp.Status)
+		return LibraryBook{}, libraryProviderError(fmt.Errorf("grimmory book returned %s", resp.Status))
 	}
 	var raw grimmoryBook
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return LibraryBook{}, err
+		return LibraryBook{}, libraryProviderError(fmt.Errorf("decode Grimmory book: %w", err))
 	}
 	return libraryBookFromGrimmory(raw), nil
 }
@@ -407,10 +414,10 @@ func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
 		return
 	}
-	catalog := &GrimmoryCatalog{repo: catalogRepo, continuity: continuityRepo}
+	catalog := currentGrimmoryCatalog()
 	books, err := catalog.ListItems(r.Context(), user.ID)
 	if err != nil {
-		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
+		writeLibraryMemberError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -418,17 +425,38 @@ func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLibraryBookByID(w http.ResponseWriter, r *http.Request) {
-	rawID, ok := libraryBookID(r)
-	if !ok {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
 		return
 	}
-	_, book, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	rawID, ok := libraryBookID(r)
 	if !ok {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_id", "Invalid Library item ID.")
+		return
+	}
+	catalog := currentGrimmoryCatalog()
+	book, _, err := catalog.GetItem(r.Context(), user.ID, rawID)
+	if err != nil {
+		writeLibraryMemberError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(book)
+}
+
+func writeLibraryMemberError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, errLibraryProviderUnavailable):
+		log.Printf("library member request provider failure request_id=%s: %v", requestIDFrom(r.Context()), err)
+		writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Library is temporarily unavailable.")
+	case errors.Is(err, errCatalogNotFound), errors.Is(err, errCatalogWrongSurface),
+		errors.Is(err, errBookNotAuthorized), errors.Is(err, errGrimmoryBookNotFound):
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+	default:
+		log.Printf("library member request internal failure request_id=%s: %v", requestIDFrom(r.Context()), err)
+		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
+	}
 }
 
 // Grimmory's /api/v1/books/facets endpoint does not exist in the deployed
@@ -1043,7 +1071,10 @@ func validateCurrentGrimmoryBook(ctx context.Context, resolution CatalogResoluti
 		Provider: ProviderGrimmory, UpstreamID: resolution.UpstreamID,
 		LibraryID: libraryID, Surface: SurfaceLibrary, Kind: kind,
 	})
-	if err != nil || observed.ID != resolution.ID || observed.Provider != ProviderGrimmory ||
+	if err != nil {
+		return CatalogResolution{}, LibraryBook{}, libraryCatalogError(err)
+	}
+	if observed.ID != resolution.ID || observed.Provider != ProviderGrimmory ||
 		!observed.Active || !observed.Available {
 		return CatalogResolution{}, LibraryBook{}, errBookNotAuthorized
 	}
@@ -1055,7 +1086,10 @@ func discoverLegacyGrimmoryBook(ctx context.Context, upstreamID string) (Catalog
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
 	book, err := fetchGrimmoryBook(requestCtx, upstreamID)
-	if err != nil || strconv.FormatInt(book.UpstreamID, 10) != upstreamID {
+	if err != nil {
+		return CatalogResolution{}, err
+	}
+	if strconv.FormatInt(book.UpstreamID, 10) != upstreamID {
 		return CatalogResolution{}, errBookNotAuthorized
 	}
 	kind, supported := grimmoryCatalogKind(book.Format)
