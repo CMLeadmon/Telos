@@ -96,6 +96,70 @@ func TestGrimmoryCompleteEnumerationScansThenBackfillsReferences(t *testing.T) {
 	}
 }
 
+func TestGrimmoryCompleteEnumerationKeepsSuppressedInactiveAliasSeen(t *testing.T) {
+	f := withFixture(t)
+	ctx := t.Context()
+	oldDB, oldCatalog, oldAuthorizer := dbPool, catalogRepo, grimmoryAuthorizer
+	dbPool, catalogRepo = f.DB, NewCatalogRepository(f.DB)
+	grimmoryAuthorizer, _ = NewGrimmoryAuthorizer(grimmoryAPIResolver{}, []string{"1"})
+	t.Cleanup(func() {
+		dbPool, catalogRepo, grimmoryAuthorizer = oldDB, oldCatalog, oldAuthorizer
+	})
+
+	alias, err := catalogRepo.Observe(ctx, CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "77", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatalf("seed Grimmory alias: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		UPDATE catalog_sources SET active = false
+		WHERE catalog_item_id = $1::uuid AND provider = 'grimmory'`, alias.ID); err != nil {
+		t.Fatalf("deactivate Grimmory alias: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO catalog_sources
+			(catalog_item_id, provider, upstream_id, upstream_library_id, active, available)
+		VALUES ($1::uuid, 'jellyfin', 'active-audio-77', 'audiobooks', true, true)`, alias.ID); err != nil {
+		t.Fatalf("cut over alias to Jellyfin: %v", err)
+	}
+
+	installGrimmoryEnumerationFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"id":77,"libraryId":1,"metadata":{"title":"Inactive alias"},"primaryFile":{"bookType":"EPUB"}},
+			{"id":78,"libraryId":1,"metadata":{"title":"Unsupported"},"primaryFile":{"bookType":"MOBI"}},
+			{"id":79,"libraryId":2,"metadata":{"title":"Outside allowlist"},"primaryFile":{"bookType":"EPUB"}}
+		]`))
+	})
+
+	books, err := fetchGrimmoryBooks(ctx)
+	if err != nil {
+		t.Fatalf("fetch complete Grimmory enumeration: %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("published books = %+v, want inactive/unsupported/out-of-scope records suppressed", books)
+	}
+	var aliasAvailable bool
+	if err := f.DB.QueryRow(ctx, `
+		SELECT available FROM catalog_sources
+		WHERE provider = 'grimmory' AND upstream_id = '77'`).Scan(&aliasAvailable); err != nil {
+		t.Fatalf("read inactive alias availability: %v", err)
+	}
+	if !aliasAvailable {
+		t.Fatal("complete scan marked a returned inactive Grimmory alias unavailable")
+	}
+	var omittedSources int
+	if err := f.DB.QueryRow(ctx, `
+		SELECT count(*) FROM catalog_sources
+		WHERE provider = 'grimmory' AND upstream_id IN ('78', '79')`).Scan(&omittedSources); err != nil {
+		t.Fatalf("count omitted Grimmory sources: %v", err)
+	}
+	if omittedSources != 0 {
+		t.Fatalf("unsupported or out-of-scope observations created = %d, want zero", omittedSources)
+	}
+}
+
 func TestGrimmoryFailedEnumerationDoesNotCompleteScan(t *testing.T) {
 	f := withFixture(t)
 	oldDB, oldCatalog, oldAuthorizer := dbPool, catalogRepo, grimmoryAuthorizer

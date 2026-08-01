@@ -126,9 +126,13 @@ func enumerateJellyfinCatalog(ctx context.Context) (CatalogEnumeration, error) {
 					Surface: SurfaceStream, Kind: kind,
 				})
 			}
+			previousStartIndex := startIndex
 			startIndex += len(page.Items)
-			if len(page.Items) == 0 || page.TotalRecordCount == 0 || startIndex >= page.TotalRecordCount {
+			if page.TotalRecordCount == 0 || startIndex >= page.TotalRecordCount {
 				break
+			}
+			if startIndex <= previousStartIndex {
+				return CatalogEnumeration{}, errors.New("Jellyfin catalog enumeration made no forward progress before reaching the reported total")
 			}
 		}
 	}

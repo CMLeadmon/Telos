@@ -318,6 +318,17 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	}
 	for _, b := range raw {
 		mapped := libraryBookFromGrimmory(b)
+		kind, supported := grimmoryCatalogKind(mapped.Format)
+		libraryID, allowed := allowedGrimmoryLibraryID(mapped.LibraryID)
+		if !supported || !allowed {
+			continue
+		}
+		librarySet[libraryID] = struct{}{}
+		observations = append(observations, CatalogObservation{
+			Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(mapped.UpstreamID, 10),
+			LibraryID: libraryID, Surface: SurfaceLibrary, Kind: kind,
+		})
+
 		book, err := canonicalizeGrimmoryBook(ctx, mapped)
 		if errors.Is(err, errBookNotAuthorized) || errors.Is(err, errUnsupportedGrimmoryFormat) {
 			continue
@@ -326,12 +337,6 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 			return nil, err
 		}
 		books = append(books, book)
-		librarySet[book.LibraryID] = struct{}{}
-		kind, _ := grimmoryCatalogKind(book.Format)
-		observations = append(observations, CatalogObservation{
-			Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(book.UpstreamID, 10),
-			LibraryID: book.LibraryID, Surface: SurfaceLibrary, Kind: kind,
-		})
 	}
 	libraries := make([]string, 0, len(librarySet))
 	for libraryID := range librarySet {

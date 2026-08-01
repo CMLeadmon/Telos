@@ -202,6 +202,45 @@ func TestRunJellyfinReconciliationRejectsPartialEnumerationBeforeReconcile(t *te
 	}
 }
 
+func TestRunJellyfinReconciliationRejectsPrematureEmptyPageBeforeReconcile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			fmt.Fprint(w, `[{"Id":"user-1","Name":"Telos"}]`)
+		case "/Users/user-1/Views":
+			fmt.Fprint(w, `{"Items":[{"Id":"movies"}]}`)
+		case "/Users/user-1/Items":
+			if r.URL.Query().Get("StartIndex") == "0" {
+				fmt.Fprint(w, `{"Items":[{"Id":"film-1","Type":"Movie"}],"TotalRecordCount":2}`)
+				return
+			}
+			fmt.Fprint(w, `{"Items":[],"TotalRecordCount":2}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	oldBase, oldRedis, oldAuthorizer, oldReconcile := jellyfinBaseURL, redisClient, jellyfinAuthorizer, reconcileCatalogEnumeration
+	jellyfinBaseURL, redisClient = server.URL, nil
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{}, []string{"movies"})
+	reconciled := false
+	reconcileCatalogEnumeration = func(context.Context, CatalogEnumeration) (CatalogReconciliationReport, error) {
+		reconciled = true
+		return CatalogReconciliationReport{}, nil
+	}
+	t.Cleanup(func() {
+		jellyfinBaseURL, redisClient, jellyfinAuthorizer, reconcileCatalogEnumeration = oldBase, oldRedis, oldAuthorizer, oldReconcile
+	})
+
+	if _, err := runJellyfinCatalogReconciliation(t.Context()); err == nil {
+		t.Fatal("premature empty Jellyfin page unexpectedly completed enumeration")
+	}
+	if reconciled {
+		t.Fatal("premature empty Jellyfin page reached CompleteScan/backfill coordinator")
+	}
+}
+
 func joinCatalogIDs(ids []string) string {
 	if len(ids) == 0 {
 		return ""
