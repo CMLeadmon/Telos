@@ -35,6 +35,15 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			ok: true,
 		},
 		{
+			name: "pdf exact upper bounds",
+			kind: "pdf",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"page":100000,"zoom":10}`),
+				Percent: 1,
+			},
+			ok: true,
+		},
+		{
 			name: "audiobook locator",
 			kind: "audiobook",
 			in: ProgressInput{
@@ -173,6 +182,27 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			},
 		},
 		{
+			name: "epub fraction just above one does not round into range",
+			kind: "epub",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"cfi":"x","fraction":1.000000000000000001}`),
+			},
+		},
+		{
+			name: "pdf page just above maximum does not round into range",
+			kind: "pdf",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"page":100000.000000000001,"zoom":1}`),
+			},
+		},
+		{
+			name: "large fractional audiobook track does not round to integer",
+			kind: "audiobook",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"trackIndex":9007199254740992.5}`),
+			},
+		},
+		{
 			name: "pdf page is not an integer",
 			kind: "pdf",
 			in: ProgressInput{
@@ -184,6 +214,13 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			kind: "pdf",
 			in: ProgressInput{
 				Locator: json.RawMessage(`{"page":1,"zoom":10.1}`),
+			},
+		},
+		{
+			name: "pdf zoom just above maximum does not round into range",
+			kind: "pdf",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"page":1,"zoom":10.000000000000000001}`),
 			},
 		},
 		{

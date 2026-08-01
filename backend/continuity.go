@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strings"
 	"time"
 
@@ -78,29 +79,40 @@ func validEPUBProgressLocator(locator map[string]json.RawMessage) bool {
 	if err := json.Unmarshal(locator["cfi"], &cfi); err != nil || strings.TrimSpace(cfi) == "" || len(cfi) > 1024 {
 		return false
 	}
-	return validProgressFloat(locator["fraction"], 0, 1, false)
+	return validProgressNumber(locator["fraction"], "0", "1", false)
 }
 
 func validPDFProgressLocator(locator map[string]json.RawMessage) bool {
-	if len(locator) != 2 || !validProgressFloat(locator["page"], 1, 100000, true) {
+	if len(locator) != 2 || !validProgressNumber(locator["page"], "1", "100000", true) {
 		return false
 	}
-	return validProgressFloat(locator["zoom"], 0.1, 10, false)
+	return validProgressNumber(locator["zoom"], "0.1", "10", false)
 }
 
 func validAudiobookProgressLocator(locator map[string]json.RawMessage) bool {
-	return len(locator) == 1 && validProgressFloat(locator["trackIndex"], 0, math.MaxFloat64, true)
+	return len(locator) == 1 && validProgressNumber(locator["trackIndex"], "0", "", true)
 }
 
-func validProgressFloat(raw json.RawMessage, min, max float64, integer bool) bool {
-	var value float64
-	if len(raw) == 0 || json.Unmarshal(raw, &value) != nil || math.IsNaN(value) || math.IsInf(value, 0) {
+func validProgressNumber(raw json.RawMessage, min, max string, integer bool) bool {
+	var number json.Number
+	if len(raw) == 0 || json.Unmarshal(raw, &number) != nil || number.String() == "" {
 		return false
 	}
-	if value < min || value > max {
+	value, ok := new(big.Rat).SetString(number.String())
+	if !ok {
 		return false
 	}
-	return !integer || value == math.Trunc(value)
+	minimum, ok := new(big.Rat).SetString(min)
+	if !ok || value.Cmp(minimum) < 0 {
+		return false
+	}
+	if max != "" {
+		maximum, ok := new(big.Rat).SetString(max)
+		if !ok || value.Cmp(maximum) > 0 {
+			return false
+		}
+	}
+	return !integer || value.IsInt()
 }
 
 func (r *ContinuityRepository) Get(ctx context.Context, userID, itemID string) (MemberProgress, error) {
