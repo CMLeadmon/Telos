@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -142,7 +144,9 @@ func grimmoryGET(ctx context.Context, path string) (*http.Response, error) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 type LibraryBook struct {
-	ID            int64    `json:"id"`
+	ID            string   `json:"id"`
+	UpstreamID    int64    `json:"-"`
+	LibraryID     string   `json:"-"`
 	Title         string   `json:"title"`
 	Subtitle      string   `json:"subtitle"`
 	Authors       []string `json:"authors"`
@@ -175,9 +179,10 @@ type LibraryFacets struct {
 
 // grimmoryBook is the verified upstream shape (BookLore GET /api/v1/books).
 type grimmoryBook struct {
-	ID          int64  `json:"id"`
-	AddedOn     string `json:"addedOn"`
-	LibraryName string `json:"libraryName"`
+	ID          int64           `json:"id"`
+	LibraryID   json.RawMessage `json:"libraryId"`
+	AddedOn     string          `json:"addedOn"`
+	LibraryName string          `json:"libraryName"`
 	Metadata    struct {
 		Title         string   `json:"title"`
 		Subtitle      string   `json:"subtitle"`
@@ -200,7 +205,8 @@ type grimmoryBook struct {
 
 func libraryBookFromGrimmory(b grimmoryBook) LibraryBook {
 	return LibraryBook{
-		ID: b.ID, Title: b.Metadata.Title, Subtitle: b.Metadata.Subtitle,
+		UpstreamID: b.ID, LibraryID: grimmoryLibraryID(b.LibraryID),
+		Title: b.Metadata.Title, Subtitle: b.Metadata.Subtitle,
 		Authors: b.Metadata.Authors, Categories: b.Metadata.Categories,
 		Language: b.Metadata.Language, Description: b.Metadata.Description,
 		SeriesName: b.Metadata.SeriesName, SeriesNumber: b.Metadata.SeriesNumber,
@@ -209,6 +215,74 @@ func libraryBookFromGrimmory(b grimmoryBook) LibraryBook {
 		Format: b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
 		AddedOn: b.AddedOn, Library: b.LibraryName,
 	}
+}
+
+func grimmoryLibraryID(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(raw, &text) == nil {
+		return strings.TrimSpace(text)
+	}
+	var number json.Number
+	if json.Unmarshal(raw, &number) == nil {
+		return number.String()
+	}
+	return ""
+}
+
+func grimmoryCatalogKind(format string) (CatalogKind, bool) {
+	switch strings.ToUpper(strings.TrimSpace(format)) {
+	case "EPUB":
+		return "epub", true
+	case "PDF":
+		return "pdf", true
+	case "AUDIOBOOK":
+		return "audiobook", true
+	default:
+		return "", false
+	}
+}
+
+func allowedGrimmoryLibraryID(libraryID string) (string, bool) {
+	if grimmoryAuthorizer == nil {
+		return libraryID, libraryID != ""
+	}
+	if libraryID != "" {
+		_, ok := grimmoryAuthorizer.allowed[libraryID]
+		return libraryID, ok
+	}
+	if len(grimmoryAuthorizer.allowed) != 1 {
+		return "", false
+	}
+	for id := range grimmoryAuthorizer.allowed {
+		return id, true
+	}
+	return "", false
+}
+
+var errUnsupportedGrimmoryFormat = errors.New("unsupported Grimmory book format")
+
+func canonicalizeGrimmoryBook(ctx context.Context, book LibraryBook) (LibraryBook, error) {
+	kind, ok := grimmoryCatalogKind(book.Format)
+	if !ok {
+		return LibraryBook{}, errUnsupportedGrimmoryFormat
+	}
+	libraryID, ok := allowedGrimmoryLibraryID(book.LibraryID)
+	if !ok {
+		return LibraryBook{}, errBookNotAuthorized
+	}
+	resolution, err := observeCatalogIdentity(ctx, CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(book.UpstreamID, 10),
+		LibraryID: libraryID, Surface: SurfaceLibrary, Kind: kind,
+	})
+	if err != nil {
+		return LibraryBook{}, err
+	}
+	book.ID = resolution.ID
+	book.LibraryID = libraryID
+	return book, nil
 }
 
 func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
@@ -235,7 +309,14 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	}
 	books := make([]LibraryBook, 0, len(raw))
 	for _, b := range raw {
-		books = append(books, libraryBookFromGrimmory(b))
+		book, err := canonicalizeGrimmoryBook(ctx, libraryBookFromGrimmory(b))
+		if errors.Is(err, errBookNotAuthorized) || errors.Is(err, errUnsupportedGrimmoryFormat) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		books = append(books, book)
 	}
 	return books, nil
 }
@@ -265,7 +346,7 @@ func fetchGrimmoryBook(ctx context.Context, id string) (LibraryBook, error) {
 // are returned to callers; fabricated catalog entries must never look real or
 // be embedded into durable chat history.
 func getLibraryBooks(ctx context.Context) ([]LibraryBook, error) {
-	const cacheKey = "telos:grimmory:books"
+	const cacheKey = "telos:grimmory:books:canonical-v1"
 	if redisClient != nil {
 		if val, err := redisClient.Get(ctx, cacheKey).Result(); err == nil && val != "" {
 			var books []LibraryBook
@@ -298,14 +379,18 @@ func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLibraryBookByID(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	if !ok {
+		return
+	}
 	requestCtx, cancel := upstreamRequestContext(r.Context())
 	defer cancel()
-	book, err := fetchGrimmoryBook(requestCtx, id)
+	book, err := fetchGrimmoryBook(requestCtx, resolution.UpstreamID)
 	if errors.Is(err, errGrimmoryBookNotFound) {
 		http.Error(w, "book not found", http.StatusNotFound)
 		return
@@ -314,6 +399,8 @@ func handleLibraryBookByID(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
 		return
 	}
+	book.ID = resolution.ID
+	book.LibraryID = resolution.LibraryID
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(book)
 }
@@ -441,11 +528,16 @@ func invalidateLibraryCache(ctx context.Context) {
 }
 
 func handleUpdateLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
 		return
 	}
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookManage)
+	if !ok {
+		return
+	}
+	id := resolution.UpstreamID
 	var metadata LibraryMetadata
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	if err := decoder.Decode(&metadata); err != nil {
@@ -488,6 +580,8 @@ func handleUpdateLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
 		writeLibraryError(w, http.StatusBadGateway, "could not reload updated book")
 		return
 	}
+	book.ID = resolution.ID
+	book.LibraryID = resolution.LibraryID
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(book)
 }
@@ -556,11 +650,16 @@ func decodeProspectiveMetadata(body io.Reader) ([]LibraryMetadataCandidate, erro
 }
 
 func handleFetchLibraryBookMetadata(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
 		return
 	}
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookManage)
+	if !ok {
+		return
+	}
+	id := resolution.UpstreamID
 	// These are every MetadataProvider enum value in the deployed image.
 	payload, _ := json.Marshal(map[string]any{"providers": []string{
 		"Amazon", "GoodReads", "Google", "Hardcover", "Comicvine",
@@ -728,11 +827,16 @@ func forwardCoverToGrimmory(ctx context.Context, id string, data []byte, content
 }
 
 func handleUpdateLibraryBookCover(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
 		return
 	}
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookManage)
+	if !ok {
+		return
+	}
+	id := resolution.UpstreamID
 	var data []byte
 	var contentType string
 	var status int
@@ -774,14 +878,16 @@ func handleUpdateLibraryBookCover(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleDeleteLibraryBook(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		writeLibraryError(w, http.StatusBadRequest, "invalid book id")
 		return
 	}
-	if !authorizeBookHTTP(w, r, id, BookManage) {
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookManage)
+	if !ok {
 		return
 	}
+	id := resolution.UpstreamID
 	ctx, cancel := upstreamRequestContext(r.Context())
 	defer cancel()
 	resp, err := grimmoryRequest(ctx, upstreamHTTPClient, http.MethodDelete,
@@ -862,32 +968,56 @@ func libraryBookID(r *http.Request) (string, bool) {
 	if id == "" {
 		return "", false
 	}
+	if looksLikeUUID(id) {
+		return id, true
+	}
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
 		return "", false
 	}
 	return id, true
 }
 
+func resolveGrimmoryBookHTTP(w http.ResponseWriter, r *http.Request, rawID string, action BookAction) (CatalogResolution, bool) {
+	resolution, err := resolveCatalogIdentity(r.Context(), rawID, SurfaceLibrary)
+	if err != nil || resolution.Provider != ProviderGrimmory || !resolution.Active || !resolution.Available {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return CatalogResolution{}, false
+	}
+	if libraryID, allowed := allowedGrimmoryLibraryID(resolution.LibraryID); !allowed || libraryID != resolution.LibraryID {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return CatalogResolution{}, false
+	}
+	if !authorizeBookHTTP(w, r, resolution.UpstreamID, action) {
+		return CatalogResolution{}, false
+	}
+	return resolution, true
+}
+
 func handleLibraryBookCover(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
+		return
+	}
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	if !ok {
 		return
 	}
 	// Upstream serves JPEG bytes with a JSON content-type — force the real one.
-	proxyGrimmoryBinary(w, r, "/api/v1/media/book/"+id+"/thumbnail", "image/jpeg")
+	proxyGrimmoryBinary(w, r, "/api/v1/media/book/"+resolution.UpstreamID+"/thumbnail", "image/jpeg")
 }
 
 func handleLibraryBookContent(w http.ResponseWriter, r *http.Request) {
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
 		return
 	}
-	if !authorizeBookHTTP(w, r, id, BookRead) {
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	if !ok {
 		return
 	}
-	proxyGrimmoryBinary(w, r, "/api/v1/books/"+id+"/content", "")
+	proxyGrimmoryBinary(w, r, "/api/v1/books/"+resolution.UpstreamID+"/content", "")
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1005,40 +1135,57 @@ func validateZoomField(raw json.RawMessage) error {
 
 func handleGetBookProgress(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
 		return
 	}
-	if !authorizeBookHTTP(w, r, id, BookRead) {
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	if !ok {
 		return
 	}
-	var locator []byte
-	var percent float64
-	var updated time.Time
-	err := dbPool.QueryRow(r.Context(), `
-		SELECT locator, percent, updated_at FROM book_progress
-		WHERE user_id = $1 AND book_id = $2
-	`, user.ID, id).Scan(&locator, &percent, &updated)
+	progress, err := getMemberContinuity(r.Context(), user.ID, resolution.ID)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	if progress.UpdatedAt == nil && (resolution.Kind == "epub" || resolution.Kind == "pdf") {
+		var locator json.RawMessage
+		var percent float64
+		var updated time.Time
+		err = dbPool.QueryRow(r.Context(), `
+			SELECT locator, percent, updated_at FROM book_progress
+			WHERE user_id = $1 AND book_id = $2
+		`, user.ID, resolution.UpstreamID).Scan(&locator, &percent, &updated)
+		if err == nil {
+			progress, err = putMemberContinuity(r.Context(), user.ID, resolution.ID, ProgressInput{
+				Locator: locator, Percent: percent, Completed: percent >= 1,
+			})
+			if err != nil {
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	if err != nil { // no row yet — zero progress
-		w.Write([]byte(`{"locator":{},"percent":0,"updatedAt":null}`))
-		return
+	if len(progress.Locator) == 0 {
+		progress.Locator = json.RawMessage(`{}`)
 	}
-	json.NewEncoder(w).Encode(map[string]any{
-		"locator": json.RawMessage(locator), "percent": percent,
-		"updatedAt": updated.Format(time.RFC3339),
-	})
+	json.NewEncoder(w).Encode(progress)
 }
 
 func handlePutBookProgress(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
-	id, ok := libraryBookID(r)
+	rawID, ok := libraryBookID(r)
 	if !ok {
 		http.Error(w, "Invalid book id", http.StatusBadRequest)
 		return
 	}
-	if !authorizeBookHTTP(w, r, id, BookRead) {
+	resolution, ok := resolveGrimmoryBookHTTP(w, r, rawID, BookRead)
+	if !ok {
 		return
 	}
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
@@ -1046,28 +1193,32 @@ func handlePutBookProgress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
-	// The format is server-derived so the locator is validated for the real book.
-	reqCtx, cancel := upstreamRequestContext(r.Context())
-	defer cancel()
-	book, berr := fetchGrimmoryBook(reqCtx, id)
-	if berr != nil {
-		writeLibraryError(w, http.StatusBadGateway, "the book service is unavailable")
+	var input ProgressInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
-	locator, percent, err := validateBookProgress(book.Format, raw)
+	input, err = ValidateProgress(resolution.Kind, input)
 	if err != nil {
 		http.Error(w, "Bad Request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := dbPool.Exec(r.Context(), `
-		INSERT INTO book_progress (user_id, book_id, locator, percent, updated_at)
-		VALUES ($1, $2, $3, $4, NOW())
-		ON CONFLICT (user_id, book_id)
-		DO UPDATE SET locator = EXCLUDED.locator, percent = EXCLUDED.percent, updated_at = NOW()
-	`, user.ID, id, locator, percent); err != nil {
+	progress, err := putMemberContinuity(r.Context(), user.ID, resolution.ID, input)
+	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	if resolution.Kind == "epub" || resolution.Kind == "pdf" {
+		if _, err := dbPool.Exec(r.Context(), `
+			INSERT INTO book_progress (user_id, book_id, locator, percent, updated_at)
+			VALUES ($1, $2, $3, $4, NOW())
+			ON CONFLICT (user_id, book_id)
+			DO UPDATE SET locator = EXCLUDED.locator, percent = EXCLUDED.percent, updated_at = NOW()
+		`, user.ID, resolution.UpstreamID, input.Locator, input.Percent); err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+	json.NewEncoder(w).Encode(progress)
 }

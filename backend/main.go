@@ -42,6 +42,12 @@ var (
 	// dbPool is the PostgreSQL connection pool, initialised at startup.
 	dbPool *pgxpool.Pool
 
+	// Canonical catalog identity and cross-surface continuity are mandatory
+	// database-backed services. Startup initializes them immediately after the
+	// database connection succeeds; handlers fail closed if tests omit them.
+	catalogRepo    *CatalogRepository
+	continuityRepo *ContinuityRepository
+
 	// redisClient is the Redis connection used for pub/sub and caching.
 	redisClient *redis.Client
 
@@ -68,6 +74,33 @@ var (
 		ResponseHeaderTimeout: 10 * time.Second,
 	}
 	upstreamHTTPClient = &http.Client{Transport: upstreamTransport}
+)
+
+var (
+	observeCatalogIdentity = func(ctx context.Context, in CatalogObservation) (CatalogResolution, error) {
+		if catalogRepo == nil {
+			return CatalogResolution{}, errors.New("catalog repository is not initialized")
+		}
+		return catalogRepo.Observe(ctx, in)
+	}
+	resolveCatalogIdentity = func(ctx context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		if catalogRepo == nil {
+			return CatalogResolution{}, errors.New("catalog repository is not initialized")
+		}
+		return catalogRepo.ResolveFor(ctx, rawID, surface)
+	}
+	getMemberContinuity = func(ctx context.Context, userID, itemID string) (MemberProgress, error) {
+		if continuityRepo == nil {
+			return MemberProgress{}, errors.New("continuity repository is not initialized")
+		}
+		return continuityRepo.Get(ctx, userID, itemID)
+	}
+	putMemberContinuity = func(ctx context.Context, userID, itemID string, in ProgressInput) (MemberProgress, error) {
+		if continuityRepo == nil {
+			return MemberProgress{}, errors.New("continuity repository is not initialized")
+		}
+		return continuityRepo.Put(ctx, userID, itemID, in)
+	}
 )
 
 const upstreamRequestTimeout = 15 * time.Second
@@ -242,6 +275,8 @@ func main() {
 		log.Fatalf("Critical: Failed to connect to database: %v", err)
 	}
 	defer dbPool.Close()
+	catalogRepo = NewCatalogRepository(dbPool)
+	continuityRepo = NewContinuityRepository(dbPool)
 
 	// Serve path only verifies migration state; the one-shot telos-migrate
 	// service (schema owner) is responsible for applying. In a single-role
@@ -1811,9 +1846,10 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 
 	switch kind {
 	case "library_book":
-		id, err := strconv.ParseInt(ref, 10, 64)
-		if err != nil {
-			return nil, errors.New("invalid book id")
+		if !looksLikeUUID(ref) {
+			if _, err := strconv.ParseInt(ref, 10, 64); err != nil {
+				return nil, errors.New("invalid book id")
+			}
 		}
 		books, err := getLibraryBooks(ctx)
 		if err != nil {
@@ -1821,11 +1857,11 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 		}
 		found := false
 		for _, b := range books {
-			if b.ID == id {
+			if b.ID == ref || strconv.FormatInt(b.UpstreamID, 10) == ref {
 				snapshot.Title = b.Title
 				snapshot.Subtitle = strings.Join(b.Authors, ", ")
 				snapshot.Kicker = "Library Book"
-				snapshot.Cover = "/api/v1/library/books/" + ref + "/cover"
+				snapshot.Cover = "/api/v1/library/books/" + b.ID + "/cover"
 				found = true
 				break
 			}
@@ -2492,7 +2528,7 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if redisClient != nil {
-		val, err := redisClient.Get(ctx, "telos:jellyfin:libraries").Result()
+		val, err := redisClient.Get(ctx, "telos:jellyfin:libraries:canonical-v1").Result()
 		if err == nil && val != "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(val))
@@ -2544,6 +2580,9 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 
 	var libs []LibraryItem
 	for _, item := range jResp.Items {
+		if !jellyfinLibraryAllowed(item.ID) {
+			continue
+		}
 		mediaType := "video"
 		cType := strings.ToLower(item.CollectionType)
 		// Jellyfin 10.9+ has no distinct "audiobooks" collection type; audiobook
@@ -2552,8 +2591,13 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 		if cType == "music" || cType == "audiobooks" || cType == "audio" || cType == "podcasts" || cType == "books" {
 			mediaType = "audio"
 		}
+		resolution, err := observeJellyfinCatalogItem(ctx, item.ID, item.ID, "", true)
+		if err != nil {
+			http.Error(w, "Failed to reconcile Jellyfin Views response", http.StatusServiceUnavailable)
+			return
+		}
 		libs = append(libs, LibraryItem{
-			ID:             item.ID,
+			ID:             resolution.ID,
 			Name:           item.Name,
 			Type:           mediaType,
 			CollectionType: cType,
@@ -2567,7 +2611,7 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if redisClient != nil {
-		_ = redisClient.Set(ctx, "telos:jellyfin:libraries", string(respJSON), 5*time.Minute).Err()
+		_ = redisClient.Set(ctx, "telos:jellyfin:libraries:canonical-v1", string(respJSON), 5*time.Minute).Err()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2891,16 +2935,21 @@ func mapJellyfinChildren(items []jellyfinChildItem) []MediaPlayableItem {
 
 func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	parentId := r.URL.Query().Get("parentId")
-	if parentId == "" {
-		parentId = r.URL.Query().Get("libraryId")
+	rawParentID := r.URL.Query().Get("parentId")
+	if rawParentID == "" {
+		rawParentID = r.URL.Query().Get("libraryId")
 	}
-	if !validJellyfinID(parentId) {
+	if !validJellyfinID(rawParentID) {
 		http.Error(w, "Missing parentId or libraryId parameter", http.StatusBadRequest)
 		return
 	}
+	parent, ok := resolveJellyfinItemHTTP(w, r, rawParentID)
+	if !ok {
+		return
+	}
+	parentID := parent.UpstreamID
 
-	cacheKey := fmt.Sprintf("telos:jellyfin:library-items:%s", parentId)
+	cacheKey := fmt.Sprintf("telos:jellyfin:library-items:canonical-v1:%s", parentID)
 	if redisClient != nil {
 		val, err := redisClient.Get(ctx, cacheKey).Result()
 		if err == nil && val != "" {
@@ -2917,7 +2966,7 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := getJellyfinAdminToken()
-	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&SortBy=IndexNumber,SortName&SortOrder=Ascending&Fields=ChildCount", jellyfinBaseURL, userID, parentId)
+	reqURL := fmt.Sprintf("%s/Users/%s/Items?ParentId=%s&SortBy=IndexNumber,SortName&SortOrder=Ascending&Fields=ChildCount", jellyfinBaseURL, userID, parentID)
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
 	req, err := http.NewRequestWithContext(requestCtx, "GET", reqURL, nil)
@@ -2948,7 +2997,37 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	items := mapJellyfinChildren(jResp.Items)
+	authorized := make(map[string]AuthorizedMediaItem, len(jResp.Items))
+	if jellyfinAuthorizer == nil {
+		for _, item := range jResp.Items {
+			authorized[item.ID] = AuthorizedMediaItem{ID: item.ID, LibraryID: parent.LibraryID, MediaType: item.Type, IsFolder: item.IsFolder}
+		}
+	} else {
+		ids := make([]string, 0, len(jResp.Items))
+		for _, item := range jResp.Items {
+			ids = append(ids, item.ID)
+		}
+		var err error
+		authorized, err = jellyfinAuthorizer.AuthorizeItems(ctx, ids)
+		if err != nil {
+			http.Error(w, "Jellyfin authorization failed", http.StatusServiceUnavailable)
+			return
+		}
+	}
+	items := make([]MediaPlayableItem, 0, len(jResp.Items))
+	for _, rawItem := range jResp.Items {
+		authorizedItem, ok := authorized[rawItem.ID]
+		if !ok || !jellyfinLibraryAllowed(authorizedItem.LibraryID) {
+			continue
+		}
+		resolution, err := observeJellyfinCatalogItem(ctx, rawItem.ID, authorizedItem.LibraryID, rawItem.Type, rawItem.IsFolder)
+		if err != nil {
+			continue
+		}
+		mapped := mapJellyfinChildren([]jellyfinChildItem{rawItem})[0]
+		mapped.ID = resolution.ID
+		items = append(items, mapped)
+	}
 
 	respJSON, err := json.Marshal(items)
 	if err != nil {
@@ -2966,13 +3045,18 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 
 func handleMediaItemByID(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	id := r.PathValue("id")
-	if !validJellyfinID(id) {
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
 		http.Error(w, "missing item id", 400)
 		return
 	}
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
+		return
+	}
+	id := resolution.UpstreamID
 
-	cacheKey := fmt.Sprintf("telos:jellyfin:item:%s", id)
+	cacheKey := fmt.Sprintf("telos:jellyfin:item:canonical-v1:%s", id)
 	if redisClient != nil {
 		val, err := redisClient.Get(ctx, cacheKey).Result()
 		if err == nil && val != "" {
@@ -3034,13 +3118,13 @@ func handleMediaItemByID(w http.ResponseWriter, r *http.Request) {
 
 	durationSec := rawItem.RunTimeTicks / 10000000
 	result := map[string]interface{}{
-		"id":          rawItem.ID,
+		"id":          resolution.ID,
 		"title":       rawItem.Name,
 		"year":        rawItem.ProductionYear,
 		"director":    "",
 		"durationSec": durationSec,
 		"kind":        strings.ToLower(rawItem.Type),
-		"coverUrl":    "/api/v1/media/items/" + rawItem.ID + "/cover",
+		"coverUrl":    "/api/v1/media/items/" + resolution.ID + "/cover",
 	}
 	if len(rawItem.Studios) > 0 {
 		result["director"] = rawItem.Studios[0].Name
@@ -3056,27 +3140,28 @@ func handleMediaItemByID(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleMediaItemCover(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !validJellyfinID(id) {
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
 		http.Error(w, "missing item id", 400)
 		return
 	}
-
-	if !authorizeJellyfinItem(w, r, id) {
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
 		return
 	}
 	token := getJellyfinAdminToken()
-	targetURL := fmt.Sprintf("%s/Items/%s/Images/Primary", jellyfinBaseURL, id)
+	targetURL := fmt.Sprintf("%s/Items/%s/Images/Primary", jellyfinBaseURL, resolution.UpstreamID)
 	proxyRequest(w, r, targetURL, token, nil)
 }
 
 func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !validJellyfinID(id) {
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
-	if !authorizeJellyfinItem(w, r, id) {
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
 		return
 	}
 	release, ok := acquireStreamSlot(w, r)
@@ -3085,17 +3170,18 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	token := getJellyfinAdminToken()
-	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, id)
+	targetURL := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, resolution.UpstreamID)
 	proxyRequest(w, r, targetURL, token, nil)
 }
 
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if !validJellyfinID(id) {
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
 		http.Error(w, "Missing item ID", http.StatusBadRequest)
 		return
 	}
-	if !authorizeJellyfinItem(w, r, id) {
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
 		return
 	}
 
@@ -3107,7 +3193,7 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := getJellyfinAdminToken()
-	playbackInfoURL := fmt.Sprintf("%s/Items/%s/PlaybackInfo?UserId=%s", jellyfinBaseURL, id, userID)
+	playbackInfoURL := fmt.Sprintf("%s/Items/%s/PlaybackInfo?UserId=%s", jellyfinBaseURL, resolution.UpstreamID, userID)
 
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
@@ -3144,25 +3230,26 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 		jResp.PlaySessionId = fmt.Sprintf("telos-session-%d", time.Now().UnixNano())
 	}
 
-	redirectURL := fmt.Sprintf("/api/v1/stream/video/%s/main.m3u8?PlaySessionId=%s", id, jResp.PlaySessionId)
+	redirectURL := fmt.Sprintf("/api/v1/stream/video/%s/main.m3u8?PlaySessionId=%s", resolution.ID, jResp.PlaySessionId)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
 func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	rawID := r.PathValue("id")
 	subpath := r.PathValue("path")
-	if !validJellyfinID(id) || !validUpstreamSubpath(subpath) {
+	if !validJellyfinID(rawID) || !validUpstreamSubpath(subpath) {
 		http.Error(w, "Missing item ID or subpath", http.StatusBadRequest)
 		return
 	}
-	if !authorizeJellyfinItem(w, r, id) {
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
 		return
 	}
 	// A manifest is rewritten server-side so every segment/key/variant URI
 	// becomes an opaque, token-free Telos locator; only non-manifest binaries
 	// reached directly here are proxied (segments now arrive via /api/v1/hls).
 	if strings.HasSuffix(subpath, ".m3u8") {
-		serveRewrittenManifest(w, r, id, subpath, r.URL.RawQuery)
+		serveRewrittenManifest(w, r, resolution.UpstreamID, subpath, r.URL.RawQuery)
 		return
 	}
 	release, ok := acquireStreamSlot(w, r)
@@ -3171,7 +3258,7 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	token := getJellyfinAdminToken()
-	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, id, subpath)
+	targetURL := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, resolution.UpstreamID, subpath)
 	proxyRequest(w, r, targetURL, token, jellyfinStreamQueryKeys)
 }
 

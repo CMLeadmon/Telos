@@ -2,8 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeJellyfinResolver struct {
@@ -80,5 +86,178 @@ func TestJellyfinAuthorizerBatchIsBounded(t *testing.T) {
 	a.AuthorizeItems(context.Background(), ids)
 	if resolver.calls.Load() != 1 {
 		t.Fatalf("cache miss: resolver called %d times", resolver.calls.Load())
+	}
+}
+
+func TestLegacyJellyfinIDResolvesBeforeAuthorizationAndUpstream(t *testing.T) {
+	events := []string{}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		events = append(events, "resolve:"+rawID)
+		return CatalogResolution{
+			ID: "00000000-0000-4000-8000-000000000017", Surface: surface,
+			Kind: "video", Provider: ProviderJellyfin, UpstreamID: "current-movie",
+			LibraryID: "lib-allowed", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	resolver := &eventJellyfinResolver{events: &events}
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(resolver, []string{"lib-allowed"})
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "upstream:"+r.URL.Path)
+		fmt.Fprint(w, "jpeg")
+	}))
+	defer upstream.Close()
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = upstream.URL
+	t.Cleanup(func() { jellyfinBaseURL = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/legacy-movie/cover", nil)
+	req.SetPathValue("id", "legacy-movie")
+	rec := httptest.NewRecorder()
+	handleMediaItemCover(rec, req)
+
+	want := []string{"resolve:legacy-movie", "authorize:current-movie", "upstream:/Items/current-movie/Images/Primary"}
+	if strings.Join(events, "|") != strings.Join(want, "|") {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+type eventJellyfinResolver struct{ events *[]string }
+
+func (r *eventJellyfinResolver) ResolveItems(_ context.Context, ids []string) (map[string]resolvedItem, error) {
+	out := make(map[string]resolvedItem, len(ids))
+	for _, id := range ids {
+		*r.events = append(*r.events, "authorize:"+id)
+		out[id] = resolvedItem{MediaType: "Video", AncestorIDs: []string{"lib-allowed"}}
+	}
+	return out, nil
+}
+
+func TestCanonicalVideoRouteUsesUpstreamPlaybackIDAndCanonicalRedirect(t *testing.T) {
+	canonicalID := "00000000-0000-4000-8000-000000000018"
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{ID: canonicalID, Surface: surface, Kind: "video", Provider: ProviderJellyfin,
+			UpstreamID: "movie-18", LibraryID: "lib-allowed", Active: true, Available: true}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{items: map[string]resolvedItem{
+		"movie-18": {MediaType: "Video", AncestorIDs: []string{"lib-allowed"}},
+	}}, []string{"lib-allowed"})
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "user-1", "Name": "admin"}})
+		case "/Items/movie-18/PlaybackInfo":
+			json.NewEncoder(w).Encode(map[string]string{"PlaySessionId": "play-18"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = upstream.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream/video/"+canonicalID, nil)
+	req.SetPathValue("id", canonicalID)
+	rec := httptest.NewRecorder()
+	handleStreamVideo(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	want := "/api/v1/stream/video/" + canonicalID + "/main.m3u8?PlaySessionId=play-18"
+	if got := rec.Header().Get("Location"); got != want {
+		t.Fatalf("redirect = %q, want %q", got, want)
+	}
+}
+
+func TestCanonicalAudioRouteUsesUpstreamJellyfinID(t *testing.T) {
+	canonicalID := "00000000-0000-4000-8000-000000000020"
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{ID: canonicalID, Surface: surface, Kind: "audio", Provider: ProviderJellyfin,
+			UpstreamID: "track-20", LibraryID: "lib-allowed", Active: true, Available: true}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{items: map[string]resolvedItem{
+		"track-20": {MediaType: "Audio", AncestorIDs: []string{"lib-allowed"}},
+	}}, []string{"lib-allowed"})
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	upstreamPath := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		fmt.Fprint(w, "audio")
+	}))
+	defer upstream.Close()
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = upstream.URL
+	t.Cleanup(func() { jellyfinBaseURL = oldBase })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream/audio/"+canonicalID, nil)
+	req.SetPathValue("id", canonicalID)
+	rec := httptest.NewRecorder()
+	handleStreamAudio(rec, req)
+	if rec.Code != http.StatusOK || upstreamPath != "/Audio/track-20/stream" {
+		t.Fatalf("status=%d upstream=%q body=%s", rec.Code, upstreamPath, rec.Body.String())
+	}
+}
+
+func TestCanonicalHLSRouteKeepsUpstreamIDInsideOpaqueLocator(t *testing.T) {
+	canonicalID := "00000000-0000-4000-8000-000000000019"
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{ID: canonicalID, Surface: surface, Kind: "video", Provider: ProviderJellyfin,
+			UpstreamID: "movie-19", LibraryID: "lib-allowed", Active: true, Available: true}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(&fakeJellyfinResolver{items: map[string]resolvedItem{
+		"movie-19": {MediaType: "Video", AncestorIDs: []string{"lib-allowed"}},
+	}}, []string{"lib-allowed"})
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	upstreamPath := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		fmt.Fprint(w, "#EXTM3U\n/jellyfin/Videos/movie-19/seg.ts")
+	}))
+	defer upstream.Close()
+	oldBase, oldKey := jellyfinBaseURL, hlsSigningKey
+	jellyfinBaseURL, hlsSigningKey = upstream.URL, []byte("01234567890123456789012345678901")
+	t.Cleanup(func() { jellyfinBaseURL, hlsSigningKey = oldBase, oldKey })
+
+	userID := "00000000-0000-4000-8000-000000000111"
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream/video/"+canonicalID+"/main.m3u8", nil)
+	req.SetPathValue("id", canonicalID)
+	req.SetPathValue("path", "main.m3u8")
+	req.AddCookie(&http.Cookie{Name: "telos_session", Value: "session19"})
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	rec := httptest.NewRecorder()
+	handleStreamVideoSubpath(rec, req)
+	if rec.Code != http.StatusOK || upstreamPath != "/Videos/movie-19/main.m3u8" {
+		t.Fatalf("status=%d upstream=%q body=%s", rec.Code, upstreamPath, rec.Body.String())
+	}
+	lines := strings.Split(strings.TrimSpace(rec.Body.String()), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[1], "/api/v1/hls/") {
+		t.Fatalf("manifest = %q", rec.Body.String())
+	}
+	loc, err := verifyHLSLocator(strings.TrimPrefix(lines[1], "/api/v1/hls/"), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loc.Item != "movie-19" || loc.User != userID {
+		t.Fatalf("locator = %+v, want internal upstream item", loc)
 	}
 }

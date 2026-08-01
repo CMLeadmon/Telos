@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -17,6 +18,7 @@ import (
 
 func setupManagementGrimmory(t *testing.T, upstream http.HandlerFunc) func() {
 	t.Helper()
+	installCatalogIdentityTest(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -92,6 +94,7 @@ func fakeGrimmory(t *testing.T, logins *int) *httptest.Server {
 
 func setupGrimmoryTest(t *testing.T) func() {
 	t.Helper()
+	installCatalogIdentityTest(t)
 	logins := 0
 	srv := fakeGrimmory(t, &logins)
 	oldURL := grimmoryBaseURL
@@ -104,7 +107,7 @@ func setupGrimmoryTest(t *testing.T) func() {
 	return func() { grimmoryBaseURL = oldURL; srv.Close() }
 }
 
-func TestHandleLibraryBooksTranslates(t *testing.T) {
+func TestHandleLibraryBooksReturnsCanonicalID(t *testing.T) {
 	defer setupGrimmoryTest(t)()
 	req := httptest.NewRequest("GET", "/api/v1/library/books", nil)
 	rec := httptest.NewRecorder()
@@ -119,6 +122,9 @@ func TestHandleLibraryBooksTranslates(t *testing.T) {
 	if len(books) != 1 || books[0].Title != "Pride and Prejudice" ||
 		books[0].Format != "EPUB" || books[0].Authors[0] != "Jane Austen" {
 		t.Fatalf("bad translation: %+v", books)
+	}
+	if !looksLikeUUID(fmt.Sprint(books[0].ID)) {
+		t.Fatalf("public id = %q, want canonical UUID", fmt.Sprint(books[0].ID))
 	}
 }
 
@@ -161,6 +167,24 @@ func TestHandleLibraryBookContentStreams(t *testing.T) {
 	}
 	if !bytes.HasPrefix(rec.Body.Bytes(), []byte("PK")) {
 		t.Fatal("expected epub bytes")
+	}
+}
+
+func TestCanonicalLibraryBookContentUsesLegacyGrimmoryID(t *testing.T) {
+	defer setupGrimmoryTest(t)()
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "1", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/"+resolution.ID+"/content", nil)
+	req.SetPathValue("id", resolution.ID)
+	rec := httptest.NewRecorder()
+	handleLibraryBookContent(rec, req)
+	if rec.Code != http.StatusOK || !bytes.HasPrefix(rec.Body.Bytes(), []byte("PK")) {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.Bytes())
 	}
 }
 
@@ -274,6 +298,107 @@ func TestValidateBookProgressFormatSpecific(t *testing.T) {
 	}
 }
 
+func TestGrimmoryCatalogKindDoesNotMislabelUnknownFormats(t *testing.T) {
+	for _, format := range []string{"EPUB", "PDF", "AUDIOBOOK"} {
+		if _, ok := grimmoryCatalogKind(format); !ok {
+			t.Fatalf("supported format %q rejected", format)
+		}
+	}
+	if kind, ok := grimmoryCatalogKind("MOBI"); ok || kind != "" {
+		t.Fatalf("MOBI mapped to %q, want unsupported", kind)
+	}
+}
+
+func TestLegacyBookProgressMigratesToCanonicalContinuity(t *testing.T) {
+	f := withFixture(t)
+	oldCatalog, oldContinuity := catalogRepo, continuityRepo
+	catalogRepo, continuityRepo = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB)
+	t.Cleanup(func() { catalogRepo, continuityRepo = oldCatalog, oldContinuity })
+
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash) VALUES ('reader-progress', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	book, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "7", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `
+		INSERT INTO book_progress (user_id, book_id, locator, percent)
+		VALUES ($1::uuid, 7, '{"cfi":"legacy","fraction":0.4}'::jsonb, 0.4)`, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/7/progress", nil)
+	req.SetPathValue("id", "7")
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	rec := httptest.NewRecorder()
+	handleGetBookProgress(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var canonicalRows int
+	if err := f.DB.QueryRow(t.Context(), `
+		SELECT count(*) FROM member_progress
+		WHERE user_id=$1::uuid AND catalog_item_id=$2::uuid`, userID, book.ID).Scan(&canonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalRows != 1 {
+		t.Fatalf("canonical progress rows = %d, want 1", canonicalRows)
+	}
+}
+
+func TestBookProgressDualWritesOnlyEPUBAndPDF(t *testing.T) {
+	f := withFixture(t)
+	oldCatalog, oldContinuity := catalogRepo, continuityRepo
+	catalogRepo, continuityRepo = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB)
+	t.Cleanup(func() { catalogRepo, continuityRepo = oldCatalog, oldContinuity })
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash) VALUES ('writer-progress', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		upstream, kind, body string
+		wantLegacy           int
+	}{
+		{"8", "epub", `{"locator":{"cfi":"x","fraction":0.5},"percent":0.5}`, 1},
+		{"9", "pdf", `{"locator":{"page":2,"zoom":1},"percent":0.2}`, 1},
+		{"10", "audiobook", `{"locator":{"trackIndex":1},"positionMs":1000,"durationMs":5000,"percent":0.2}`, 0},
+	}
+	for _, tc := range cases {
+		item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+			Provider: ProviderGrimmory, UpstreamID: tc.upstream, LibraryID: "1",
+			Surface: SurfaceLibrary, Kind: CatalogKind(tc.kind),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/library/books/"+item.ID+"/progress", strings.NewReader(tc.body))
+		req.SetPathValue("id", item.ID)
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+		rec := httptest.NewRecorder()
+		handlePutBookProgress(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", tc.kind, rec.Code, rec.Body.String())
+		}
+		var legacyRows int
+		if err := f.DB.QueryRow(t.Context(), `SELECT count(*) FROM book_progress WHERE user_id=$1::uuid AND book_id=$2::bigint`, userID, tc.upstream).Scan(&legacyRows); err != nil {
+			t.Fatal(err)
+		}
+		if legacyRows != tc.wantLegacy {
+			t.Fatalf("%s legacy rows=%d, want %d", tc.kind, legacyRows, tc.wantLegacy)
+		}
+	}
+}
+
 func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T) {
 	var forwarded map[string]any
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
@@ -325,6 +450,9 @@ func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T)
 	}
 	if updated.Title != "New title" || updated.SeriesNumber == nil || *updated.SeriesNumber != 2.5 {
 		t.Fatalf("bad normalized response: %+v", updated)
+	}
+	if !looksLikeUUID(updated.ID) {
+		t.Fatalf("updated public id = %q, want canonical UUID", updated.ID)
 	}
 }
 
@@ -451,6 +579,7 @@ func TestUpdateLibraryCoverValidatesAndForwardsMultipart(t *testing.T) {
 }
 
 func TestUpdateLibraryCoverRejectsPrivateURL(t *testing.T) {
+	installCatalogIdentityTest(t)
 	for _, rawURL := range []string{
 		"http://127.0.0.1/cover.jpg",
 		"http://10.0.0.1/cover.jpg",
@@ -487,7 +616,8 @@ func TestDeleteLibraryBookOnlyCleansUpAfterUpstreamSuccess(t *testing.T) {
 	}
 }
 
-func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
+func TestHandleMediaReturnsCanonicalLibraryIDs(t *testing.T) {
+	installCatalogIdentityTest(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/Users", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]string{{"Id": "id-alice", "Name": "alice"}})
@@ -531,5 +661,10 @@ func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
 	}
 	if libs[0].Type != "video" || libs[0].CollectionType != "movies" {
 		t.Fatalf("expected video/movies mapping, got %+v", libs[0])
+	}
+	for _, library := range libs {
+		if !looksLikeUUID(library.ID) {
+			t.Fatalf("public id = %q, want canonical UUID", library.ID)
+		}
 	}
 }

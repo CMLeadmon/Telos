@@ -17,6 +17,50 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+type catalogIdentityTestState struct {
+	items map[string]CatalogResolution
+	next  int
+}
+
+func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
+	t.Helper()
+	state := &catalogIdentityTestState{items: map[string]CatalogResolution{}}
+	oldObserve, oldResolve := observeCatalogIdentity, resolveCatalogIdentity
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		key := string(in.Provider) + "\x00" + in.UpstreamID
+		if existing, ok := state.items[key]; ok {
+			return existing, nil
+		}
+		state.next++
+		resolution := CatalogResolution{
+			ID:      fmt.Sprintf("00000000-0000-4000-8000-%012d", state.next),
+			Surface: in.Surface, Kind: in.Kind, Provider: in.Provider,
+			UpstreamID: in.UpstreamID, LibraryID: in.LibraryID,
+			Active: true, Available: true, Revision: 1,
+		}
+		state.items[key] = resolution
+		return resolution, nil
+	}
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		for _, item := range state.items {
+			if (item.ID == rawID || item.UpstreamID == rawID) && item.Surface == surface {
+				return item, nil
+			}
+		}
+		observation := CatalogObservation{UpstreamID: rawID, Surface: surface}
+		if surface == SurfaceLibrary {
+			observation.Provider, observation.LibraryID, observation.Kind = ProviderGrimmory, "1", "epub"
+		} else {
+			observation.Provider, observation.LibraryID, observation.Kind = ProviderJellyfin, "lib-allowed", "folder"
+		}
+		return observeCatalogIdentity(context.Background(), observation)
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity = oldObserve, oldResolve
+	})
+	return state
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Argon2id Password Hashing Tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -328,7 +372,8 @@ func TestJellyfinProxyPathValidation(t *testing.T) {
 	}
 }
 
-func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
+func TestHandleMediaItemsReturnsCanonicalDirectChildren(t *testing.T) {
+	installCatalogIdentityTest(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/Users":
@@ -377,9 +422,13 @@ func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
 	if !got[0].IsFolder || got[0].ChildCount != 13 || got[0].Title != "Season 1" {
 		t.Errorf("got %+v, want a Season 1 folder with ChildCount 13", got[0])
 	}
+	if !looksLikeUUID(got[0].ID) {
+		t.Fatalf("public child id = %q, want canonical UUID", got[0].ID)
+	}
 }
 
 func TestHandleMediaItemReturnsUnavailableWithoutMock(t *testing.T) {
+	installCatalogIdentityTest(t)
 	oldBase := jellyfinBaseURL
 	jellyfinBaseURL = "http://127.0.0.1:1"
 	defer func() { jellyfinBaseURL = oldBase }()
@@ -398,6 +447,49 @@ func TestHandleMediaItemReturnsUnavailableWithoutMock(t *testing.T) {
 	}
 	if strings.Contains(rr.Body.String(), "Mock Film") {
 		t.Fatal("unavailable upstream must never return fabricated media")
+	}
+}
+
+func TestHandleMediaItemReturnsCanonicalIDAndCoverURL(t *testing.T) {
+	installCatalogIdentityTest(t)
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderJellyfin, UpstreamID: "movie-22", LibraryID: "lib-allowed",
+		Surface: SurfaceStream, Kind: "video",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "user-1", "Name": "admin"}})
+		case "/Users/user-1/Items/movie-22":
+			json.NewEncoder(w).Encode(map[string]any{"Id": "movie-22", "Name": "Film", "Type": "Movie"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = server.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/"+resolution.ID, nil)
+	req.SetPathValue("id", resolution.ID)
+	rec := httptest.NewRecorder()
+	handleMediaItemByID(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		ID       string `json:"id"`
+		CoverURL string `json:"coverUrl"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != resolution.ID || got.CoverURL != "/api/v1/media/items/"+resolution.ID+"/cover" {
+		t.Fatalf("response = %+v, want canonical id and cover", got)
 	}
 }
 

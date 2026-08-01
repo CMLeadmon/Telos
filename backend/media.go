@@ -209,6 +209,64 @@ func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (
 
 var jellyfinAuthorizer *JellyfinAuthorizer
 
+func jellyfinLibraryAllowed(libraryID string) bool {
+	if libraryID == "" {
+		return false
+	}
+	if jellyfinAuthorizer == nil {
+		return true
+	}
+	_, ok := jellyfinAuthorizer.allowed[libraryID]
+	return ok
+}
+
+func jellyfinCatalogKind(mediaType string, isFolder bool) (CatalogKind, bool) {
+	if isFolder {
+		return "folder", true
+	}
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "audio", "audiobook", "music", "musicalbum", "audioepisode":
+		return "audio", true
+	case "video", "movie", "episode", "trailer", "musicvideo":
+		return "video", true
+	default:
+		return "", false
+	}
+}
+
+func observeJellyfinCatalogItem(ctx context.Context, upstreamID, libraryID, mediaType string, isFolder bool) (CatalogResolution, error) {
+	if !jellyfinLibraryAllowed(libraryID) {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	kind, ok := jellyfinCatalogKind(mediaType, isFolder)
+	if !ok {
+		return CatalogResolution{}, errCatalogInvalid
+	}
+	return observeCatalogIdentity(ctx, CatalogObservation{
+		Provider: ProviderJellyfin, UpstreamID: upstreamID, LibraryID: libraryID,
+		Surface: SurfaceStream, Kind: kind,
+	})
+}
+
+// resolveJellyfinItemHTTP canonicalizes a browser ID, checks the source is
+// still active and in the configured library allowlist, then authorizes the
+// upstream Jellyfin ID. That ordering prevents a browser UUID from ever
+// reaching Jellyfin or its authorizer.
+func resolveJellyfinItemHTTP(w http.ResponseWriter, r *http.Request, rawID string) (CatalogResolution, bool) {
+	resolution, err := resolveCatalogIdentity(r.Context(), rawID, SurfaceStream)
+	if err != nil || resolution.Provider != ProviderJellyfin || !resolution.Active || !resolution.Available ||
+		!jellyfinLibraryAllowed(resolution.LibraryID) {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return CatalogResolution{}, false
+	}
+	// A top-level view is itself the allowlisted library and has no ancestor
+	// carrying that ID; descendants still require the full ancestry check.
+	if resolution.UpstreamID != resolution.LibraryID && !authorizeJellyfinItem(w, r, resolution.UpstreamID) {
+		return CatalogResolution{}, false
+	}
+	return resolution, true
+}
+
 // authorizeJellyfinItem is the handler-facing gate: it returns true when the
 // item is in a configured library, writing a 404 otherwise. When no authorizer
 // is configured (development), it allows access.
@@ -401,8 +459,10 @@ func handleHLSResource(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	// Reauthorize the item on every locator hit (membership may have changed).
-	if !authorizeJellyfinItem(w, r, loc.Item) {
+	// Re-resolve and reauthorize the internal upstream item on every locator hit
+	// so source deactivation and allowlist changes take effect immediately.
+	resolution, ok := resolveJellyfinItemHTTP(w, r, loc.Item)
+	if !ok || resolution.UpstreamID != loc.Item {
 		return
 	}
 	subpath, rawQuery, err := splitResourcePath(loc.Res)
