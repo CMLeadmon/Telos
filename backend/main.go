@@ -2521,7 +2521,7 @@ func getJellyfinUserID(ctx context.Context) (string, error) {
 	return userID, nil
 }
 
-type LibraryItem struct {
+type mediaLibrary struct {
 	ID             string `json:"id"`
 	Name           string `json:"name"`
 	Type           string `json:"type"`           // "video" or "audio"
@@ -2582,7 +2582,7 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var libs []LibraryItem
+	var libs []mediaLibrary
 	for _, item := range jResp.Items {
 		if !jellyfinLibraryAllowed(item.ID) {
 			continue
@@ -2600,7 +2600,7 @@ func handleMedia(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Failed to reconcile Jellyfin Views response", http.StatusServiceUnavailable)
 			return
 		}
-		libs = append(libs, LibraryItem{
+		libs = append(libs, mediaLibrary{
 			ID:             resolution.ID,
 			Name:           item.Name,
 			Type:           mediaType,

@@ -151,18 +151,29 @@ func setupCurrentGrimmoryDetails(t *testing.T, formats map[string]string) {
 
 func TestHandleLibraryBooksReturnsCanonicalID(t *testing.T) {
 	defer setupGrimmoryTest(t)()
+	f := withFixture(t)
+	oldContinuity := continuityRepo
+	continuityRepo = NewContinuityRepository(f.DB)
+	t.Cleanup(func() { continuityRepo = oldContinuity })
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash)
+		VALUES ('library-catalog-reader', 'x') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest("GET", "/api/v1/library/books", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
 	rec := httptest.NewRecorder()
 	handleLibraryBooks(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	var books []LibraryBook
+	var books []LibraryItem
 	if err := json.Unmarshal(rec.Body.Bytes(), &books); err != nil {
 		t.Fatal(err)
 	}
 	if len(books) != 1 || books[0].Title != "Pride and Prejudice" ||
-		books[0].Format != "EPUB" || books[0].Authors[0] != "Jane Austen" {
+		books[0].Kind != "epub" || books[0].Authors[0] != "Jane Austen" {
 		t.Fatalf("bad translation: %+v", books)
 	}
 	if !looksLikeUUID(fmt.Sprint(books[0].ID)) {
@@ -294,6 +305,7 @@ func TestLibraryBooksReturnsUnavailable(t *testing.T) {
 	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
 	grimmoryTok.mu.Unlock()
 	req := httptest.NewRequest("GET", "/api/v1/library/books", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: "00000000-0000-4000-8000-000000000001"}))
 	rec := httptest.NewRecorder()
 	handleLibraryBooks(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -1108,7 +1120,7 @@ func TestHandleMediaReturnsCanonicalLibraryIDs(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	var libs []LibraryItem
+	var libs []mediaLibrary
 	if err := json.Unmarshal(rec.Body.Bytes(), &libs); err != nil {
 		t.Fatal(err)
 	}

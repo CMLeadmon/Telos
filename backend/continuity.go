@@ -14,7 +14,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const maxProgressLocatorBytes = 4 * 1024
+const (
+	maxProgressLocatorBytes     = 4 * 1024
+	maxMemberProgressBatchItems = 5000
+)
 
 var errProgressInvalid = errors.New("member progress invalid")
 
@@ -141,8 +144,8 @@ func (r *ContinuityRepository) GetMany(ctx context.Context, userID string, itemI
 		return nil, fmt.Errorf("%w: user identifier", errProgressInvalid)
 	}
 	capacity := len(itemIDs)
-	if capacity > 500 {
-		capacity = 500
+	if capacity > maxMemberProgressBatchItems {
+		capacity = maxMemberProgressBatchItems
 	}
 	unique := make([]string, 0, capacity)
 	seen := make(map[string]struct{}, capacity)
@@ -153,7 +156,7 @@ func (r *ContinuityRepository) GetMany(ctx context.Context, userID string, itemI
 		if _, exists := seen[itemID]; exists {
 			continue
 		}
-		if len(unique) == 500 {
+		if len(unique) == maxMemberProgressBatchItems {
 			return nil, fmt.Errorf("%w: too many catalog items", errProgressInvalid)
 		}
 		seen[itemID] = struct{}{}

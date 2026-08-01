@@ -186,17 +186,21 @@ func TestContinuityRepositoryEnforcesBatchAndContinueLimits(t *testing.T) {
 	repo := NewContinuityRepository(f.DB)
 	userID := createContinuityUser(t, "continuity-limits", f.DB)
 
-	ids := make([]string, 501)
+	ids := make([]string, 5000)
 	for i := range ids {
 		ids[i] = fmt.Sprintf("00000000-0000-0000-0000-%012d", i)
 	}
-	if _, err := repo.GetMany(t.Context(), userID, ids); !errors.Is(err, errProgressInvalid) {
+	if got, err := repo.GetMany(t.Context(), userID, ids); err != nil || len(got) != 0 {
+		t.Fatalf("GetMany at limit = %+v, err=%v", got, err)
+	}
+	overLimit := append(append([]string(nil), ids...), "00000000-0000-0000-0000-000000005000")
+	if _, err := repo.GetMany(t.Context(), userID, overLimit); !errors.Is(err, errProgressInvalid) {
 		t.Fatalf("GetMany over limit error = %v, want errProgressInvalid", err)
 	}
 	if _, err := repo.GetMany(t.Context(), userID, []string{"not-a-uuid"}); !errors.Is(err, errProgressInvalid) {
 		t.Fatalf("GetMany malformed ID error = %v, want errProgressInvalid", err)
 	}
-	duplicates := make([]string, 501)
+	duplicates := make([]string, 5001)
 	for i := range duplicates {
 		duplicates[i] = ids[0]
 	}

@@ -147,6 +147,8 @@ type LibraryBook struct {
 	ID            string   `json:"id"`
 	UpstreamID    int64    `json:"-"`
 	LibraryID     string   `json:"-"`
+	Narrator      string   `json:"-"`
+	DurationMS    int64    `json:"-"`
 	Title         string   `json:"title"`
 	Subtitle      string   `json:"subtitle"`
 	Authors       []string `json:"authors"`
@@ -184,18 +186,22 @@ type grimmoryBook struct {
 	AddedOn     string          `json:"addedOn"`
 	LibraryName string          `json:"libraryName"`
 	Metadata    struct {
-		Title         string   `json:"title"`
-		Subtitle      string   `json:"subtitle"`
-		Authors       []string `json:"authors"`
-		Categories    []string `json:"categories"`
-		Language      string   `json:"language"`
-		Description   string   `json:"description"`
-		SeriesName    string   `json:"seriesName"`
-		SeriesNumber  *float64 `json:"seriesNumber"`
-		Publisher     string   `json:"publisher"`
-		PublishedDate string   `json:"publishedDate"`
-		ISBN10        string   `json:"isbn10"`
-		ISBN13        string   `json:"isbn13"`
+		Title             string   `json:"title"`
+		Subtitle          string   `json:"subtitle"`
+		Authors           []string `json:"authors"`
+		Categories        []string `json:"categories"`
+		Language          string   `json:"language"`
+		Description       string   `json:"description"`
+		SeriesName        string   `json:"seriesName"`
+		SeriesNumber      *float64 `json:"seriesNumber"`
+		Publisher         string   `json:"publisher"`
+		PublishedDate     string   `json:"publishedDate"`
+		ISBN10            string   `json:"isbn10"`
+		ISBN13            string   `json:"isbn13"`
+		Narrator          string   `json:"narrator"`
+		AudiobookMetadata struct {
+			DurationSeconds int64 `json:"durationSeconds"`
+		} `json:"audiobookMetadata"`
 	} `json:"metadata"`
 	PrimaryFile struct {
 		BookType   string `json:"bookType"`
@@ -204,7 +210,7 @@ type grimmoryBook struct {
 }
 
 func libraryBookFromGrimmory(b grimmoryBook) LibraryBook {
-	return LibraryBook{
+	book := LibraryBook{
 		UpstreamID: b.ID, LibraryID: grimmoryLibraryID(b.LibraryID),
 		Title: b.Metadata.Title, Subtitle: b.Metadata.Subtitle,
 		Authors: b.Metadata.Authors, Categories: b.Metadata.Categories,
@@ -212,9 +218,14 @@ func libraryBookFromGrimmory(b grimmoryBook) LibraryBook {
 		SeriesName: b.Metadata.SeriesName, SeriesNumber: b.Metadata.SeriesNumber,
 		Publisher: b.Metadata.Publisher, PublishedDate: b.Metadata.PublishedDate,
 		ISBN10: b.Metadata.ISBN10, ISBN13: b.Metadata.ISBN13,
-		Format: b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
+		Narrator: b.Metadata.Narrator,
+		Format:   b.PrimaryFile.BookType, FileSizeKB: b.PrimaryFile.FileSizeKB,
 		AddedOn: b.AddedOn, Library: b.LibraryName,
 	}
+	if seconds := b.Metadata.AudiobookMetadata.DurationSeconds; seconds > 0 && seconds <= math.MaxInt64/1000 {
+		book.DurationMS = seconds * 1000
+	}
+	return book
 }
 
 func grimmoryLibraryID(raw json.RawMessage) string {
@@ -233,16 +244,8 @@ func grimmoryLibraryID(raw json.RawMessage) string {
 }
 
 func grimmoryCatalogKind(format string) (CatalogKind, bool) {
-	switch strings.ToUpper(strings.TrimSpace(format)) {
-	case "EPUB":
-		return "epub", true
-	case "PDF":
-		return "pdf", true
-	case "AUDIOBOOK":
-		return "audiobook", true
-	default:
-		return "", false
-	}
+	kind, err := libraryKindFromGrimmory(format)
+	return kind, err == nil
 }
 
 func allowedGrimmoryLibraryID(libraryID string) (string, bool) {
@@ -285,31 +288,36 @@ func canonicalizeGrimmoryBook(ctx context.Context, book LibraryBook) (LibraryBoo
 }
 
 func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
+	started := catalogMetricNow()
 	requestCtx, cancel := upstreamRequestContext(ctx)
 	defer cancel()
 	resp, err := grimmoryGET(requestCtx, "/api/v1/books")
 	if err != nil {
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
 		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
 		return nil, fmt.Errorf("grimmory books returned %s", resp.Status)
 	}
 	// Bound the decoded catalog: at most 8 MiB of JSON and 5,000 records so a
 	// misbehaving or compromised upstream cannot exhaust memory.
 	const maxGrimmoryBytes = 8 << 20
-	const maxGrimmoryRecords = 5000
+	const maxGrimmoryRecords = maxMemberProgressBatchItems
 	var raw []grimmoryBook
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxGrimmoryBytes)).Decode(&raw); err != nil {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, 0)
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
 		return nil, err
 	}
 	if len(raw) > maxGrimmoryRecords {
-		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, 0)
+		_ = RecordCatalogEnumerationFailure(ProviderGrimmory, catalogMetricSince(started))
 		return nil, errors.New("Grimmory catalog enumeration exceeded the safe record limit")
 	}
+	_ = observeCatalogReconcileDuration(ProviderGrimmory, CatalogOperationEnumerate, CatalogResultSuccess, catalogMetricSince(started))
 	books := make([]LibraryBook, 0, len(raw))
 	observations := make([]CatalogObservation, 0, len(raw))
+	unsupported := 0
 	librarySet := map[string]struct{}{}
 	if grimmoryAuthorizer != nil {
 		for libraryID := range grimmoryAuthorizer.allowed {
@@ -320,7 +328,11 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 		mapped := libraryBookFromGrimmory(b)
 		kind, supported := grimmoryCatalogKind(mapped.Format)
 		libraryID, allowed := allowedGrimmoryLibraryID(mapped.LibraryID)
-		if !supported || !allowed {
+		if !supported {
+			unsupported++
+			continue
+		}
+		if !allowed {
 			continue
 		}
 		librarySet[libraryID] = struct{}{}
@@ -337,6 +349,9 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 			return nil, err
 		}
 		books = append(books, book)
+	}
+	if unsupported > 0 {
+		log.Printf("catalog normalization provider=grimmory unsupported=%d", unsupported)
 	}
 	libraries := make([]string, 0, len(librarySet))
 	for libraryID := range librarySet {
@@ -373,34 +388,27 @@ func fetchGrimmoryBook(ctx context.Context, id string) (LibraryBook, error) {
 	return libraryBookFromGrimmory(raw), nil
 }
 
-// getLibraryBooks serves from Redis (60s), then Grimmory. Upstream failures
-// are returned to callers; fabricated catalog entries must never look real or
-// be embedded into durable chat history.
+// getLibraryBooks returns the complete current provider catalog. The previous
+// whole-list Redis value had no source revision in its key, so it could serve
+// stale metadata after an active-source switch. Item-scoped caches may be
+// introduced only with canonical ID + catalog revision keys.
 func getLibraryBooks(ctx context.Context) ([]LibraryBook, error) {
-	const cacheKey = "telos:grimmory:books:canonical-v1"
-	if redisClient != nil {
-		if val, err := redisClient.Get(ctx, cacheKey).Result(); err == nil && val != "" {
-			var books []LibraryBook
-			if json.Unmarshal([]byte(val), &books) == nil {
-				return books, nil
-			}
-		}
-	}
 	books, err := fetchGrimmoryBooks(ctx)
 	if err != nil {
 		log.Printf("WARN: grimmory books unavailable: %v", err)
 		return nil, fmt.Errorf("%w: grimmory: %v", errUpstreamUnavailable, err)
 	}
-	if redisClient != nil {
-		if raw, err := json.Marshal(books); err == nil {
-			_ = redisClient.Set(ctx, cacheKey, string(raw), 60*time.Second).Err()
-		}
-	}
 	return books, nil
 }
 
 func handleLibraryBooks(w http.ResponseWriter, r *http.Request) {
-	books, err := getLibraryBooks(r.Context())
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	if user == nil || user.ID == "" {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	catalog := &GrimmoryCatalog{repo: catalogRepo, continuity: continuityRepo}
+	books, err := catalog.ListItems(r.Context(), user.ID)
 	if err != nil {
 		http.Error(w, "Grimmory unreachable: "+err.Error(), http.StatusServiceUnavailable)
 		return
