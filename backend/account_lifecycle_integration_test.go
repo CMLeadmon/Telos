@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 type recordingRemover struct {
 	mu   sync.Mutex
 	seen []string
+	err  error
 }
 
 type gatedRemover struct {
@@ -49,7 +51,7 @@ func (r *recordingRemover) Remove(_ context.Context, area, key string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seen = append(r.seen, area+":"+key)
-	return nil
+	return r.err
 }
 
 func (r *recordingRemover) removedAssets() []string {
@@ -260,6 +262,50 @@ func TestAssetDeletionWorkerClosedPoolLeavesJobPending(t *testing.T) {
 	assertAssetDeletionStatus(t, f.DB, "upload:closed/job.bin", "pending")
 	if got := remover.removedAssets(); len(got) != 0 {
 		t.Fatalf("remover called after worker pool closed: %v", got)
+	}
+}
+
+func TestAssetDeletionWorkerFailureUpdateUsesExplicitPool(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('failed-worker','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `
+		INSERT INTO asset_deletion_jobs (user_id, area, storage_key)
+		VALUES ($1, 'upload', 'failed/job.bin')
+	`, userID); err != nil {
+		t.Fatalf("seed deletion job: %v", err)
+	}
+
+	invalidGlobalPool, err := pgxpool.NewWithConfig(ctx, f.DB.Config().Copy())
+	if err != nil {
+		t.Fatalf("create invalid global pool: %v", err)
+	}
+	invalidGlobalPool.Close()
+	explicitRemover := &recordingRemover{err: errors.New("forced removal failure")}
+	globalRemover := &recordingRemover{}
+	oldPool, oldRemover := dbPool, assetRemover
+	dbPool, assetRemover = invalidGlobalPool, globalRemover
+	t.Cleanup(func() { dbPool, assetRemover = oldPool, oldRemover })
+
+	runAssetDeletionJobs(ctx, f.DB, explicitRemover, userID)
+
+	var status string
+	var attempts int
+	if err := f.DB.QueryRow(ctx, `SELECT status, attempts FROM asset_deletion_jobs WHERE storage_key='failed/job.bin'`).Scan(&status, &attempts); err != nil {
+		t.Fatalf("query failed deletion job: %v", err)
+	}
+	if status != "pending" || attempts != 1 {
+		t.Fatalf("failed deletion job = status %q, attempts %d; want pending, 1", status, attempts)
+	}
+	if got := explicitRemover.removedAssets(); len(got) != 1 || got[0] != "upload:failed/job.bin" {
+		t.Fatalf("explicit remover calls = %v, want [upload:failed/job.bin]", got)
+	}
+	if got := globalRemover.removedAssets(); len(got) != 0 {
+		t.Fatalf("global remover received calls: %v", got)
 	}
 }
 
