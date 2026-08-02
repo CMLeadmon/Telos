@@ -5,6 +5,8 @@ vi.mock("@/lib/api", () => ({ api: vi.fn(), ApiError: class ApiError extends Err
 
 import { api } from "@/lib/api";
 import { AnnotationPanel } from "./AnnotationPanel";
+
+const BOOK_ID = "11111111-1111-4111-8111-111111111111";
 import { useAnnotationStore, type Annotation } from "@/stores/useAnnotationStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 
@@ -38,12 +40,12 @@ beforeEach(() => {
     return { annotations: [mine, otherCommunity] };
   });
   useAuthStore.setState({ user: { ID: "me", Username: "me", DisplayName: "Me" } as never });
-  useAnnotationStore.setState({ bookId: 42, annotations: [], replies: {}, activeId: null, status: "idle", error: null });
+  useAnnotationStore.setState({ bookId: BOOK_ID, annotations: [], replies: {}, activeId: null, status: "idle", error: null });
 });
 
 describe("AnnotationPanel", () => {
   it("shows my annotations under Mine and community ones under Community", async () => {
-    render(<AnnotationPanel bookId={42} canModerate={false} />);
+    render(<AnnotationPanel bookId={BOOK_ID} canModerate={false} />);
     // Mine filter (default): my private annotation is present.
     await waitFor(() => expect(screen.getByTestId("annotation-mine")).toBeInTheDocument());
     expect(screen.queryByTestId("annotation-oc")).toBeNull();
@@ -56,7 +58,7 @@ describe("AnnotationPanel", () => {
   });
 
   it("owner sees edit/delete; a moderator sees remove on others' community notes", async () => {
-    render(<AnnotationPanel bookId={42} canModerate={true} />);
+    render(<AnnotationPanel bookId={BOOK_ID} canModerate={true} />);
     await waitFor(() => expect(screen.getByTestId("annotation-mine")).toBeInTheDocument());
     expect(screen.getByTestId("annotation-edit-mine")).toBeInTheDocument();
 

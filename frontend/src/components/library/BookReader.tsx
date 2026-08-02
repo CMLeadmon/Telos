@@ -30,7 +30,7 @@ export function BookReader({
   const [percent, setPercent] = useState(0);
   const [pending, setPending] = useState<PendingSelection | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
-  const kind = formatKind(book.format);
+  const kind = formatKind(book.format ?? "");
   const canModerate = useAuthStore((s) => hasCapability(s.user, "moderate_annotations"));
   const createAnnotation = useAnnotationStore((s) => s.create);
 

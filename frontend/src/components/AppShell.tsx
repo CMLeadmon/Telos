@@ -76,7 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   interface SearchBook {
-    id: number;
+    id: string;
     title: string;
     authors: string[] | null;
     categories: string[] | null;
@@ -191,11 +191,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } else if (item.$type === "user") {
       router.push("/chat/");
     } else if (item.$type === "book") {
-      router.push(`/library?read=${item.id}`);
+      router.push(`/library?read=${encodeURIComponent(item.id)}`);
     } else if (item.$type === "media") {
-      router.push(`/stream?play=${item.id}`);
+      router.push(`/stream?play=${encodeURIComponent(item.id)}`);
     } else if (item.$type === "file") {
-      window.open(`/api/v1/files/${item.id}/download`, "_blank");
+      window.open(
+        `/api/v1/files/${encodeURIComponent(item.id)}/download`,
+        "_blank",
+      );
     }
   };
 
@@ -222,7 +225,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const renderSearchSection = <T extends { id: string | number }>(
+  const renderSearchSection = <T extends { id: string }>(
     title: string,
     items: T[] | undefined,
     type: "channel" | "user" | "book" | "media" | "file"
@@ -233,7 +236,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="search-section-title">{title}</div>
         {items.map((item) => {
           const flatIndex = flatResults.findIndex(
-            (f) => String(f.id) === String(item.id) && f.$type === type
+            (f) => f.id === item.id && f.$type === type
           );
           const isActive = flatIndex === searchActiveIndex;
 

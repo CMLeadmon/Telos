@@ -17,9 +17,14 @@ import (
 
 func fileEmbedSnapshot(t *testing.T, ref string) map[string]string {
 	t.Helper()
-	raw, err := buildEmbedSnapshot(context.Background(), "file", ref)
+	canonical, raw, err := buildEmbedSnapshot(context.Background(), "file", ref)
 	if err != nil {
 		t.Fatalf("buildEmbedSnapshot(file, %q): %v", ref, err)
+	}
+	// Files are not catalog items, so the ref is echoed rather than
+	// canonicalized the way a book or media ref is.
+	if canonical != ref {
+		t.Errorf("canonical ref = %q, want the ref as passed (%q)", canonical, ref)
 	}
 	var snap map[string]string
 	if err := json.Unmarshal(raw, &snap); err != nil {
@@ -106,7 +111,7 @@ func TestSharedFileMetaFromPathDeclines(t *testing.T) {
 }
 
 func TestBuildEmbedSnapshotRejectsUnknownKind(t *testing.T) {
-	if _, err := buildEmbedSnapshot(context.Background(), "voice_room", "1"); err == nil {
+	if _, _, err := buildEmbedSnapshot(context.Background(), "voice_room", "1"); err == nil {
 		t.Fatal("expected an unsupported kind to be rejected")
 	}
 }

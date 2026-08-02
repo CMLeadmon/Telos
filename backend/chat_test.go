@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,6 +13,10 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
 
 func seedChannel(t *testing.T, name string) string {
 	t.Helper()
@@ -140,5 +146,227 @@ func TestWebSocketRevocationClosesLiveSocket(t *testing.T) {
 	}
 	if n := sessionRegistryInstance.LiveCount(userID); n != 0 {
 		t.Fatalf("handler did not release socket: live count %d", n)
+	}
+}
+
+func TestSendMessageCanonicalizesEmbedBeforeFetchAndWrite(t *testing.T) {
+	db, author, _ := chatFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000123"
+	events := []string{}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		events = append(events, "resolve:"+rawID+":"+string(surface))
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceStream, Kind: "video",
+			Provider: ProviderJellyfin, UpstreamID: "current-film", LibraryID: "movies",
+			Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, "upstream:"+r.URL.Path)
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "jf-user", "Name": "admin"}})
+		case "/Users/jf-user/Items/current-film":
+			json.NewEncoder(w).Encode(map[string]any{
+				"Id": "current-film", "Name": "Current Film", "Type": "Movie",
+				"ProductionYear": 2026, "RunTimeTicks": int64(5_460_000_000),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase := jellyfinBaseURL
+	jellyfinBaseURL = upstream.URL
+	t.Cleanup(func() { jellyfinBaseURL = oldBase })
+	if redisClient != nil {
+		redisClient.Del(t.Context(), "telos:jellyfin:userId")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+generalChannel+"/messages", strings.NewReader(`{"content":"watch this","embed":{"kind":"stream_film","ref":"legacy-film"}}`))
+	req.SetPathValue("id", generalChannel)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"Member"}}))
+	rec := httptest.NewRecorder()
+	handleSendMessage(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var storedRef string
+	var snapshot []byte
+	if err := db.QueryRow(t.Context(), `
+		SELECT embed_ref, embed_snapshot
+		FROM messages
+		WHERE channel_id = $1::uuid AND user_id = $2::uuid`, generalChannel, author).Scan(&storedRef, &snapshot); err != nil {
+		t.Fatalf("read embedded message: %v", err)
+	}
+	if storedRef != canonicalID {
+		t.Fatalf("stored embed ref = %q, want %q (events=%v)", storedRef, canonicalID, events)
+	}
+	var got struct {
+		Title string `json:"title"`
+		Cover string `json:"cover"`
+	}
+	if err := json.Unmarshal(snapshot, &got); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if got.Title != "Current Film" || got.Cover != "/api/v1/media/items/"+canonicalID+"/cover" {
+		t.Fatalf("snapshot = %+v", got)
+	}
+	wantEvents := "resolve:legacy-film:stream|upstream:/Users|upstream:/Users/jf-user/Items/current-film"
+	if gotEvents := strings.Join(events, "|"); gotEvents != wantEvents {
+		t.Fatalf("events = %s, want %s", gotEvents, wantEvents)
+	}
+}
+
+func TestBuildBookEmbedBoundsUpstreamRequest(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000142"
+	oldResolve, oldClient, oldBase := resolveCatalogIdentity, upstreamHTTPClient, grimmoryBaseURL
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: surface, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "42", LibraryID: "library-a", Active: true, Available: true,
+		}, nil
+	}
+	grimmoryBaseURL = "http://grimmory.test"
+	t.Setenv("GRIMMORY_ADMIN_USER", "gateway")
+	t.Setenv("GRIMMORY_ADMIN_PASSWORD", "secret")
+	var bookDeadline time.Time
+	upstreamHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body := `{"accessToken":"test-token","expires":7200}`
+		if req.URL.Path == "/api/v1/books/42" {
+			bookDeadline, _ = req.Context().Deadline()
+			body = `{"id":42,"libraryId":1,"metadata":{"title":"Bounded Book"},"primaryFile":{"bookType":"EPUB"}}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(body)), Request: req,
+		}, nil
+	})}
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		resolveCatalogIdentity, upstreamHTTPClient, grimmoryBaseURL = oldResolve, oldClient, oldBase
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	ctx := context.WithValue(t.Context(), userContextKey, &UserContext{Roles: []string{"Owner"}})
+	ref, _, err := buildEmbedSnapshot(ctx, "library_book", "42")
+	if err != nil {
+		t.Fatalf("build book embed: %v", err)
+	}
+	if ref != canonicalID {
+		t.Fatalf("canonical ref = %q, want %q", ref, canonicalID)
+	}
+	remaining := time.Until(bookDeadline)
+	if bookDeadline.IsZero() || remaining <= 0 || remaining > 16*time.Second {
+		t.Fatalf("book request deadline = %v (remaining %v), want a live deadline within 16s", bookDeadline, remaining)
+	}
+}
+
+func TestSendMessageClassifiesGrimmoryEmbedOutage(t *testing.T) {
+	_, author, _ := chatFixture(t)
+	const canonicalID = "00000000-0000-4000-8000-000000000143"
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: surface, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "43", LibraryID: "library-a", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			json.NewEncoder(w).Encode(map[string]any{"accessToken": "outage-token", "expires": 7200})
+		case "/api/v1/books/43":
+			http.Error(w, "private provider diagnostic", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase := grimmoryBaseURL
+	grimmoryBaseURL = upstream.URL
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		grimmoryBaseURL = oldBase
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/channels/"+generalChannel+"/messages", strings.NewReader(`{"content":"read this","embed":{"kind":"library_book","ref":"43"}}`))
+	req.SetPathValue("id", generalChannel)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"Member"}}))
+	rec := httptest.NewRecorder()
+	handleSendMessage(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status=%d body=%q, want 503", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); body != "embed source unavailable\n" {
+		t.Fatalf("public outage body = %q, want generic response", body)
+	}
+}
+
+func TestSendMessageChatOnlyRoleCannotEmbedStreamMetadata(t *testing.T) {
+	db, author, _ := chatFixture(t)
+	for _, seed := range []struct {
+		statement string
+		args      []any
+	}{
+		{`INSERT INTO roles (id, name) VALUES ('ChatOnly', 'Chat only')`, nil},
+		{`INSERT INTO role_permissions (role_id, permission_id) VALUES ('ChatOnly', 'view_channel'), ('ChatOnly', 'send_messages')`, nil},
+		{`INSERT INTO user_roles (user_id, role_id) VALUES ($1::uuid, 'ChatOnly')`, []any{author}},
+	} {
+		if _, err := db.Exec(t.Context(), seed.statement, seed.args...); err != nil {
+			t.Fatalf("seed chat-only role: %v", err)
+		}
+	}
+	oldResolve := resolveCatalogIdentity
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: "00000000-0000-4000-8000-000000000188", Surface: SurfaceStream,
+			Kind: "video", Provider: ProviderJellyfin, UpstreamID: "restricted-film",
+			LibraryID: "movies", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+
+	providerItemRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "jf-user", "Name": "admin"}})
+		case "/Users/jf-user/Items/restricted-film":
+			providerItemRequests++
+			json.NewEncoder(w).Encode(map[string]any{"Id": "restricted-film", "Name": "Restricted", "Type": "Movie"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = upstream.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	ctx := context.WithValue(t.Context(), userContextKey, &UserContext{ID: author, Roles: []string{"ChatOnly"}})
+	if _, _, err := buildEmbedSnapshot(ctx, "stream_film", "restricted-film"); err == nil {
+		t.Fatal("chat-only member received stream embed metadata")
+	}
+	if providerItemRequests != 0 {
+		t.Fatalf("provider metadata requests=%d, want authorization before fetch", providerItemRequests)
 	}
 }

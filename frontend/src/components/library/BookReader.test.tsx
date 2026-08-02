@@ -18,7 +18,7 @@ import type { LibraryBook } from "@/stores/useLibraryStore";
 
 function book(format: string): LibraryBook {
   return {
-    id: 1,
+    id: "11111111-1111-4111-8111-111111111111",
     title: "A Book",
     subtitle: "",
     authors: [],
@@ -31,10 +31,9 @@ function book(format: string): LibraryBook {
     publishedDate: "",
     isbn10: "",
     isbn13: "",
+    kind: format === "PDF" ? "pdf" : "epub",
     format,
-    fileSizeKb: 0,
     addedOn: "",
-    library: "",
   };
 }
 

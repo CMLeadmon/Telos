@@ -35,7 +35,11 @@ remain the complete information architecture.
 - Make Grimmory the sole audiobook catalog and playback provider.
 - Migrate existing Jellyfin audiobooks in stages, preserving links,
   commentary, and progress through stable Telos catalog identities.
-- Defer comics even though Grimmory exposes CBX support.
+- Limit the canonical Grimmory Library catalog to EPUB, PDF, and audiobook
+  records. Omit unknown or unsupported formats from member-visible canonical
+  Library responses and defer them. They must never be retyped as audiobook,
+  EPUB, PDF, or folder. This preserves the minimal scope alongside the existing
+  deferral of comics and physical-book records.
 
 ### 1.2 Success criteria
 
@@ -87,7 +91,9 @@ member-experience scope. The broad provider surfaces are not exposed wholesale.
 - Current Stream cards synthesize colored posters even though Jellyfin provides
   image endpoints and image tags.
 - The current Grimmory book shape assumes EPUB or PDF. It must recognize
-  audiobook records without adding CBX or physical-book handling.
+  audiobook records, while unknown or unsupported Grimmory formats stay out of
+  the canonical Library catalog rather than being retyped. CBX comics and
+  physical-book handling remain deferred.
 
 ## 3. Architecture
 

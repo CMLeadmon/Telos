@@ -25,11 +25,22 @@ func requireCapabilityHTTP(w http.ResponseWriter, r *http.Request, perm string) 
 // a book uses the Grimmory per-book authorizer; streamed media and files use the
 // corresponding view capability.
 func authorizeAnnotationAccess(w http.ResponseWriter, r *http.Request, targetType, targetID string) bool {
+	resolution, err := canonicalAnnotationTarget(r.Context(), targetType, targetID)
+	if err != nil {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return false
+	}
+	return authorizeResolvedAnnotationAccess(w, r, targetType, resolution)
+}
+
+func authorizeResolvedAnnotationAccess(w http.ResponseWriter, r *http.Request, targetType string, resolution CatalogResolution) bool {
 	switch targetType {
-	case "book":
-		return authorizeBookHTTP(w, r, targetID, BookRead)
-	case "media":
-		return requireCapabilityHTTP(w, r, "view_media")
+	case "book", "media":
+		if err := authorizeResolvedCatalogTarget(r.Context(), targetType, resolution); err != nil {
+			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+			return false
+		}
+		return true
 	case "file":
 		return requireCapabilityHTTP(w, r, "view_files")
 	default:
@@ -42,16 +53,15 @@ func authorizeAnnotationAccess(w http.ResponseWriter, r *http.Request, targetTyp
 // the request on access to it. Patch/delete/reply routes are annotation-scoped,
 // so the target type is read from the row rather than trusted from the caller.
 func authorizeAnnotationTarget(w http.ResponseWriter, r *http.Request, annotationID string) (string, string, bool) {
-	var targetType, targetID string
-	if err := dbPool.QueryRow(r.Context(),
-		`SELECT target_type, target_id FROM annotations WHERE id = $1`, annotationID).Scan(&targetType, &targetID); err != nil {
+	targetType, resolution, err := canonicalizeAnnotationRow(r.Context(), annotationID)
+	if err != nil {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return "", "", false
 	}
-	if !authorizeAnnotationAccess(w, r, targetType, targetID) {
+	if !authorizeResolvedAnnotationAccess(w, r, targetType, resolution) {
 		return "", "", false
 	}
-	return targetType, targetID, true
+	return targetType, resolution.ID, true
 }
 
 func handleListAnnotations(w http.ResponseWriter, r *http.Request) {
@@ -61,10 +71,15 @@ func handleListAnnotations(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid book id.")
 		return
 	}
-	if !authorizeBookHTTP(w, r, idStr, BookRead) {
+	resolution, err := canonicalAnnotationTarget(r.Context(), "book", idStr)
+	if err != nil || resolution.Provider != ProviderGrimmory {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	items, err := ListAnnotations(r.Context(), "book", idStr, user.ID, 100)
+	if !authorizeResolvedAnnotationAccess(w, r, "book", resolution) {
+		return
+	}
+	items, err := ListAnnotations(r.Context(), "book", resolution.ID, user.ID, 100)
 	if err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
@@ -79,7 +94,12 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid book id.")
 		return
 	}
-	if !authorizeBookHTTP(w, r, idStr, BookRead) {
+	resolution, err := canonicalAnnotationTarget(r.Context(), "book", idStr)
+	if err != nil || resolution.Provider != ProviderGrimmory {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return
+	}
+	if !authorizeResolvedAnnotationAccess(w, r, "book", resolution) {
 		return
 	}
 	var body struct {
@@ -94,7 +114,7 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 	// Validate the locator against the book's server-reported format.
 	reqCtx, cancel := upstreamRequestContext(r.Context())
 	defer cancel()
-	book, berr := fetchGrimmoryBook(reqCtx, idStr)
+	book, berr := fetchGrimmoryBook(reqCtx, resolution.UpstreamID)
 	if berr != nil {
 		writeLibraryError(w, http.StatusBadGateway, "the book service is unavailable")
 		return
@@ -104,7 +124,7 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The annotation locator is invalid.")
 		return
 	}
-	a, err := CreateAnnotation(r.Context(), "book", idStr, user.ID, body.Visibility, locator, body.SelectedText, body.Note)
+	a, err := CreateAnnotation(r.Context(), "book", resolution.ID, user.ID, body.Visibility, locator, body.SelectedText, body.Note)
 	if err != nil {
 		if err == errAnnotationText {
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The annotation text exceeds the allowed length.")
@@ -254,10 +274,15 @@ func commentListHandler(targetType string) http.HandlerFunc {
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid target id.")
 			return
 		}
-		if !authorizeAnnotationAccess(w, r, targetType, id) {
+		resolution, err := canonicalAnnotationTarget(r.Context(), targetType, id)
+		if err != nil {
+			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 			return
 		}
-		items, err := ListAnnotations(r.Context(), targetType, id, user.ID, 100)
+		if !authorizeResolvedAnnotationAccess(w, r, targetType, resolution) {
+			return
+		}
+		items, err := ListAnnotations(r.Context(), targetType, resolution.ID, user.ID, 100)
 		if err != nil {
 			writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 			return
@@ -277,7 +302,12 @@ func commentCreateHandler(targetType string) http.HandlerFunc {
 			writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "Invalid target id.")
 			return
 		}
-		if !authorizeAnnotationAccess(w, r, targetType, id) {
+		resolution, err := canonicalAnnotationTarget(r.Context(), targetType, id)
+		if err != nil {
+			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+			return
+		}
+		if !authorizeResolvedAnnotationAccess(w, r, targetType, resolution) {
 			return
 		}
 		var body struct {
@@ -287,7 +317,7 @@ func commentCreateHandler(targetType string) http.HandlerFunc {
 		if err := decodeJSON(w, r, &body, securityConfig.JSONBytes); err != nil {
 			return
 		}
-		a, err := CreateAnnotation(r.Context(), targetType, id, user.ID, body.Visibility, json.RawMessage("{}"), "", body.Note)
+		a, err := CreateAnnotation(r.Context(), targetType, resolution.ID, user.ID, body.Visibility, json.RawMessage("{}"), "", body.Note)
 		if err != nil {
 			if err == errAnnotationText {
 				writeAPIError(w, r, http.StatusBadRequest, "invalid_request", "The comment exceeds the allowed length.")

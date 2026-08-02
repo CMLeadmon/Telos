@@ -147,6 +147,10 @@ test("@mention autocomplete searches and inserts mentions", async ({ page }) => 
 });
 
 test("media-share embed loop: share from library, send embed card, and navigate back via read action", async ({ page }) => {
+  const catalogRequests: string[] = [];
+  page.on("request", (request) => {
+    catalogRequests.push(request.url());
+  });
   await login(page);
 
   // Go to Library and share Pride and Prejudice
@@ -154,8 +158,17 @@ test("media-share embed loop: share from library, send embed card, and navigate 
   const card = page.getByTestId("library-card").filter({ hasText: "Pride and Prejudice" });
   await expect(card).toBeVisible({ timeout: 15000 });
 
+  const booksResponse = await page.request.get("/api/v1/library/books");
+  expect(booksResponse.ok()).toBeTruthy();
+  const books = (await booksResponse.json()) as Array<{ id: string; title: string }>;
+  const sharedBook = books.find((book) => book.title === "Pride and Prejudice");
+  expect(sharedBook).toBeTruthy();
+
   const shareBtn = card.getByRole("link", { name: /^share / });
   await expect(shareBtn).toBeVisible();
+  const shareHref = await shareBtn.getAttribute("href");
+  expect(new URL(shareHref!, "http://telos.test").searchParams.get("share_ref"))
+    .toBe(sharedBook!.id);
   await shareBtn.click();
 
   // Verify redirected to chat and embed is staged
@@ -183,4 +196,8 @@ test("media-share embed loop: share from library, send embed card, and navigate 
   await page.waitForURL("**/library/**");
   const reader = page.getByTestId("book-reader");
   await expect(reader).toBeVisible({ timeout: 30000 });
+  await expect(reader).toContainText("Pride and Prejudice");
+  expect(catalogRequests.join(" ")).not.toMatch(
+    /grimmory|jellyfin|api[_-]?key|access[_-]?token/i,
+  );
 });

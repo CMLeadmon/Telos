@@ -49,7 +49,9 @@ export function EpubReader({
         if (!r.ok) throw new Error(`content fetch failed (${r.status})`);
         return r.arrayBuffer();
       }),
-      api<Progress>(`/api/v1/library/books/${book.id}/progress`),
+      api<Progress>(
+        `/api/v1/library/books/${encodeURIComponent(book.id)}/progress`,
+      ),
     ])
       .then(async ([{ default: ePub }, bytes, progress]) => {
         if (disposed) return;
@@ -66,7 +68,7 @@ export function EpubReader({
           onPercent(fraction);
           if (saveTimer.current) clearTimeout(saveTimer.current);
           saveTimer.current = setTimeout(() => {
-            void api(`/api/v1/library/books/${book.id}/progress`, {
+            void api(`/api/v1/library/books/${encodeURIComponent(book.id)}/progress`, {
               method: "PUT",
               body: JSON.stringify(epubProgressPayload(cfi, fraction)),
             }).catch(() => {});

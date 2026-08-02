@@ -144,6 +144,31 @@ type Annotation struct {
 // annotationTargetTypes are the media kinds an annotation may anchor to.
 var annotationTargetTypes = map[string]bool{"book": true, "media": true, "file": true}
 
+func canonicalAnnotationTarget(ctx context.Context, targetType, rawID string) (CatalogResolution, error) {
+	if rawID == "" {
+		return CatalogResolution{}, errAnnotationLocator
+	}
+	var surface CatalogSurface
+	switch targetType {
+	case "book":
+		surface = SurfaceLibrary
+	case "media":
+		surface = SurfaceStream
+	case "file":
+		return CatalogResolution{ID: rawID}, nil
+	default:
+		return CatalogResolution{}, errAnnotationLocator
+	}
+	resolution, err := resolveCatalogIdentity(ctx, rawID, surface)
+	if err != nil {
+		return CatalogResolution{}, err
+	}
+	if resolution.Surface != surface || !looksLikeUUID(resolution.ID) {
+		return CatalogResolution{}, errCatalogWrongSurface
+	}
+	return resolution, nil
+}
+
 // AnnotationReply is one community reply on an annotation.
 type AnnotationReply struct {
 	ID           string    `json:"id"`
@@ -158,6 +183,10 @@ func CreateAnnotation(ctx context.Context, targetType, targetID, ownerID, visibi
 	if !annotationTargetTypes[targetType] {
 		return Annotation{}, errAnnotationLocator
 	}
+	resolution, err := canonicalAnnotationTarget(ctx, targetType, targetID)
+	if err != nil {
+		return Annotation{}, err
+	}
 	if visibility != "private" && visibility != "community" {
 		visibility = "private"
 	}
@@ -165,13 +194,45 @@ func CreateAnnotation(ctx context.Context, targetType, targetID, ownerID, visibi
 		return Annotation{}, err
 	}
 	var a Annotation
-	err := dbPool.QueryRow(ctx, `
+	err = dbPool.QueryRow(ctx, `
 		INSERT INTO annotations (target_type, target_id, user_id, visibility, locator, selected_text, note)
 		VALUES ($1, $2, $3::uuid, $4, $5, $6, $7)
 		RETURNING id::text, target_type, target_id, user_id::text, visibility, locator, selected_text, note, created_at, updated_at
-	`, targetType, targetID, ownerID, visibility, locator, selected, note).Scan(
+	`, targetType, resolution.ID, ownerID, visibility, locator, selected, note).Scan(
 		&a.ID, &a.TargetType, &a.TargetID, &a.OwnerID, &a.Visibility, &a.Locator, &a.SelectedText, &a.Note, &a.CreatedAt, &a.UpdatedAt)
 	return a, err
+}
+
+func canonicalizeAnnotationRow(ctx context.Context, annotationID string) (string, CatalogResolution, error) {
+	tx, err := dbPool.Begin(ctx)
+	if err != nil {
+		return "", CatalogResolution{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	var targetType, rawID string
+	if err := tx.QueryRow(ctx, `
+		SELECT target_type, target_id
+		FROM annotations
+		WHERE id = $1::uuid
+		FOR UPDATE`, annotationID).Scan(&targetType, &rawID); err != nil {
+		return "", CatalogResolution{}, err
+	}
+	resolution, err := canonicalAnnotationTarget(ctx, targetType, rawID)
+	if err != nil {
+		return "", CatalogResolution{}, err
+	}
+	if resolution.ID != rawID {
+		if _, err := tx.Exec(ctx, `
+			UPDATE annotations SET target_id = $2
+			WHERE id = $1::uuid AND target_id = $3`, annotationID, resolution.ID, rawID); err != nil {
+			return "", CatalogResolution{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", CatalogResolution{}, err
+	}
+	return targetType, resolution, nil
 }
 
 // ListAnnotations returns the viewer's own annotations plus community ones for a

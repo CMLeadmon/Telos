@@ -32,14 +32,14 @@ export interface AnnotationReply {
 }
 
 interface AnnotationState {
-  bookId: number | null;
+  bookId: string | null;
   annotations: Annotation[];
   replies: Record<string, AnnotationReply[]>;
   activeId: string | null;
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
 
-  load: (bookId: number) => Promise<void>;
+  load: (bookId: string) => Promise<void>;
   create: (input: {
     locator: AnnotationLocator;
     selectedText: string;
@@ -68,7 +68,9 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
   load: async (bookId) => {
     set({ bookId, status: "loading", error: null });
     try {
-      const res = await api<{ annotations: Annotation[] }>(`/api/v1/library/books/${bookId}/annotations`);
+      const res = await api<{ annotations: Annotation[] }>(
+        `/api/v1/library/books/${encodeURIComponent(bookId)}/annotations`,
+      );
       set({ annotations: res.annotations ?? [], status: "ready" });
     } catch (e) {
       set({ status: "error", error: message(e) });
@@ -81,10 +83,13 @@ export const useAnnotationStore = create<AnnotationState>((set, get) => ({
     const { bookId } = get();
     if (bookId == null) return;
     try {
-      const created = await api<Annotation>(`/api/v1/library/books/${bookId}/annotations`, {
-        method: "POST",
-        body: JSON.stringify({ locator, selectedText, note, visibility }),
-      });
+      const created = await api<Annotation>(
+        `/api/v1/library/books/${encodeURIComponent(bookId)}/annotations`,
+        {
+          method: "POST",
+          body: JSON.stringify({ locator, selectedText, note, visibility }),
+        },
+      );
       set((s) => ({ annotations: [created, ...s.annotations], error: null }));
     } catch (e) {
       set({ error: message(e) });

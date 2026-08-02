@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ImageOff, Music, Settings, Share2 } from "lucide-react";
-import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { ImageOff, Info, Music, Settings, Share2 } from "lucide-react";
+import { api, apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
   type LibraryBook,
@@ -14,6 +14,8 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
+import { AudiobookPlayer } from "@/components/library/AudiobookPlayer";
+import { LibraryItemDetail } from "@/components/library/LibraryItemDetail";
 
 function AudiobookRow({
   item,
@@ -130,17 +132,22 @@ function BookCard({
   book,
   onRead,
   onManage,
+  onDetail,
   canManage,
 }: {
   book: LibraryBook;
   onRead: () => void;
   onManage: () => void;
+  onDetail: () => void;
   canManage: boolean;
 }) {
   const [coverBroken, setCoverBroken] = useState(false);
   const isEpub = book.format === "EPUB";
-  // Both EPUB and PDF open in-app; only an unreadable format falls back to a tab.
-  const readable = book.format === "EPUB" || book.format === "PDF";
+  // EPUB, PDF and audiobooks all open in-app; only an unsupported format falls
+  // back to a tab. Audiobooks belong here too — without them the card opens a
+  // raw content URL instead of the Library player.
+  const readable =
+    book.format === "EPUB" || book.format === "PDF" || book.kind === "audiobook";
   const open = () => {
     if (readable) onRead();
     else window.open(libraryContentUrl(book.id), "_blank", "noopener");
@@ -180,11 +187,22 @@ function BookCard({
       <div className="brow">
         <span className={`fmtpill${isEpub ? "" : " pdf"}`}>{book.format}</span>
         <div className="book-actions">
+          <button
+            className="btn-ghost btn-sm"
+            aria-label={`details for ${book.title}`}
+            title="Details"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDetail();
+            }}
+          >
+            <Info size={12} />
+          </button>
           <a
             className="btn-ghost btn-sm"
             aria-label={`share ${book.title}`}
             title="Share to chat"
-            href={`/chat?share_kind=library_book&share_ref=${book.id}`}
+            href={`/chat?share_kind=library_book&share_ref=${encodeURIComponent(book.id)}`}
             onClick={(e) => e.stopPropagation()}
           >
             <Share2 size={12} />
@@ -225,6 +243,8 @@ export default function LibraryPage() {
   const router = useRouter();
   const [reading, setReading] = useState<LibraryBook | null>(null);
   const [managing, setManaging] = useState<LibraryBook | null>(null);
+  const [audioPlayerId, setAudioPlayerId] = useState<string | null>(null);
+  const [detailItem, setDetailItem] = useState<LibraryBook | null>(null);
 
   const books = filtered();
 
@@ -244,9 +264,17 @@ export default function LibraryPage() {
     const params = new URLSearchParams(window.location.search);
     const readId = params.get("read");
     if (readId && books.length > 0) {
-      const found = books.find((b) => String(b.id) === readId);
+      const found = books.find((b) => b.id === readId);
       if (found) {
         setTimeout(() => setReading(found), 0);
+      } else {
+        api<LibraryBook>(
+          `/api/v1/library/books/${encodeURIComponent(readId)}`,
+        )
+          .then((resolved) => setReading(resolved))
+          .catch(() => {
+            // A stale or unauthorized deep link leaves the catalog usable.
+          });
       }
       const newUrl = window.location.pathname;
       window.history.replaceState({}, "", newUrl);
@@ -343,8 +371,15 @@ export default function LibraryPage() {
                   key={b.id}
                   book={b}
                   canManage={canManage}
-                  onRead={() => setReading(b)}
+                  onRead={() => {
+                    if (b.kind === "audiobook" || b.format === "AUDIOBOOK") {
+                      setAudioPlayerId(b.id);
+                    } else {
+                      setReading(b);
+                    }
+                  }}
                   onManage={() => setManaging(b)}
+                  onDetail={() => setDetailItem(b)}
                 />
               ))}
             </div>
@@ -361,6 +396,26 @@ export default function LibraryPage() {
         <BookManageModal
           book={managing}
           onClose={() => setManaging(null)}
+        />
+      )}
+      {audioPlayerId && (
+        <AudiobookPlayer
+          itemId={audioPlayerId}
+          onClose={() => setAudioPlayerId(null)}
+        />
+      )}
+      {detailItem && (
+        <LibraryItemDetail
+          item={detailItem}
+          onClose={() => setDetailItem(null)}
+          onOpenItem={(item) => {
+            setDetailItem(null);
+            if (item.kind === "audiobook") {
+              setAudioPlayerId(item.id);
+            } else {
+              setReading(item);
+            }
+          }}
         />
       )}
     </>

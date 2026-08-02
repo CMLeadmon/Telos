@@ -209,6 +209,137 @@ func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (
 
 var jellyfinAuthorizer *JellyfinAuthorizer
 
+func jellyfinLibraryAllowed(libraryID string) bool {
+	if libraryID == "" {
+		return false
+	}
+	if jellyfinAuthorizer == nil {
+		return true
+	}
+	_, ok := jellyfinAuthorizer.allowed[libraryID]
+	return ok
+}
+
+func jellyfinCatalogKind(mediaType string, isFolder bool) (CatalogKind, bool) {
+	if isFolder {
+		return "folder", true
+	}
+	switch strings.ToLower(strings.TrimSpace(mediaType)) {
+	case "audio", "audiobook", "music", "musicalbum", "audioepisode":
+		return "audio", true
+	case "video", "movie", "episode", "trailer", "musicvideo":
+		return "video", true
+	default:
+		return "", false
+	}
+}
+
+func observeJellyfinCatalogItem(ctx context.Context, upstreamID, libraryID, mediaType string, isFolder bool) (CatalogResolution, error) {
+	if !jellyfinLibraryAllowed(libraryID) {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	kind, ok := jellyfinCatalogKind(mediaType, isFolder)
+	if !ok {
+		return CatalogResolution{}, errCatalogInvalid
+	}
+	observed, err := observeCatalogIdentity(ctx, CatalogObservation{
+		Provider: ProviderJellyfin, UpstreamID: upstreamID, LibraryID: libraryID,
+		Surface: SurfaceStream, Kind: kind,
+	})
+	if err != nil {
+		return CatalogResolution{}, err
+	}
+	current, err := resolveCatalogIdentity(ctx, observed.ID, SurfaceStream)
+	if err != nil || current.Provider != ProviderJellyfin || current.UpstreamID != upstreamID ||
+		!current.Active || !current.Available {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	return current, nil
+}
+
+type jellyfinItemDetail struct {
+	ID       string `json:"Id"`
+	Name     string `json:"Name"`
+	Type     string `json:"Type"`
+	IsFolder bool   `json:"IsFolder"`
+}
+
+func fetchJellyfinItemDetail(ctx context.Context, itemID string) (jellyfinItemDetail, error) {
+	userID, err := getJellyfinUserID(ctx)
+	if err != nil {
+		return jellyfinItemDetail{}, err
+	}
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet,
+		fmt.Sprintf("%s/Users/%s/Items/%s", jellyfinBaseURL, userID, itemID), nil)
+	if err != nil {
+		return jellyfinItemDetail{}, err
+	}
+	token := getJellyfinAdminToken()
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		return jellyfinItemDetail{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return jellyfinItemDetail{}, errItemNotAuthorized
+	}
+	var item jellyfinItemDetail
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&item); err != nil {
+		return jellyfinItemDetail{}, err
+	}
+	if item.ID != itemID {
+		return jellyfinItemDetail{}, errItemNotAuthorized
+	}
+	return item, nil
+}
+
+func discoverLegacyJellyfinItem(ctx context.Context, upstreamID string) (CatalogResolution, error) {
+	if jellyfinAuthorizer == nil {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	libraryID := ""
+	if _, topLevel := jellyfinAuthorizer.allowed[upstreamID]; topLevel {
+		libraryID = upstreamID
+	} else {
+		authorized, err := jellyfinAuthorizer.AuthorizeItem(ctx, upstreamID)
+		if err != nil {
+			return CatalogResolution{}, errItemNotAuthorized
+		}
+		libraryID = authorized.LibraryID
+	}
+	item, err := fetchJellyfinItemDetail(ctx, upstreamID)
+	if err != nil {
+		return CatalogResolution{}, errItemNotAuthorized
+	}
+	return observeJellyfinCatalogItem(ctx, upstreamID, libraryID, item.Type, item.IsFolder)
+}
+
+// resolveJellyfinItemHTTP canonicalizes a browser ID, checks the source is
+// still active and in the configured library allowlist, then authorizes the
+// upstream Jellyfin ID. That ordering prevents a browser UUID from ever
+// reaching Jellyfin or its authorizer.
+func resolveJellyfinItemHTTP(w http.ResponseWriter, r *http.Request, rawID string) (CatalogResolution, bool) {
+	resolution, err := resolveCatalogIdentity(r.Context(), rawID, SurfaceStream)
+	if errors.Is(err, errCatalogNotFound) && !looksLikeUUID(rawID) {
+		resolution, err = discoverLegacyJellyfinItem(r.Context(), rawID)
+	}
+	if err != nil || resolution.Provider != ProviderJellyfin || !resolution.Active || !resolution.Available ||
+		!jellyfinLibraryAllowed(resolution.LibraryID) {
+		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		return CatalogResolution{}, false
+	}
+	// A top-level view is itself the allowlisted library and has no ancestor
+	// carrying that ID; descendants still require the full ancestry check.
+	if resolution.UpstreamID != resolution.LibraryID && !authorizeJellyfinItem(w, r, resolution.UpstreamID) {
+		return CatalogResolution{}, false
+	}
+	return resolution, true
+}
+
 // authorizeJellyfinItem is the handler-facing gate: it returns true when the
 // item is in a configured library, writing a 404 otherwise. When no authorizer
 // is configured (development), it allows access.
@@ -401,8 +532,10 @@ func handleHLSResource(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	// Reauthorize the item on every locator hit (membership may have changed).
-	if !authorizeJellyfinItem(w, r, loc.Item) {
+	// Re-resolve and reauthorize the internal upstream item on every locator hit
+	// so source deactivation and allowlist changes take effect immediately.
+	resolution, ok := resolveJellyfinItemHTTP(w, r, loc.Item)
+	if !ok || resolution.UpstreamID != loc.Item {
 		return
 	}
 	subpath, rawQuery, err := splitResourcePath(loc.Res)

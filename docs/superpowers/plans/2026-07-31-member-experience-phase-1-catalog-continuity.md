@@ -487,8 +487,11 @@ type LibraryBook struct {
 After each authorized Grimmory book is mapped, call `Observe` with provider
 `grimmory`, its stable allowed library ID, surface `library`, and kind derived
 strictly from `EPUB`, `PDF`, or `AUDIOBOOK`. Resolve route IDs before building
-any Grimmory path. Unknown formats remain visible only through their current
-unsupported fallback and are not mislabeled as audiobook.
+any Grimmory path. Only EPUB, PDF, and audiobook Grimmory records participate
+in the canonical Library catalog. Unknown or unsupported formats are omitted
+from member-visible canonical Library responses and remain deferred; they must
+never be retyped as audiobook, EPUB, PDF, or folder. This minimal scope matches
+the existing deferral of comics and physical-book handling.
 
 - [ ] **Step 5: Canonicalize Jellyfin roots, folders, items, and streams**
 

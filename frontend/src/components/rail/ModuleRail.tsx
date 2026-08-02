@@ -290,12 +290,13 @@ export function ModuleRailFooter() {
   }
 
   if (pathname.startsWith("/library") && books.length > 0) {
-    const gib = books.reduce((n, b) => n + (b.fileSizeKb ?? 0), 0) / (1024 * 1024);
+    // The normalized Library contract no longer carries per-item byte size, so
+    // the footer reports the count rather than inventing a total.
     return (
       <div className="railfoot">
         <div className="row">
           <LibraryIcon size={11} /> {books.length} item
-          {books.length === 1 ? "" : "s"} · {gib < 0.1 ? "<0.1" : gib.toFixed(1)} GB
+          {books.length === 1 ? "" : "s"}
         </div>
         <div className="row">node: telos-node-1</div>
       </div>

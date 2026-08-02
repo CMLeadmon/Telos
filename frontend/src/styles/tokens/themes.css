@@ -4,6 +4,7 @@
   --canvas:#000000;
   --surface:#0E0A16;
   --surface-2:#160C22;
+  --surface-3:#1F1230;
   --input:#160C22;
   --ink:#FFFFFF;
   --muted:#B9B4C7;
@@ -37,6 +38,7 @@
   --canvas:#EFE7D6;   /* warm light tan */
   --surface:#F6F1E7;
   --surface-2:#FFFFFF;
+  --surface-3:#EFE8DA;
   --input:#FFFFFF;
   --ink:#1B2433;      /* exact logo navy */
   --muted:#565E6E;

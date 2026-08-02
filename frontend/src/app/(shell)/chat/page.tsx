@@ -14,7 +14,7 @@ import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { api } from "@/lib/api";
 
 interface ShareItemMetadata {
-  id: string | number;
+  id: string;
   title: string;
 }
 
@@ -84,23 +84,27 @@ export default function ChatPage() {
       if (!shareRef) return;
 
       if (shareKind === "file") {
-        // The label is derived from the ref rather than fetched, but it still
-        // has to land out of a callback — this effect may not setState inline.
+        // Files are not catalog items, so there is nothing to canonicalize and
+        // no metadata route to ask. The label is derived from the ref, but it
+        // still has to land out of a callback — this effect may not setState
+        // inline.
         void Promise.resolve(fileLabelFromRef(shareRef)).then((title) => {
           setStagedEmbed({ kind: "file", ref: shareRef, title });
         });
       } else {
         const url =
           shareKind === "library_book"
-            ? `/api/v1/library/books/${shareRef}`
-            : `/api/v1/media/items/${shareRef}`;
+            ? `/api/v1/library/books/${encodeURIComponent(shareRef)}`
+            : `/api/v1/media/items/${encodeURIComponent(shareRef)}`;
 
+        // A legacy upstream ID in the link resolves to its canonical Telos ID,
+        // so stage what the server returned rather than what the URL carried.
         api<ShareItemMetadata>(url)
           .then((item) => {
             if (item) {
               setStagedEmbed({
                 kind: shareKind,
-                ref: shareRef,
+                ref: item.id,
                 title: item.title,
               });
             }

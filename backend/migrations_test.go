@@ -14,6 +14,17 @@ func fsFrom(files map[string]string) fstest.MapFS {
 	return m
 }
 
+func TestRepositoryMigrationsContainCatalogIdentity(t *testing.T) {
+	ms, err := DiscoverMigrations(migrationsFS, "db/migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ms[21]
+	if got.Version != 22 || got.Name != "catalog_identity_and_progress" {
+		t.Fatalf("migration 22 = %+v", got)
+	}
+}
+
 func TestDiscoverMigrationsValidation(t *testing.T) {
 	t.Run("contiguous ok", func(t *testing.T) {
 		ms, err := DiscoverMigrations(fsFrom(map[string]string{

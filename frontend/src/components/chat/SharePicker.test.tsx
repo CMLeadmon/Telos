@@ -26,12 +26,15 @@ const apiMock = api as unknown as ReturnType<typeof vi.fn>;
 // but a show is library → series → season → episode. The gateway's media
 // endpoint returns one level at a time, so anything below the top is only
 // reachable by walking.
+// The Movies ID deliberately carries characters that must survive URL
+// encoding — library IDs are opaque gateway strings, not slugs.
+const MOVIES_ID = "library/root ?kind=video";
 const LIBRARIES = [
-  { id: "lib-movies", name: "Movies", type: "video" },
+  { id: MOVIES_ID, name: "Movies", type: "video" },
   { id: "lib-shows", name: "Shows", type: "video" },
 ];
 const CHILDREN: Record<string, unknown[]> = {
-  "lib-movies": [
+  [MOVIES_ID]: [
     { id: "movie-1", title: "Raising Helen", duration: "1h 59m", type: "Movie", isFolder: false },
   ],
   "lib-shows": [
@@ -45,6 +48,10 @@ const CHILDREN: Record<string, unknown[]> = {
   ],
 };
 
+// Books carry canonical Telos catalog IDs since the identity cutover, not the
+// numeric Grimmory ID they used to expose.
+const BOOK_ID = "11111111-1111-4111-8111-111111111111";
+
 function routeApi(overrides: Record<string, unknown> = {}) {
   apiMock.mockImplementation((path: string) => {
     for (const [key, value] of Object.entries(overrides)) {
@@ -52,11 +59,11 @@ function routeApi(overrides: Record<string, unknown> = {}) {
     }
     if (path === "/api/v1/media") return Promise.resolve(LIBRARIES);
     if (path.startsWith("/api/v1/media/items?parentId=")) {
-      const id = path.split("parentId=")[1];
+      const id = decodeURIComponent(path.split("parentId=")[1]);
       return Promise.resolve(CHILDREN[id] ?? []);
     }
     if (path === "/api/v1/library/books") {
-      return Promise.resolve([{ id: 7, title: "Pride and Prejudice", authors: ["Austen"] }]);
+      return Promise.resolve([{ id: BOOK_ID, title: "Pride and Prejudice", authors: ["Austen"] }]);
     }
     if (path.startsWith("/api/v1/files")) {
       return Promise.resolve({
@@ -75,9 +82,6 @@ function routeApi(overrides: Record<string, unknown> = {}) {
     return Promise.resolve({ books: [], media: [], files: [] });
   });
 }
-
-const openTab = (label: string) =>
-  fireEvent.click(screen.getByRole("tab", { name: new RegExp(label, "i") }));
 
 const rowByName = async (name: string) => {
   const row = await screen.findByText(name);
@@ -141,7 +145,7 @@ describe("SharePicker", () => {
     render(<SharePicker onPick={onPick} onClose={vi.fn()} defaultTab="book" />);
 
     fireEvent.click(await rowByName("Pride and Prejudice"));
-    expect(onPick).toHaveBeenCalledWith("library_book", "7", "Pride and Prejudice");
+    expect(onPick).toHaveBeenCalledWith("library_book", BOOK_ID, "Pride and Prejudice");
   });
 
   // Search reaches what browsing would otherwise require four clicks to find.
@@ -179,6 +183,25 @@ describe("SharePicker", () => {
     });
     // Still browsing.
     expect(screen.getByText("Movies")).toBeInTheDocument();
+  });
+
+  // Library and item IDs are opaque; a raw interpolation breaks any ID
+  // carrying a slash, space, or query character.
+  it("URL-encodes an opaque parent ID when descending", async () => {
+    const onPick = vi.fn();
+    render(<SharePicker onPick={onPick} onClose={vi.fn()} defaultTab="film" />);
+
+    fireEvent.click(await rowByName("Movies"));
+    fireEvent.click(await rowByName("Raising Helen"));
+
+    expect(onPick).toHaveBeenCalledWith("stream_film", "movie-1", "Raising Helen");
+    expect(
+      apiMock.mock.calls.some(
+        (c) =>
+          String(c[0]) ===
+          `/api/v1/media/items?parentId=${encodeURIComponent(MOVIES_ID)}`,
+      ),
+    ).toBe(true);
   });
 
   it("hides tabs the viewer has no capability for", async () => {

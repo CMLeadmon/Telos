@@ -30,7 +30,9 @@ interface SharePickerProps {
 // resolveSharedFileMeta on the gateway.
 
 interface WireBook {
-  id: number;
+  // Canonical Telos catalog ID. Books were numeric Grimmory IDs before the
+  // catalog-identity cutover; the gateway now returns a UUID here.
+  id: string;
   title: string;
   authors: string[] | null;
 }
@@ -202,7 +204,9 @@ export function SharePicker({ onClose, onPick, defaultTab }: SharePickerProps) {
     if (searching || activeTab !== "film" || media !== null) return;
     let stale = false;
     const request = parentId
-      ? api<WireMediaItem[]>(`/api/v1/media/items?parentId=${parentId}`)
+      ? api<WireMediaItem[]>(
+          `/api/v1/media/items?parentId=${encodeURIComponent(parentId)}`,
+        )
       : api<WireLibrary[]>("/api/v1/media").then((libs) =>
           (libs ?? []).map((l) => ({
             id: l.id,
@@ -281,7 +285,7 @@ export function SharePicker({ onClose, onPick, defaultTab }: SharePickerProps) {
       row: "leaf",
       id: `book-${b.id}`,
       kind: "library_book",
-      ref: String(b.id),
+      ref: b.id,
       title: b.title,
       subtitle: (b.authors ?? []).join(", "),
     });

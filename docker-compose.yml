@@ -72,6 +72,34 @@ services:
     environment:
       - DATABASE_OWNER_URL=postgres://telos_owner:${TELOS_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
 
+  telos-audiobook-migrate:
+    profiles: ["migration"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: telos-audiobook-migrate
+    command: ["./telos-core", "audiobook-migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - telos-backend
+      - telos-db
+    environment:
+      - DATABASE_URL=postgres://telos_runtime:${TELOS_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - STORAGE_PATH=${STORAGE_PATH:-/data/shared}
+      - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
+      - JELLYFIN_LIBRARY_IDS=${JELLYFIN_LIBRARY_IDS}
+      - GRIMMORY_URL=http://grimmory:8080
+      - GRIMMORY_USERNAME=${GRIMMORY_USERNAME:-admin}
+      - GRIMMORY_PASSWORD=${GRIMMORY_PASSWORD:-admin}
+    volumes:
+      - ${STORAGE_PATH:-/data/shared}:/data/shared:z
+
   telos-core:
     build:
       context: .

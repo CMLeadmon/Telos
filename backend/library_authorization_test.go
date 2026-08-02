@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"testing"
 )
 
@@ -68,5 +70,23 @@ func TestGrimmoryAuthorizer(t *testing.T) {
 func TestGrimmoryAuthorizerRequiresLibraries(t *testing.T) {
 	if _, err := NewGrimmoryAuthorizer(&fakeGrimmoryResolver{}, nil); err == nil {
 		t.Fatal("empty library allowlist accepted")
+	}
+}
+
+func TestGrimmoryAPIResolverReturnsCurrentLibraryID(t *testing.T) {
+	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/books/7" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"id":7,"libraryId":42,"libraryName":"Moved","metadata":{"title":"Moved book"},"primaryFile":{"bookType":"EPUB"}}`)
+	})()
+
+	title, format, libraryID, err := (grimmoryAPIResolver{}).ResolveBook(t.Context(), "7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "Moved book" || format != "EPUB" || libraryID != "42" {
+		t.Fatalf("resolved = (%q, %q, %q), want current library 42", title, format, libraryID)
 	}
 }

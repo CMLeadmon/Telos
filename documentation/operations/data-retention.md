@@ -12,7 +12,8 @@ invalidated before success is reported.
 | Sessions | Revoked (and live sockets closed) |
 | Invites created by the user | Marked used/consumed |
 | Preferences (`user_preferences`) | Deleted |
-| Reading progress (`book_progress`) | Deleted |
+| Member continuity (`member_progress`) | Deleted; rows are member-owned and keyed by stable catalog UUID |
+| Legacy reading progress (`book_progress`, compatibility period) | Deleted |
 | Reactions (`message_reactions`) | Deleted |
 | Channel read state (`channel_reads`) | Deleted |
 | Notifications (`notifications`) | Deleted |
@@ -29,6 +30,11 @@ invalidated before success is reported.
 
 Public authorship is retained only in anonymized form: the `users` row survives
 so message foreign keys render as "Deleted User" rather than breaking history.
+Stable shared `catalog_items` and `catalog_sources` survive account deletion;
+only the deleted member's `member_progress` rows are removed. A successful
+shared Grimmory book deletion instead removes both progress representations for
+that resolved catalog item in one transaction. An upstream deletion failure
+preserves both.
 
 ## Physical asset deletion
 

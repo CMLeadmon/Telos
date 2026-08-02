@@ -143,7 +143,9 @@ export function BookManageModal({
 
   useEffect(() => {
     let disposed = false;
-    api<LibraryBook>(`/api/v1/library/books/${book.id}`)
+    api<LibraryBook>(
+      `/api/v1/library/books/${encodeURIComponent(book.id)}`,
+    )
       .then((loaded) => {
         if (disposed) return;
         setFreshBook(loaded);
@@ -176,7 +178,7 @@ export function BookManageModal({
     setMessage(null);
     try {
       const updated = await api<LibraryBook>(
-        `/api/v1/library/books/${book.id}/metadata`,
+        `/api/v1/library/books/${encodeURIComponent(book.id)}/metadata`,
         { method: "PUT", body: JSON.stringify(formToMetadata(form)) },
       );
       setFreshBook(updated);
@@ -198,7 +200,7 @@ export function BookManageModal({
     setMessage(null);
     try {
       const result = await api<{ candidates: MetadataCandidate[] }>(
-        `/api/v1/library/books/${book.id}/metadata/fetch`,
+        `/api/v1/library/books/${encodeURIComponent(book.id)}/metadata/fetch`,
         { method: "POST" },
       );
       setCandidates(result.candidates ?? []);
@@ -250,7 +252,7 @@ export function BookManageModal({
     setError(null);
     setMessage(null);
     try {
-      await api<void>(`/api/v1/library/books/${book.id}/cover`, {
+      await api<void>(`/api/v1/library/books/${encodeURIComponent(book.id)}/cover`, {
         method: "PUT",
         body: body instanceof FormData ? body : JSON.stringify(body),
       });
@@ -286,7 +288,7 @@ export function BookManageModal({
     setDeleting(true);
     setError(null);
     try {
-      await api<void>(`/api/v1/library/books/${book.id}`, {
+      await api<void>(`/api/v1/library/books/${encodeURIComponent(book.id)}`, {
         method: "DELETE",
       });
       await fetchCatalog();

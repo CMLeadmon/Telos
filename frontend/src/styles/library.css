@@ -215,3 +215,63 @@
 .annot-actions .annot-cancel{background:transparent;border:1px solid var(--line-2);color:var(--muted)}
 .annot-error{color:var(--rose);font-size:12px}
 .annot-empty{padding:16px 14px;color:var(--muted);font-size:13px}
+
+/* ============================================================
+   AUDIOBOOK PLAYER — a full-surface Library-owned listener.
+   Flat: hairline separators, token radii, no elevation.
+   ============================================================ */
+.abp { position: fixed; inset: 0; z-index: 1100; background: var(--canvas);
+  display: flex; flex-direction: column; }
+.abp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 20px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.abp-head h2 { font-family: var(--f-display); font-size: 17px; font-weight: 700; margin: 0; }
+.abp-head .by { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+
+.abp-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+  align-items: center; gap: 18px; padding: 24px 20px; }
+.abp-cover { width: 220px; aspect-ratio: 1; flex: none; border-radius: var(--r);
+  border: 1px solid var(--line-2); background: var(--surface-2); overflow: hidden;
+  display: flex; align-items: center; justify-content: center; }
+.abp-cover img { width: 100%; height: 100%; object-fit: cover; }
+.abp-cover .nocover { font-family: var(--f-mono); font-size: 11px; color: var(--faint); }
+
+.abp-tracks { width: min(520px, 100%); display: flex; flex-direction: column; gap: 3px; }
+.abp-tracks h3 { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint); margin: 0 0 4px; font-weight: 400; }
+.abp-track { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 8px 10px; background: none; border: none; border-radius: var(--r-xs);
+  color: var(--muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.abp-track:hover, .abp-track:focus-visible { background: var(--surface-3); color: var(--ink); }
+.abp-track.on { background: var(--surface-3); color: var(--accent); }
+.abp-track .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abp-track .td { font-family: var(--f-mono); font-size: 11px; color: var(--faint); flex: none; }
+
+.abp-foot { border-top: 1px solid var(--line-2); background: var(--surface);
+  padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 12px; }
+.abp-scrub { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.abp-times { display: flex; justify-content: space-between; font-family: var(--f-mono);
+  font-size: 11px; color: var(--faint); }
+.abp-controls { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; width: min(520px, 100%); margin: 0 auto; }
+.abp-rates { display: flex; gap: 2px; }
+.abp-rate { padding: 4px 8px; background: none; border: none; border-radius: var(--r-xs);
+  font-family: var(--f-mono); font-size: 11px; color: var(--faint); cursor: pointer; }
+.abp-rate:hover { color: var(--ink); }
+.abp-rate.on { background: var(--accent); color: var(--on-primary); }
+.abp-transport { display: flex; align-items: center; gap: 10px; }
+.abp-skip { display: flex; align-items: center; gap: 3px; background: none; border: none;
+  padding: 8px; border-radius: var(--r-xs); color: var(--muted); font-family: var(--f-mono);
+  font-size: 11px; cursor: pointer; }
+.abp-skip:hover { color: var(--ink); background: var(--surface-3); }
+.abp-play { width: 46px; height: 46px; flex: none; border-radius: var(--r-pill);
+  border: none; background: var(--accent); color: var(--on-primary);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.abp-play:hover { background: var(--accent-hover); }
+
+@media (max-width: 720px) {
+  .abp-cover { width: min(220px, 62vw); }
+  .abp-controls { flex-direction: column-reverse; gap: 14px; }
+  .abp-play, .abp-skip, .abp-rate { min-height: 44px; }
+  .abp-play { width: 56px; height: 56px; }
+}
