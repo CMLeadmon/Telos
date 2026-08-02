@@ -492,7 +492,9 @@ func main() {
 	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), ""))
 
 	// Frontend static assets handler
-	mux.Handle("/", fileServer)
+	// Stamps the theme cookie into served documents so the first paint matches
+	// the user's theme instead of flashing the built-in default.
+	mux.Handle("/", themedFrontend(fileServer))
 
 	// Internet-facing boundary chain (outermost first): correlation ID,
 	// response security headers, bounded admission before any auth/DB/Redis
@@ -1909,14 +1911,9 @@ func buildEmbedSnapshot(ctx context.Context, kind, ref string) ([]byte, error) {
 		snapshot.Subtitle = sub
 
 	case "file":
-		var filename string
-		var size int64
-		var mime string
-		err := dbPool.QueryRow(ctx, `
-			SELECT filename, size_bytes, mime_type FROM files WHERE id = $1
-		`, ref).Scan(&filename, &size, &mime)
+		filename, size, mime, err := resolveSharedFileMeta(ctx, ref)
 		if err != nil {
-			return nil, errors.New("file not found")
+			return nil, err
 		}
 
 		snapshot.Title = filename
@@ -3574,6 +3571,54 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 	return fileID, true
 }
 
+// The Files surface has two ID namespaces. handleListFiles walks the shared
+// filesystem and IDs entries as base64url(relative path); uploads recorded in
+// the files table are keyed by UUID. Anything that accepts a file ID has to
+// accept both, and in this order — a UUID string decodes as valid base64url,
+// so the disk probe has to fail before the DB lookup is tried.
+//
+// sharedFileMetaFromPath describes a file in the filesystem namespace. The ID
+// is attacker-controlled and is decoded into a path, so containment lives here:
+// resolveMediaPath rejects anything escaping the root, the media root itself is
+// not a file, and directories are not shareable. ok is false for all of those,
+// leaving the caller to try the UUID namespace.
+func sharedFileMetaFromPath(id string) (filename string, size int64, mime string, ok bool) {
+	relPath, err := base64.RawURLEncoding.DecodeString(id)
+	if err != nil {
+		return "", 0, "", false
+	}
+	cleanPath, err := resolveMediaPath(string(relPath))
+	if err != nil || cleanPath == mediaRoot {
+		return "", 0, "", false
+	}
+	info, err := os.Stat(cleanPath)
+	if err != nil || info.IsDir() {
+		return "", 0, "", false
+	}
+	name := filepath.Base(cleanPath)
+	return name, info.Size(), mimeForName(name), true
+}
+
+// resolveSharedFileMeta returns the display metadata for either namespace.
+// Callers that need bytes (handleDownloadFile) resolve locations themselves;
+// this is only for describing a file.
+func resolveSharedFileMeta(ctx context.Context, id string) (filename string, size int64, mime string, err error) {
+	if name, sz, mt, ok := sharedFileMetaFromPath(id); ok {
+		return name, sz, mt, nil
+	}
+
+	// Infected uploads are excluded, matching handleDownloadFile — a share card
+	// whose Download action cannot resolve is worse than a refused share.
+	err = dbPool.QueryRow(ctx, `
+		SELECT filename, size_bytes, mime_type FROM files
+		WHERE id = $1 AND scan_status = 'clean'
+	`, id).Scan(&filename, &size, &mime)
+	if err != nil {
+		return "", 0, "", errors.New("file not found")
+	}
+	return filename, size, mime, nil
+}
+
 func handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if id == "" {
@@ -3968,12 +4013,26 @@ func handleSearch(w http.ResponseWriter, r *http.Request) {
 			defer rows.Close()
 
 			var files []SearchFileItem
+			seen := map[string]bool{}
 			for rows.Next() {
 				var f SearchFileItem
 				if err := rows.Scan(&f.ID, &f.Filename, &f.SizeBytes, &f.MimeType, &f.CreatedAt); err == nil {
 					files = append(files, f)
+					seen[f.Filename] = true
 				}
 			}
+
+			// The table only records uploads made through the app. Everything
+			// else on the shared volume is listed by the Files browser and is
+			// equally shareable, so search has to reach it too.
+			if len(files) < searchScopeLimit {
+				for _, f := range searchSharedFilesystem(q, searchScopeLimit-len(files)) {
+					if !seen[f.Filename] {
+						files = append(files, f)
+					}
+				}
+			}
+
 			mu.Lock()
 			if len(files) > 0 {
 				results.Files = files
