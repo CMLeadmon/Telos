@@ -69,7 +69,13 @@
 
 
 /* One-level thread panel */
-.thread-panel{position:fixed;top:0;right:0;bottom:0;width:min(380px,100vw);background:var(--surface);
+/* Anchored to .shellbody, not the viewport. .shellbody is position:relative
+   with a z-index, so it is a stacking context — a fixed panel inside it can
+   never paint above the topbar no matter how high its own z-index goes, and
+   its header (with the close button) ends up unreachable underneath. Filling
+   the shell body is also the right layout: the panel is an aside beside the
+   arena, not an overlay of the whole chrome. */
+.thread-panel{position:absolute;top:0;right:0;bottom:0;width:min(380px,100vw);background:var(--surface);
   border-left:1px solid var(--line-2);display:flex;flex-direction:column;z-index:50}
 .thread-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line-2)}
 .thread-head h3{margin:0;font-size:14px}

@@ -294,41 +294,95 @@ func (c *JellyfinCatalog) Recent(ctx context.Context, userID string, limit int) 
 	if err != nil {
 		return nil, err
 	}
-	var allItems []jellyfinItemRaw
+	// The source view is the item's library, and it is needed for both the
+	// allowlist check and catalog identity, so carry it alongside the record.
+	type latestItem struct {
+		raw       jellyfinItemRaw
+		libraryID string
+	}
+	var allItems []latestItem
 	for _, v := range views {
 		if strings.Contains(strings.ToLower(v.Name), "audiobook") {
+			continue
+		}
+		if !jellyfinLibraryAllowed(v.ID) {
 			continue
 		}
 		items, err := fetchJellyfinLatestItems(ctx, v.ID, limit)
 		if err != nil {
 			continue
 		}
-		allItems = append(allItems, items...)
+		for _, raw := range items {
+			allItems = append(allItems, latestItem{raw: raw, libraryID: v.ID})
+		}
 	}
 	sort.Slice(allItems, func(i, j int) bool {
-		return allItems[i].DateCreated > allItems[j].DateCreated
+		return allItems[i].raw.DateCreated > allItems[j].raw.DateCreated
 	})
 	if len(allItems) > limit {
 		allItems = allItems[:limit]
 	}
-	resItems := make([]MediaItem, 0, len(allItems))
+	// Latest queries run against every Jellyfin view, so the shelf has to be
+	// filtered and canonicalized the same way the browse listing is. Without
+	// this it returns upstream Jellyfin IDs, which every canonical route then
+	// rejects — the card 404s on open and its share link would carry a
+	// provider ID into chat — and it can surface libraries outside
+	// JELLYFIN_LIBRARY_IDS.
+	ids := make([]string, 0, len(allItems))
 	seen := map[string]bool{}
-	for _, raw := range allItems {
-		if seen[raw.ID] {
+	for _, entry := range allItems {
+		if entry.raw.ID == "" || seen[entry.raw.ID] {
 			continue
 		}
-		seen[raw.ID] = true
-		kind := mediaKindFromJellyfin(raw.Type, raw.IsFolder)
-		durMs := raw.RunTimeTicks / 10_000
+		seen[entry.raw.ID] = true
+		ids = append(ids, entry.raw.ID)
+	}
+
+	// A nil authorizer is the development allow-all mode, the same convention
+	// the browse listing uses; the source view is then the library of record.
+	authorized := make(map[string]AuthorizedMediaItem, len(allItems))
+	if jellyfinAuthorizer == nil {
+		for _, entry := range allItems {
+			authorized[entry.raw.ID] = AuthorizedMediaItem{
+				ID: entry.raw.ID, LibraryID: entry.libraryID,
+				MediaType: entry.raw.Type, IsFolder: entry.raw.IsFolder,
+			}
+		}
+	} else {
+		var err error
+		authorized, err = jellyfinAuthorizer.AuthorizeItems(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	resItems := make([]MediaItem, 0, len(allItems))
+	emitted := map[string]bool{}
+	for _, entry := range allItems {
+		raw := entry.raw
+		if emitted[raw.ID] {
+			continue
+		}
+		authorizedItem, ok := authorized[raw.ID]
+		if !ok || !jellyfinLibraryAllowed(authorizedItem.LibraryID) {
+			continue
+		}
+		emitted[raw.ID] = true
+		resolution, err := observeJellyfinCatalogItem(
+			ctx, raw.ID, authorizedItem.LibraryID, raw.Type, raw.IsFolder,
+		)
+		if err != nil {
+			continue
+		}
 		resItems = append(resItems, MediaItem{
-			ID:           raw.ID,
+			ID:           resolution.ID,
 			Title:        raw.Name,
-			Kind:         kind,
+			Kind:         mediaKindFromJellyfin(raw.Type, raw.IsFolder),
 			JellyfinType: raw.Type,
 			IsFolder:     raw.IsFolder,
 			ChildCount:   raw.ChildCount,
-			DurationMS:   durMs,
-			CoverURL:     "/api/v1/media/items/" + raw.ID + "/cover",
+			DurationMS:   raw.RunTimeTicks / 10_000,
+			CoverURL:     "/api/v1/media/items/" + resolution.ID + "/cover",
 		})
 	}
 	return resItems, nil

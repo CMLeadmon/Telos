@@ -276,9 +276,77 @@ type grimmorySeriesPageDTO struct {
 	HasNext bool                `json:"hasNext"`
 }
 
+// grimmoryBooksPageDTO is Grimmory's paged envelope. Content is the raw
+// upstream shape — decoding it into LibraryBook cannot work, because
+// LibraryBook.ID became the canonical Telos UUID while upstream still sends a
+// number.
 type grimmoryBooksPageDTO struct {
-	Content []LibraryBook `json:"content"`
-	HasNext bool          `json:"hasNext"`
+	Content []grimmoryBook `json:"content"`
+	HasNext bool           `json:"hasNext"`
+}
+
+// authorizedShelf turns a Grimmory discovery response into member-facing items.
+//
+// The discovery queries (recently-added, by author, by series) return provider
+// records directly. They are used only for selection and ordering: the records
+// themselves come from fetchGrimmoryBooks, which is the one path that applies
+// the GRIMMORY_LIBRARY_IDS allowlist and reconciles stable catalog identity.
+// Anything the shelf names but the authorized enumeration does not contain is
+// out of scope for this node and is dropped, so a shelf can never widen what a
+// member can reach.
+func (c *GrimmoryCatalog) authorizedShelf(
+	ctx context.Context, userID string, body []byte, limit int,
+) ([]LibraryItem, error) {
+	var raw []grimmoryBook
+	if err := json.Unmarshal(body, &raw); err != nil {
+		var page grimmoryBooksPageDTO
+		if errPage := json.Unmarshal(body, &page); errPage != nil {
+			return nil, libraryCatalogError(err)
+		}
+		raw = page.Content
+	}
+
+	authorized, err := fetchGrimmoryBooks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byUpstream := make(map[int64]LibraryBook, len(authorized))
+	for _, book := range authorized {
+		byUpstream[book.UpstreamID] = book
+	}
+
+	items := make([]LibraryItem, 0, len(raw))
+	seen := make(map[int64]bool, len(raw))
+	for _, entry := range raw {
+		if limit > 0 && len(items) >= limit {
+			break
+		}
+		if seen[entry.ID] {
+			continue
+		}
+		seen[entry.ID] = true
+		book, ok := byUpstream[entry.ID]
+		if !ok {
+			continue
+		}
+		item, err := normalizedLibraryItem(book)
+		if errors.Is(err, errUnsupportedLibraryKind) {
+			continue
+		}
+		if err != nil {
+			return nil, libraryCatalogError(err)
+		}
+		items = append(items, item)
+	}
+
+	reader, err := c.progressReader()
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
+		return nil, libraryCatalogError(err)
+	}
+	return items, nil
 }
 
 func (c *GrimmoryCatalog) Continue(ctx context.Context, userID string) ([]LibraryItem, error) {
@@ -315,38 +383,11 @@ func (c *GrimmoryCatalog) Recent(ctx context.Context, userID string, limit int) 
 	if resp.StatusCode != http.StatusOK {
 		return nil, libraryProviderError(fmt.Errorf("upstream status %d", resp.StatusCode))
 	}
-	var rawBooks []LibraryBook
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, libraryCatalogError(err)
 	}
-	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
-		var page grimmoryBooksPageDTO
-		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
-			rawBooks = page.Content
-		} else {
-			return nil, libraryCatalogError(err)
-		}
-	}
-	items := make([]LibraryItem, 0, len(rawBooks))
-	for _, book := range rawBooks {
-		item, err := normalizedLibraryItem(book)
-		if errors.Is(err, errUnsupportedLibraryKind) {
-			continue
-		}
-		if err != nil {
-			return nil, libraryCatalogError(err)
-		}
-		items = append(items, item)
-	}
-	reader, err := c.progressReader()
-	if err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	return items, nil
+	return c.authorizedShelf(ctx, userID, bodyBytes, limit)
 }
 
 func (c *GrimmoryCatalog) Authors(ctx context.Context) ([]LibraryAuthor, error) {
@@ -421,34 +462,7 @@ func (c *GrimmoryCatalog) AuthorBooks(ctx context.Context, userID, authorID stri
 	if err != nil {
 		return nil, libraryCatalogError(err)
 	}
-	var rawBooks []LibraryBook
-	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
-		var page grimmoryBooksPageDTO
-		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
-			rawBooks = page.Content
-		} else {
-			return nil, libraryCatalogError(err)
-		}
-	}
-	items := make([]LibraryItem, 0, len(rawBooks))
-	for _, book := range rawBooks {
-		item, err := normalizedLibraryItem(book)
-		if errors.Is(err, errUnsupportedLibraryKind) {
-			continue
-		}
-		if err != nil {
-			return nil, libraryCatalogError(err)
-		}
-		items = append(items, item)
-	}
-	reader, err := c.progressReader()
-	if err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	return items, nil
+	return c.authorizedShelf(ctx, userID, bodyBytes, 0)
 }
 
 func (c *GrimmoryCatalog) Series(ctx context.Context) ([]LibrarySeries, error) {
@@ -503,33 +517,6 @@ func (c *GrimmoryCatalog) SeriesBooks(ctx context.Context, userID, name string) 
 	if err != nil {
 		return nil, libraryCatalogError(err)
 	}
-	var rawBooks []LibraryBook
-	if err := json.Unmarshal(bodyBytes, &rawBooks); err != nil {
-		var page grimmoryBooksPageDTO
-		if errPage := json.Unmarshal(bodyBytes, &page); errPage == nil {
-			rawBooks = page.Content
-		} else {
-			return nil, libraryCatalogError(err)
-		}
-	}
-	items := make([]LibraryItem, 0, len(rawBooks))
-	for _, book := range rawBooks {
-		item, err := normalizedLibraryItem(book)
-		if errors.Is(err, errUnsupportedLibraryKind) {
-			continue
-		}
-		if err != nil {
-			return nil, libraryCatalogError(err)
-		}
-		items = append(items, item)
-	}
-	reader, err := c.progressReader()
-	if err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	if err := hydrateLibraryProgress(ctx, reader, userID, items); err != nil {
-		return nil, libraryCatalogError(err)
-	}
-	return items, nil
+	return c.authorizedShelf(ctx, userID, bodyBytes, 0)
 }
 

@@ -69,7 +69,13 @@ export function StreamItemDetail({ itemId, onClose, onPlay }: StreamItemDetailPr
     return (
       <>
         <div className="idetail-scrim" onClick={onClose} />
-        <div className="idetail" role="dialog" aria-modal="true" aria-label="Media details">
+        <div
+          className="idetail"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Media details"
+          data-testid="stream-item-detail"
+        >
           <div className="idetail-head">
             <h2>{loading ? "Loading…" : "Unavailable"}</h2>
             <button className="iconbtn" onClick={onClose} aria-label="close details">

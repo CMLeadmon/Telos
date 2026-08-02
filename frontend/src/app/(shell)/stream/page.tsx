@@ -194,6 +194,20 @@ export default function StreamPage() {
       ? "scan complete"
       : "rescan jellyfin";
 
+  // Rendered by both the library grid and the drilled-in folder view, which
+  // return separate trees.
+  const itemDetail = detailItemId ? (
+    <StreamItemDetail
+      itemId={detailItemId}
+      onClose={() => setDetailItemId(null)}
+      onPlay={(item) => {
+        setDetailItemId(null);
+        const lib = activeLibrary || libraries[0] || { id: "root", name: "Shared Stream", type: "video" };
+        play(item, lib);
+      }}
+    />
+  ) : null;
+
   if (nowPlaying) {
     return (
       <div className="streammain" data-testid="stream-player">
@@ -251,10 +265,20 @@ export default function StreamPage() {
             <PosterGrid
               items={items}
               status={status}
-              onOpen={(item) => open(item, rootLibrary)}
+              onOpen={(item) => {
+                // A leaf opens its detail surface here too. Every episode and
+                // audiobook chapter lives below the root, so wiring detail only
+                // into the library grid means most items never get one.
+                if (item.isFolder) {
+                  open(item, rootLibrary);
+                } else {
+                  setDetailItemId(item.id);
+                }
+              }}
             />
           </section>
         </div>
+        {itemDetail}
       </div>
     );
   }
@@ -408,17 +432,7 @@ export default function StreamPage() {
         })}
       </div>
 
-      {detailItemId && (
-        <StreamItemDetail
-          itemId={detailItemId}
-          onClose={() => setDetailItemId(null)}
-          onPlay={(item) => {
-            setDetailItemId(null);
-            const lib = activeLibrary || libraries[0] || { id: "root", name: "Shared Stream", type: "video" };
-            play(item, lib);
-          }}
-        />
-      )}
+      {itemDetail}
     </div>
   );
 }

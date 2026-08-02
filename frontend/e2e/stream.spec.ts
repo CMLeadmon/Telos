@@ -192,6 +192,12 @@ liveTest("drilling down to a leaf item starts playback", async ({ page }) => {
   }
   test.skip(!leafFound, "no leaf item reachable within 5 levels");
 
+  // A leaf opens its detail surface first; playback is the primary action
+  // there, not a side effect of the click.
+  const detail = page.getByTestId("stream-item-detail");
+  await expect(detail).toBeVisible({ timeout: 15_000 });
+  await detail.getByRole("button", { name: /^(Play|Resume)$/ }).click();
+
   await expect(page.getByTestId("stream-player")).toBeVisible({
     timeout: 10_000,
   });

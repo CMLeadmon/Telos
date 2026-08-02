@@ -31,7 +31,7 @@ test("an authenticated member can open Settings → Credits and find every isola
   page,
 }) => {
   await page.goto("/settings/");
-  await page.getByRole("button", { name: "Credits" }).click();
+  await page.getByRole("button", { name: "Credits", exact: true }).click();
 
   const section = page.getByTestId("credits-section");
   await expect(section).toBeVisible();
@@ -54,7 +54,7 @@ test("Credits states the Telos gateway/client license is Apache-2.0", async ({
   page,
 }) => {
   await page.goto("/settings/");
-  await page.getByRole("button", { name: "Credits" }).click();
+  await page.getByRole("button", { name: "Credits", exact: true }).click();
 
   await expect(page.getByTestId("credits-section")).toContainText(
     "Apache License 2.0",

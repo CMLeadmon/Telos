@@ -641,16 +641,34 @@ func TestGrimmoryCatalogGetItemDiscoversLegacyNumericID(t *testing.T) {
 	}
 }
 
+// The discovery shelves consume Grimmory's own record shape — a numeric id and
+// nested metadata — not the gateway's internal LibraryBook. They also route
+// through the authorized enumeration, so /api/v1/books has to answer too.
 func TestGrimmoryCatalogRecentAndAuthors(t *testing.T) {
+	oldAuthorizer := grimmoryAuthorizer
+	grimmoryAuthorizer, _ = NewGrimmoryAuthorizer(grimmoryAPIResolver{}, []string{"1"})
+	t.Cleanup(func() { grimmoryAuthorizer = oldAuthorizer })
+
 	cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/v1/books":
+			_, _ = fmt.Fprint(w, `[
+				{
+					"id":101,
+					"libraryId":1,
+					"addedOn":"2026-07-31T12:00:00Z",
+					"metadata":{"title":"Recent Audio Book","authors":["Voice Artist"]},
+					"primaryFile":{"bookType":"AUDIOBOOK"}
+				}
+			]`)
 		case "/api/v1/app/books/recently-added":
 			_, _ = fmt.Fprint(w, `[
 				{
-					"id":"00000000-0000-4000-8000-000000000101",
-					"title":"Recent Audio Book",
-					"format":"AUDIOBOOK",
-					"authors":["Voice Artist"]
+					"id":101,
+					"libraryId":1,
+					"addedOn":"2026-07-31T12:00:00Z",
+					"metadata":{"title":"Recent Audio Book","authors":["Voice Artist"]},
+					"primaryFile":{"bookType":"AUDIOBOOK"}
 				}
 			]`)
 		case "/api/v1/app/authors":
@@ -662,10 +680,11 @@ func TestGrimmoryCatalogRecentAndAuthors(t *testing.T) {
 		case "/api/v1/app/books":
 			_, _ = fmt.Fprint(w, `[
 				{
-					"id":"00000000-0000-4000-8000-000000000101",
-					"title":"Recent Audio Book",
-					"format":"AUDIOBOOK",
-					"authors":["Voice Artist"]
+					"id":101,
+					"libraryId":1,
+					"addedOn":"2026-07-31T12:00:00Z",
+					"metadata":{"title":"Recent Audio Book","authors":["Voice Artist"]},
+					"primaryFile":{"bookType":"AUDIOBOOK"}
 				}
 			]`)
 		case "/api/v1/app/series":
@@ -675,10 +694,11 @@ func TestGrimmoryCatalogRecentAndAuthors(t *testing.T) {
 		case "/api/v1/app/series/Vaporwave Series/books", "/api/v1/app/series/Vaporwave%20Series/books":
 			_, _ = fmt.Fprint(w, `[
 				{
-					"id":"00000000-0000-4000-8000-000000000101",
-					"title":"Recent Audio Book",
-					"format":"AUDIOBOOK",
-					"authors":["Voice Artist"]
+					"id":101,
+					"libraryId":1,
+					"addedOn":"2026-07-31T12:00:00Z",
+					"metadata":{"title":"Recent Audio Book","authors":["Voice Artist"]},
+					"primaryFile":{"bookType":"AUDIOBOOK"}
 				}
 			]`)
 		default:

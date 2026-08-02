@@ -29,9 +29,7 @@ const leaves = (page: Page) => page.getByTestId("share-picker-leaf");
 // not which show happens to be on the node.
 async function drillToLeaf(page: Page, maxDepth = 5): Promise<string> {
   for (let depth = 0; depth < maxDepth; depth++) {
-    await expect(
-      leaves(page).first().or(folders(page).first()),
-    ).toBeVisible();
+    await expect(leaves(page).or(folders(page)).first()).toBeVisible();
     if (await leaves(page).count()) {
       return (await leaves(page).first().locator(".sp-name").innerText()).trim();
     }

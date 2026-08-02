@@ -126,7 +126,9 @@ test("@mention autocomplete searches and inserts mentions", async ({ page }) => 
   await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
 
   const input = page.locator('.composer input');
-  await input.fill("@");
+  // The gateway ignores search terms shorter than two characters, so a bare
+  // "@" never returns anyone and the dropdown correctly stays closed.
+  await input.fill(`@${USERNAME!.slice(0, 3)}`);
 
   // Autocomplete dropdown should appear
   const mentionDropdown = page.locator('.mention-dropdown');
