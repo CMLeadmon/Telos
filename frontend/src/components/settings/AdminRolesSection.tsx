@@ -119,7 +119,7 @@ export function AdminRolesSection() {
             />
           </div>
           <button
-            className="btn cyan btn-sm"
+            className="btn btn-sm"
             disabled={newName.trim().length < 2}
             onClick={() => void createRole()}
           >
@@ -183,7 +183,7 @@ export function AdminRolesSection() {
           </div>
           {editable && (
             <div className="setrow">
-              <button className="btn cyan btn-sm" onClick={() => void savePerms()}>
+              <button className="btn btn-sm" onClick={() => void savePerms()}>
                 Save permissions
               </button>
               {msg && (

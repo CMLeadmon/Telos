@@ -1,24 +1,27 @@
 "use client";
 
-import { useState } from "react";
+
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpen,
+  Folder,
   Hash,
   MessageSquare,
-  Settings,
   Tv,
   X,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
+import { useMobileNavStore } from "@/stores/useMobileNavStore";
 import { hasCapability } from "@/lib/capabilities";
 
+// Four surfaces, which is also the DS's specified mobile tabbar size.
 const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
   { href: "/stream", label: "Stream", icon: Tv, capability: "view_media" },
   { href: "/library", label: "Library", icon: BookOpen, capability: "view_library" },
+  { href: "/files", label: "Files", icon: Folder, capability: "view_files" },
 ];
 
 export function MobileNavigation() {
@@ -27,7 +30,9 @@ export function MobileNavigation() {
   const user = useAuthStore((s) => s.user);
   const { channels, activeChannelId, connect } = useChatSessionStore();
 
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Opened from the chat header's back affordance, so the state is shared.
+  const drawerOpen = useMobileNavStore((s) => s.channelDrawerOpen);
+  const closeDrawer = useMobileNavStore((s) => s.closeChannelDrawer);
 
   const onChat = pathname.startsWith("/chat");
 
@@ -52,32 +57,13 @@ export function MobileNavigation() {
             <span className="mobile-nav-label">{label}</span>
           </Link>
         ))}
-        {channels.length > 0 && (
-          <button
-            className={`mobile-nav-btn${drawerOpen ? " on" : ""}`}
-            onClick={() => setDrawerOpen((o) => !o)}
-            aria-label="Toggle channels drawer"
-            data-testid="mobile-channels-toggle"
-          >
-            <Hash size={20} />
-            <span className="mobile-nav-label">Channels</span>
-          </button>
-        )}
-        <Link
-          href="/settings"
-          className={`mobile-nav-btn${pathname.startsWith("/settings") ? " on" : ""}`}
-          aria-label="Settings"
-        >
-          <Settings size={20} />
-          <span className="mobile-nav-label">Settings</span>
-        </Link>
       </nav>
 
       {/* Mobile Channels Drawer Overlay */}
       {drawerOpen && (
         <div
           className="mobile-drawer-backdrop"
-          onClick={() => setDrawerOpen(false)}
+          onClick={() => closeDrawer()}
           data-testid="mobile-drawer-backdrop"
         >
           <div
@@ -91,7 +77,7 @@ export function MobileNavigation() {
               <h3>Channels</h3>
               <button
                 className="iconbtn"
-                onClick={() => setDrawerOpen(false)}
+                onClick={() => closeDrawer()}
                 aria-label="Close channels drawer"
               >
                 <X size={18} />
@@ -109,7 +95,7 @@ export function MobileNavigation() {
                         onClick={() => {
                           if (!onChat) router.push("/chat/");
                           connect(c.id);
-                          setDrawerOpen(false);
+                          closeDrawer();
                         }}
                       >
                         <span className="l">

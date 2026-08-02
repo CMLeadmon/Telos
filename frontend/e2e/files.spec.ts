@@ -23,7 +23,7 @@ async function login(page: Page) {
 
 test("files module lists, uploads and deletes", async ({ page }) => {
   await login(page);
-  await page.goto("/library?view=files");
+  await page.goto("/files/");
   await expect(page.getByTestId("files-dropzone")).toBeVisible();
 
   const name = `e2e-${Math.random().toString(36).slice(2)}.png`;
@@ -47,7 +47,7 @@ test("files module lists, uploads and deletes", async ({ page }) => {
 
 test("folders: create, enter, upload inside, scope, delete", async ({ page }) => {
   await login(page);
-  await page.goto("/library?view=files");
+  await page.goto("/files/");
   await expect(page.getByTestId("files-dropzone")).toBeVisible();
 
   const folder = `e2e-dir-${Math.random().toString(36).slice(2, 8)}`;

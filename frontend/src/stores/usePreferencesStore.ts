@@ -14,6 +14,26 @@ const DEFAULTS: Prefs = {
   reducedMotion: false,
 };
 
+// The gateway validates preference keys against an allow-list and rejects the
+// whole payload with 400 on anything unknown. Rows written before the voice
+// feature was removed still carry keys like voiceInputGain, so absorbing the
+// remote blob wholesale and echoing it back broke every save for those
+// accounts — silently, which is why it read as "the theme won't stick".
+// Filter on both sides: nothing unknown enters state, nothing unknown is sent.
+const KNOWN_KEYS = Object.keys(DEFAULTS) as (keyof Prefs)[];
+
+function pickKnown(source: Partial<Prefs> | null | undefined): Partial<Prefs> {
+  const out: Partial<Prefs> = {};
+  if (!source) return out;
+  for (const key of KNOWN_KEYS) {
+    if (source[key] !== undefined) {
+      // Each key is narrowed by KNOWN_KEYS, so this assignment is sound.
+      (out as Record<string, unknown>)[key] = source[key];
+    }
+  }
+  return out;
+}
+
 interface PreferencesState {
   prefs: Prefs;
   persisted: Prefs;
@@ -47,7 +67,11 @@ export const usePreferencesStore = create<PreferencesState>()((set, get) => ({
   load: async () => {
     try {
       const remote = await api<Partial<Prefs>>("/api/v1/users/me/preferences");
-      const prefs = { ...DEFAULTS, theme: useThemeStore.getState().theme, ...remote };
+      const prefs = {
+        ...DEFAULTS,
+        theme: useThemeStore.getState().theme,
+        ...pickKnown(remote),
+      };
       set({ prefs, persisted: prefs, draft: prefs, loaded: true });
       applySideEffects(prefs);
     } catch {
@@ -69,7 +93,7 @@ export const usePreferencesStore = create<PreferencesState>()((set, get) => ({
     try {
       await api("/api/v1/users/me/preferences", {
         method: "PUT",
-        body: JSON.stringify(draft),
+        body: JSON.stringify(pickKnown(draft)),
       });
       set({ persisted: draft, saveStatus: "saved", saveError: null });
     } catch (err) {

@@ -84,7 +84,7 @@ export function AdminInvitesSection() {
                 </option>
               ))}
             </select>
-            <button className="btn cyan btn-sm" onClick={() => void createInvite()}>
+            <button className="btn btn-sm" onClick={() => void createInvite()}>
               Generate
             </button>
           </div>

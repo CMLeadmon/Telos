@@ -1,16 +1,21 @@
-/* Library module — facet rail, cover grid, reader overlay (DS tokens throughout) */
-.library{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:0;
+/* Library module — cover grid, reader overlay (DS tokens throughout).
+   Facets moved to the module rail, so the arena is a single column. */
+.library{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);gap:0;
   position:relative;z-index:2;overflow:hidden}
-@media (max-width:720px){.library{grid-template-columns:1fr}.library-rail{display:none}}
 
-/* Books | Files segmented control in the Library header. */
-.segmented{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line-2);
-  border-radius:var(--r-pill);background:var(--surface-2)}
-.segmented .seg{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:none;
-  border-radius:var(--r-pill);background:transparent;color:var(--muted);font-size:var(--fs-sm);
-  font-weight:500;cursor:pointer;transition:background .12s,color .12s}
-.segmented .seg:hover{color:var(--ink)}
-.segmented .seg.on{background:var(--primary);color:var(--on-primary)}
+/* Tools bar — the DS Library opens with this instead of an arenahead+banner:
+   format chips, then search, then the count. */
+.libtools{flex:none;display:flex;align-items:center;gap:12px;padding:16px 30px;
+  border-bottom:1px solid var(--line);background:var(--surface);position:relative;z-index:2}
+.libtools .filters{display:flex;gap:8px;flex-wrap:wrap}
+.libtools .chip{cursor:pointer}
+.libtools .sortby{margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+@media (max-width:720px){
+  .libtools{padding:12px 14px;flex-wrap:wrap;gap:8px}
+  .libtools .sortby{margin-left:0}
+}
 
 .library-rail{border-right:1px solid var(--line);padding:18px 16px;overflow-y:auto;
   display:flex;flex-direction:column;gap:18px}
@@ -148,7 +153,7 @@
 .pdf-reader{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
 .pdf-scroll{flex:1;overflow:auto;display:flex;justify-content:center;padding:16px;background:var(--surface-2)}
 .pdf-page{position:relative}
-.pdf-page canvas{display:block;box-shadow:0 2px 16px rgba(0,0,0,.35)}
+.pdf-page canvas{display:block;border:1px solid var(--line)}
 .pdf-text-layer{position:absolute;inset:0;overflow:hidden;opacity:.2;line-height:1;user-select:text}
 .pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent}
 .pdf-controls{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px;
@@ -176,7 +181,7 @@
     border-left:none;border-top:1px solid var(--line-2);
     border-radius:var(--r-lg) var(--r-lg) 0 0;
     transform:translateY(100%);transition:transform .2s ease;
-    box-shadow:0 -8px 24px rgba(0,0,0,.3);z-index:5;
+    z-index:5;
     padding-bottom:var(--safe-bottom)}
   .reader-side.open{transform:translateY(0)}
 }
@@ -205,7 +210,7 @@
   background:var(--surface-2);color:var(--ink);font-size:13px;resize:vertical}
 .annot-visibility{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .annot-actions{display:flex;gap:8px}
-.annot-actions button{padding:4px 12px;border-radius:var(--r-xs);border:none;background:var(--rose);color:#000;
+.annot-actions button{padding:4px 12px;border-radius:var(--r-xs);border:none;background:var(--primary);color:var(--on-primary);
   font-size:12px;cursor:pointer}
 .annot-actions .annot-cancel{background:transparent;border:1px solid var(--line-2);color:var(--muted)}
 .annot-error{color:var(--rose);font-size:12px}

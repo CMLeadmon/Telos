@@ -98,7 +98,6 @@ function PosterGrid({
               className={`poster ${cls}${DARK_TEXT.has(cls) ? " pdark" : ""}`}
               data-testid={item.isFolder ? "poster-folder" : "poster-leaf"}
               onClick={() => onOpen(item)}
-              style={{ width: "100%" }}
             >
               <div className="motif" />
               <span className="pt">{item.title}</span>
@@ -380,7 +379,7 @@ export default function StreamPage() {
           const items = itemsByParent[lib.id] ?? [];
           const status = itemsStatusByParent[lib.id] ?? "idle";
           return (
-            <section className="row" key={lib.id}>
+            <section className="row" key={lib.id} id={`lib-${lib.id}`}>
               <div className="rowhead">
                 <h2>{lib.name}</h2>
                 <span className="more">

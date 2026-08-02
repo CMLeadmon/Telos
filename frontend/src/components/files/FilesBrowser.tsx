@@ -15,6 +15,7 @@ import {
   Image as ImageIcon,
   MessageSquare,
   Music,
+  Share2,
   Trash2,
   UploadCloud,
   X,
@@ -168,13 +169,23 @@ function FileRow({
         ) : (
           <>
             {!infected && (
-              <a
-                className="iconbtn"
-                aria-label={`download ${file.filename}`}
-                href={`${apiBase()}/api/v1/files/${file.id}/download`}
-              >
-                <Download size={16} />
-              </a>
+              <>
+                <a
+                  className="iconbtn"
+                  aria-label={`share ${file.filename} to chat`}
+                  title="Share to chat"
+                  href={`/chat?share_kind=file&share_ref=${encodeURIComponent(file.id)}`}
+                >
+                  <Share2 size={16} />
+                </a>
+                <a
+                  className="iconbtn"
+                  aria-label={`download ${file.filename}`}
+                  href={`${apiBase()}/api/v1/files/${file.id}/download`}
+                >
+                  <Download size={16} />
+                </a>
+              </>
             )}
             <button
               className={`iconbtn${commentsOpen ? " on" : ""}`}

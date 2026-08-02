@@ -102,7 +102,7 @@ export function SecuritySection() {
           />
         </div>
         <div className="setrow">
-          <button className="btn cyan btn-sm" onClick={() => void changePassword()}>
+          <button className="btn btn-sm" onClick={() => void changePassword()}>
             Change password
           </button>
           {msg && (

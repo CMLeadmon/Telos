@@ -78,6 +78,10 @@ let uploadCounter = 0;
 interface FilesState {
   path: string;
   folders: FolderEntry[];
+  // The top-level folders, cached the first time root is listed. The rail's
+  // Locations group needs them at any depth, and caching here means the rail
+  // never has to issue a request of its own.
+  rootFolders: FolderEntry[];
   files: FileEntry[];
   page: number;
   status: "idle" | "loading" | "ready" | "error";
@@ -100,6 +104,7 @@ interface FilesState {
 export const useFilesStore = create<FilesState>()((set, get) => ({
   path: "",
   folders: [],
+  rootFolders: [],
   files: [],
   page: 1,
   status: "idle",
@@ -114,9 +119,13 @@ export const useFilesStore = create<FilesState>()((set, get) => ({
       const res = await api<DirResponse>(
         `/api/v1/files?path=${encodeURIComponent(path)}&page=${page}`,
       );
+      const folders = asList(res.folders);
+      const resolvedPath = res.path ?? path;
       set({
-        path: res.path ?? path,
-        folders: asList(res.folders),
+        path: resolvedPath,
+        folders,
+        // Listing root is also how the rail's Locations group gets populated.
+        ...(resolvedPath === "" ? { rootFolders: folders } : {}),
         files: asList(res.files),
         page,
         status: "ready",

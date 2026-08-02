@@ -128,7 +128,7 @@ export function ProfileSection() {
         </div>
         <div className="setrow">
           <button
-            className="btn cyan btn-sm"
+            className="btn btn-sm"
             disabled={busy}
             onClick={() => void saveName()}
           >

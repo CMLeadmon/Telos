@@ -48,6 +48,47 @@ describe("usePreferencesStore failure recovery", () => {
     expect(usePreferencesStore.getState().saveError).toBe("Server error");
   });
 
+  // Regression: rows written before the voice feature was removed still carry
+  // keys like voiceInputGain. load() absorbed them and save() echoed them back,
+  // so the gateway's allow-list rejected the whole PUT with 400 — silently.
+  // Every preference save was dead for those accounts, and the theme appeared
+  // to "not survive refresh" because the stale server value won on reload.
+  it("never sends keys the gateway does not accept", async () => {
+    apiMock.mockResolvedValue({
+      theme: "ink",
+      sceneEnabled: true,
+      reducedMotion: false,
+      voiceInputGain: 1.3,
+      voiceNoiseSuppression: true,
+      voiceOutputVolume: 1,
+      voiceInputDeviceId: "abc123",
+    });
+    await usePreferencesStore.getState().load();
+
+    apiMock.mockReset();
+    apiMock.mockResolvedValue({});
+    await usePreferencesStore.getState().save({ theme: "synthwave" });
+
+    const body = JSON.parse(apiMock.mock.calls[0][1].body);
+    expect(Object.keys(body).sort()).toEqual([
+      "reducedMotion",
+      "sceneEnabled",
+      "theme",
+    ]);
+    expect(body.theme).toBe("synthwave");
+    expect(usePreferencesStore.getState().saveStatus).toBe("saved");
+  });
+
+  it("keeps unknown remote keys out of state entirely", async () => {
+    apiMock.mockResolvedValue({ theme: "ink", voiceOutputVolume: 1 });
+    await usePreferencesStore.getState().load();
+
+    expect(usePreferencesStore.getState().prefs).not.toHaveProperty(
+      "voiceOutputVolume",
+    );
+    expect(usePreferencesStore.getState().prefs.theme).toBe("ink");
+  });
+
   it("reverts draft to last persisted state when revertDraft is called", async () => {
     apiMock.mockRejectedValue(new ApiError(500, "Server error"));
 
