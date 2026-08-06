@@ -20,7 +20,7 @@ Refer to this matrix to find the appropriate entry point for your development in
 | **Deploy or Manage Infrastructure** | [`documentation/architecture/01-system-overview.md`](./documentation/architecture/01-system-overview.md) through [`documentation/architecture/03-gateway-and-api.md`](./documentation/architecture/03-gateway-and-api.md) |
 | **Manage Frontend State** | [`documentation/architecture/04-frontend-architecture.md`](./documentation/architecture/04-frontend-architecture.md) *(its voice/LiveKit sections are removed features)* |
 | **Understand the Roadmap & Licensing** | [`documentation/architecture/05-roadmap-and-licensing.md`](./documentation/architecture/05-roadmap-and-licensing.md) |
-| **Run an operations procedure** | [`documentation/operations/`](./documentation/operations/) — 20 runbooks (backup, restore, upgrade, incidents, capacity…) |
+| **Run an operations procedure** | [`documentation/operations/`](./documentation/operations/) — 19 runbooks (backup, restore, upgrade, incidents, capacity…) |
 | **See why something was built this way** | [`docs/superpowers/specs/`](./docs/superpowers/specs/) and [`docs/superpowers/plans/`](./docs/superpowers/plans/) |
 | **Browse the Full Index** | [`documentation/README.md`](./documentation/README.md) |
 
@@ -41,9 +41,25 @@ Four further programs have run since — beta readiness, review remediation, the
 
 ## 3. Hard Constraints Digest
 
-Every implementing agent must strictly comply with these core rules:
+Every implementing agent — human, Claude, or delegated — must strictly comply with these
+core rules. They are ordered by how expensive the violation is to undo.
+
 - **Secrets:** All credentials must be sourced from `.env` interpolation. Never commit hardcoded secrets.
 - **Copyleft Boundary:** Never link or compile Jellyfin or Grimmory code directly into the Telos core gateway. Maintain strict containerized process boundaries.
+- **Applied migrations are immutable.** `backend/migrations.go` verifies a checksum for every
+  row in `schema_migrations`. Editing an already-applied file in `backend/db/migrations/`
+  breaks every existing deployment. Schema changes are always a **new** numbered file
+  (`NNNN_description.sql`, currently through `0022`), written idempotently with
+  `IF NOT EXISTS` / `ON CONFLICT`. There is no `schema.sql`.
+- **Never run `telos init --force` on an existing node.** `telos doctor` suggests it to clear
+  `change-me` placeholders, but it regenerates every secret and desynchronizes them from the
+  existing Postgres/MariaDB volumes. Placeholders are intentional in local dev.
+- **Never hand-edit `frontend/src/styles/tokens/` or `frontend/src/styles/foundations/`.**
+  They are imported verbatim from the design project; changes belong upstream.
+- **Never alter the environment to make a gate pass.** Do not patch installed packages, stub
+  missing dependencies, edit lockfiles, or relax a test to turn a check green. If a gate
+  fails, report the failure with its output. A forced pass is worse than a red build because
+  it destroys the signal everyone downstream depends on.
 
 ---
 
@@ -95,7 +111,36 @@ grep -rnE "TO""DO|TB""D" documentation/ AGENTS.md
 
 ---
 
-## 6. Assets Reference
+## 6. Working Conventions
+
+Things that are not obvious from the tree and that cost real time to rediscover.
+
+- **The host runs podman, not docker.** Use `podman` / `podman-compose`. Go is not installed
+  on the host; backend toolchain commands run in `docker.io/library/golang:1.26.5` per §5.
+- **`backend/` is one flat Go package (`module telos-core`) of ~50 files, not one file.**
+  `main.go` holds the route table (`mux.Handle(...)`) and the `//go:embed` directives; the
+  work lives in siblings named for their concern (`auth.go`, `chat.go`, `realtime.go`,
+  `media.go`, `library.go`, `annotations.go`, `files.go`, `security.go`, …). Extend the
+  matching sibling rather than growing `main.go`.
+- **A local `go build` of the backend fails unless `backend/out/` exists.** `main.go` carries
+  `//go:embed all:out` for the frontend static export. The Dockerfile populates it from the
+  frontend build stage (build context is the repo root, dockerfile `backend/Dockerfile`).
+  Building headless requires the build tag introduced by sub-project S1.
+- **`podman-compose up -d --build` does not recreate containers when only the image changed.**
+  Verify image IDs and use `--force-recreate` when needed. Prefer a full `down`/`up` over a
+  single-service `--force-recreate`, which breaks `telos-backend` DNS resolution.
+- **Where code and the `documentation/` spec disagree, the code wins.** Every
+  `documentation/architecture/*.md` file carries a "Superseded in part" banner and predates
+  most of the implementation. Flag the discrepancy; do not follow the doc.
+- **Design docs go to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`; execution plans
+  go to `docs/superpowers/plans/`.** Read a sibling before writing a new one — the house
+  format is specific and consistent.
+- **Cite `file.go:line` for every claim about the code.** Assertions about call sites, route
+  counts, or behavior must be greppable. An unverifiable claim in a spec is a defect.
+
+---
+
+## 7. Assets Reference
 
 - Canonical logo renders are located at [`resources/logos/Telos_sun_ink.svg`](./resources/logos/Telos_sun_ink.svg).
 - The custom vaporwave logo variant is located at [`resources/logos/Telos_sun_synthwave.svg`](./resources/logos/Telos_sun_synthwave.svg).
