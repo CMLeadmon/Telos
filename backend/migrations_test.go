@@ -25,6 +25,26 @@ func TestRepositoryMigrationsContainCatalogIdentity(t *testing.T) {
 	}
 }
 
+func TestMigrationsContainDeviceTokens(t *testing.T) {
+	ms, err := DiscoverMigrations(migrationsFS, "db/migrations")
+	if err != nil {
+		t.Fatalf("DiscoverMigrations failed: %v", err)
+	}
+	var found *Migration
+	for i := range ms {
+		if ms[i].Version == 23 {
+			found = &ms[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected migration version 23 to exist, found max version %d", ms[len(ms)-1].Version)
+	}
+	if found.Name != "device_tokens" {
+		t.Errorf("expected migration 23 name to be 'device_tokens', got %q", found.Name)
+	}
+}
+
 func TestDiscoverMigrationsValidation(t *testing.T) {
 	t.Run("contiguous ok", func(t *testing.T) {
 		ms, err := DiscoverMigrations(fsFrom(map[string]string{

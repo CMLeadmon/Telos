@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -317,3 +318,74 @@ func TestFailedMigrationRollsBack(t *testing.T) {
 		t.Fatal("failed 0002 was not rolled back")
 	}
 }
+
+func TestDeviceTokensMigrationSchemaConstraints(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	// Negative test 1: Insert device with non-existent user_id must fail foreign key constraint
+	invalidUserID := "00000000-0000-0000-0000-000000000000"
+	_, err := f.DB.Exec(ctx, `
+		INSERT INTO devices (user_id, device_name, platform, client_version)
+		VALUES ($1, 'Test Phone', 'ios', '1.0.0')
+	`, invalidUserID)
+	if err == nil {
+		t.Fatalf("negative test failed: expected foreign key constraint error when inserting device with invalid user_id")
+	}
+
+	// Create valid user for testing
+	var validUserID string
+	err = f.DB.QueryRow(ctx, `
+		INSERT INTO users (username, display_name, password_hash)
+		VALUES ('devicetestuser', 'Device Test User', 'hash')
+		RETURNING id
+	`).Scan(&validUserID)
+	if err != nil {
+		t.Fatalf("failed to insert test user: %v", err)
+	}
+
+	// Insert valid device
+	var deviceID string
+	err = f.DB.QueryRow(ctx, `
+		INSERT INTO devices (user_id, device_name, platform, client_version)
+		VALUES ($1, 'Test Phone', 'ios', '1.0.0')
+		RETURNING id
+	`, validUserID).Scan(&deviceID)
+	if err != nil {
+		t.Fatalf("failed to insert valid device: %v", err)
+	}
+
+	// Insert refresh token
+	tokenHash := "a" + strings.Repeat("0", 63)
+	var refreshTokenID string
+	err = f.DB.QueryRow(ctx, `
+		INSERT INTO device_refresh_tokens (device_id, token_hash, expires_at)
+		VALUES ($1, $2, NOW() + INTERVAL '90 days')
+		RETURNING id
+	`, deviceID, tokenHash).Scan(&refreshTokenID)
+	if err != nil {
+		t.Fatalf("failed to insert refresh token: %v", err)
+	}
+
+	// Negative test 2: Duplicate token_hash must violate UNIQUE constraint
+	_, err = f.DB.Exec(ctx, `
+		INSERT INTO device_refresh_tokens (device_id, token_hash, expires_at)
+		VALUES ($1, $2, NOW() + INTERVAL '90 days')
+	`, deviceID, tokenHash)
+	if err == nil {
+		t.Fatalf("negative test failed: expected UNIQUE constraint error on duplicate token_hash")
+	}
+
+	// Verify CASCADE deletion of refresh tokens when user is deleted
+	_, err = f.DB.Exec(ctx, `DELETE FROM users WHERE id = $1`, validUserID)
+	if err != nil {
+		t.Fatalf("failed to delete test user: %v", err)
+	}
+
+	var count int
+	err = f.DB.QueryRow(ctx, `SELECT COUNT(*) FROM devices WHERE id = $1`, deviceID).Scan(&count)
+	if err != nil || count != 0 {
+		t.Fatalf("expected device row to be deleted via CASCADE, got count=%d err=%v", count, err)
+	}
+}
+
