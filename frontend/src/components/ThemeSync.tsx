@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { apiBase } from "@/lib/api";
 import { useThemeStore } from "@/stores/useThemeStore";
 
 // Mirrors the persisted theme onto <html data-theme> — the DS is themed
@@ -16,11 +17,19 @@ export function ThemeSync() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
 
-    // Secure only over HTTPS, mirroring the gateway's dev/production split —
-    // a Secure cookie on plain-http dev would simply never be stored.
-    const secure = window.location.protocol === "https:" ? "; Secure" : "";
-    const oneYear = 60 * 60 * 24 * 365;
-    document.cookie = `telos_theme=${theme}; Path=/; Max-Age=${oneYear}; SameSite=Lax${secure}`;
+    // The cookie exists only so the gateway can stamp data-theme into the
+    // document it serves. An empty apiBase() means we are same-origin with
+    // that gateway. Once the client points at a remote server — a native
+    // shell, or any cross-origin build — nothing reads this cookie, and
+    // writing it would leave a preference on an origin that never asked for
+    // it. Keying on apiBase() rather than the protocol keeps that true
+    // automatically: native shells whose scheme still looks like http (for
+    // example http://tauri.localhost on Android) are covered too.
+    if (apiBase() === "") {
+      const secure = window.location.protocol === "https:" ? "; Secure" : "";
+      const oneYear = 60 * 60 * 24 * 365;
+      document.cookie = `telos_theme=${theme}; Path=/; Max-Age=${oneYear}; SameSite=Lax${secure}`;
+    }
   }, [theme]);
 
   return null;

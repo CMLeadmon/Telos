@@ -1,0 +1,1056 @@
+{
+  "info": {
+    "description": "Generated from the mux route table in main.go. Do not edit by hand.",
+    "title": "Telos Gateway API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/admin/channels": {
+      "post": {
+        "operationId": "post_admin_channels",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/channels/{id}": {
+      "delete": {
+        "operationId": "delete_admin_channels_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch_admin_channels_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/channels/{id}/overrides": {
+      "get": {
+        "operationId": "get_admin_channels_id_overrides",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_admin_channels_id_overrides",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invites": {
+      "get": {
+        "operationId": "get_admin_invites",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/invites/{id}": {
+      "delete": {
+        "operationId": "delete_admin_invites_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/permissions": {
+      "get": {
+        "operationId": "get_admin_permissions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/roles": {
+      "get": {
+        "operationId": "get_admin_roles",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_admin_roles",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/roles/{id}": {
+      "delete": {
+        "operationId": "delete_admin_roles_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/roles/{id}/permissions": {
+      "put": {
+        "operationId": "put_admin_roles_id_permissions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users": {
+      "get": {
+        "operationId": "get_admin_users",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{id}": {
+      "delete": {
+        "operationId": "delete_admin_users_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{id}/active": {
+      "post": {
+        "operationId": "post_admin_users_id_active",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/admin/users/{id}/roles": {
+      "put": {
+        "operationId": "put_admin_users_id_roles",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/bootstrap": {
+      "post": {
+        "operationId": "post_auth_bootstrap",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/invites": {
+      "post": {
+        "operationId": "post_auth_invites",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/invites/accept": {
+      "post": {
+        "operationId": "post_auth_invites_accept",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "post_auth_login",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "post_auth_logout",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/me": {
+      "get": {
+        "operationId": "get_auth_me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels": {
+      "get": {
+        "operationId": "get_channels",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/changes": {
+      "get": {
+        "operationId": "get_channels_id_changes",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/members": {
+      "get": {
+        "operationId": "get_channels_id_members",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/messages": {
+      "post": {
+        "operationId": "post_channels_id_messages",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/messages/{mid}": {
+      "delete": {
+        "operationId": "delete_channels_id_messages_mid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch_channels_id_messages_mid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/messages/{mid}/reactions": {
+      "post": {
+        "operationId": "post_channels_id_messages_mid_reactions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/messages/{mid}/reactions/{emoji}": {
+      "delete": {
+        "operationId": "delete_channels_id_messages_mid_reactions_emoji",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/messages/{rootID}/replies": {
+      "get": {
+        "operationId": "get_channels_id_messages_rootID_replies",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_channels_id_messages_rootID_replies",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/pins": {
+      "get": {
+        "operationId": "get_channels_id_pins",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_channels_id_pins",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/pins/{mid}": {
+      "delete": {
+        "operationId": "delete_channels_id_pins_mid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/read": {
+      "put": {
+        "operationId": "put_channels_id_read",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/channels/{id}/roots": {
+      "get": {
+        "operationId": "get_channels_id_roots",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/chat/ws": {
+      "get": {
+        "operationId": "get_chat_ws",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "get_events",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/events/ws": {
+      "get": {
+        "operationId": "get_events_ws",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files": {
+      "get": {
+        "operationId": "get_files",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_files",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files/audit": {
+      "get": {
+        "operationId": "get_files_audit",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files/books": {
+      "post": {
+        "operationId": "post_files_books",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}": {
+      "delete": {
+        "operationId": "delete_files_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}/comments": {
+      "get": {
+        "operationId": "get_files_id_comments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_files_id_comments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/files/{id}/download": {
+      "get": {
+        "operationId": "get_files_id_download",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/folders": {
+      "post": {
+        "operationId": "post_folders",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/folders/{id}": {
+      "delete": {
+        "operationId": "delete_folders_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/health": {
+      "get": {
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/health/live": {
+      "get": {
+        "operationId": "get_health_live",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/health/ready": {
+      "get": {
+        "operationId": "get_health_ready",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/hls/{locator}": {
+      "get": {
+        "operationId": "get_hls_locator",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/annotation-replies/{rid}": {
+      "delete": {
+        "operationId": "delete_library_annotation_replies_rid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/annotations/{aid}": {
+      "delete": {
+        "operationId": "delete_library_annotations_aid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "patch": {
+        "operationId": "patch_library_annotations_aid",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/annotations/{aid}/replies": {
+      "get": {
+        "operationId": "get_library_annotations_aid_replies",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_library_annotations_aid_replies",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/audiobooks/{id}/info": {
+      "get": {
+        "operationId": "get_library_audiobooks_id_info",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/audiobooks/{id}/stream": {
+      "get": {
+        "operationId": "get_library_audiobooks_id_stream",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/audiobooks/{id}/tracks/{index}/stream": {
+      "get": {
+        "operationId": "get_library_audiobooks_id_tracks_index_stream",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/authors": {
+      "get": {
+        "operationId": "get_library_authors",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/authors/{id}/books": {
+      "get": {
+        "operationId": "get_library_authors_id_books",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books": {
+      "get": {
+        "operationId": "get_library_books",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}": {
+      "delete": {
+        "operationId": "delete_library_books_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "get": {
+        "operationId": "get_library_books_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/annotations": {
+      "get": {
+        "operationId": "get_library_books_id_annotations",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_library_books_id_annotations",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/content": {
+      "get": {
+        "operationId": "get_library_books_id_content",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/cover": {
+      "get": {
+        "operationId": "get_library_books_id_cover",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_library_books_id_cover",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/metadata": {
+      "put": {
+        "operationId": "put_library_books_id_metadata",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/metadata/fetch": {
+      "post": {
+        "operationId": "post_library_books_id_metadata_fetch",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/books/{id}/progress": {
+      "get": {
+        "operationId": "get_library_books_id_progress",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_library_books_id_progress",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/continue": {
+      "get": {
+        "operationId": "get_library_continue",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/facets": {
+      "get": {
+        "operationId": "get_library_facets",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/recent": {
+      "get": {
+        "operationId": "get_library_recent",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/series": {
+      "get": {
+        "operationId": "get_library_series",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/series/{name}/books": {
+      "get": {
+        "operationId": "get_library_series_name_books",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media": {
+      "get": {
+        "operationId": "get_media",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/continue": {
+      "get": {
+        "operationId": "get_media_continue",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items": {
+      "get": {
+        "operationId": "get_media_items",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items/{id}": {
+      "get": {
+        "operationId": "get_media_items_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items/{id}/comments": {
+      "get": {
+        "operationId": "get_media_items_id_comments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_media_items_id_comments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items/{id}/cover": {
+      "get": {
+        "operationId": "get_media_items_id_cover",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items/{id}/playback-info": {
+      "get": {
+        "operationId": "get_media_items_id_playback_info",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/items/{id}/related": {
+      "get": {
+        "operationId": "get_media_items_id_related",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/recent": {
+      "get": {
+        "operationId": "get_media_recent",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/refresh": {
+      "post": {
+        "operationId": "post_media_refresh",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/media/refresh/status": {
+      "get": {
+        "operationId": "get_media_refresh_status",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/search": {
+      "get": {
+        "operationId": "get_search",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/stream/audio/{id}": {
+      "get": {
+        "operationId": "get_stream_audio_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/stream/video/{id}": {
+      "get": {
+        "operationId": "get_stream_video_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/stream/video/{id}/{path...}": {
+      "get": {
+        "operationId": "get_stream_video_id_path...",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me": {
+      "patch": {
+        "operationId": "patch_users_me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/avatar": {
+      "delete": {
+        "operationId": "delete_users_me_avatar",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "post": {
+        "operationId": "post_users_me_avatar",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/password": {
+      "post": {
+        "operationId": "post_users_me_password",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/preferences": {
+      "get": {
+        "operationId": "get_users_me_preferences",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      },
+      "put": {
+        "operationId": "put_users_me_preferences",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/sessions": {
+      "get": {
+        "operationId": "get_users_me_sessions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/sessions/revoke-others": {
+      "post": {
+        "operationId": "post_users_me_sessions_revoke_others",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/sessions/{id}": {
+      "delete": {
+        "operationId": "delete_users_me_sessions_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/search": {
+      "get": {
+        "operationId": "get_users_search",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/{id}/avatar": {
+      "get": {
+        "operationId": "get_users_id_avatar",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    }
+  }
+}
