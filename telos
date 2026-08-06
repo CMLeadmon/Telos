@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# telos — command-line interface for operating a Telos node.
+#
+# This is a thin dispatcher. Every subcommand is a file in cli/commands/ that
+# defines a run() function and declares a "# summary:" line; `telos help`
+# discovers them by scanning that directory, so adding a command means adding
+# one file and nothing else.
+#
+# Exit-code contract, honored by every subcommand:
+#   0  the thing succeeded / everything is healthy
+#   1  the thing failed / something is unhealthy
+#   2  the CLI itself could not run (bad usage, missing runtime, missing file)
+#
+# A command that is not yet implemented must exit non-zero. Never add a command
+# that prints success without doing the work.
+set -uo pipefail
+
+# Resolve through symlinks so `ln -s .../telos ~/.local/bin/telos` works and
+# still finds cli/ next to the real script.
+SELF="${BASH_SOURCE[0]}"
+while [ -L "$SELF" ]; do
+  link="$(readlink "$SELF")"
+  case "$link" in
+    /*) SELF="$link" ;;
+    *)  SELF="$(dirname "$SELF")/$link" ;;
+  esac
+done
+REPO_ROOT="$(cd "$(dirname "$SELF")" && pwd)"
+CLI_DIR="$REPO_ROOT/cli"
+COMMAND_DIR="$CLI_DIR/commands"
+
+export REPO_ROOT CLI_DIR COMMAND_DIR
+
+# shellcheck source=cli/lib/common.sh
+. "$CLI_DIR/lib/common.sh"
+
+command_file() { printf '%s/%s.sh' "$COMMAND_DIR" "$1"; }
+
+command_summary() {
+  sed -n 's/^# summary:[[:space:]]*//p' "$1" | head -1
+}
+
+list_commands() {
+  for f in "$COMMAND_DIR"/*.sh; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\n' "$(basename "$f" .sh)" "$(command_summary "$f")"
+  done
+}
+
+usage() {
+  printf '%stelos%s — operate a Telos node\n\n' "$C_BOLD" "$C_OFF"
+  printf 'Usage:\n  telos <command> [options]\n\nCommands:\n'
+  while IFS=$'\t' read -r name summary; do
+    [ -n "$name" ] || continue
+    printf '  %-12s %s\n' "$name" "$summary"
+  done < <(list_commands)
+  cat <<EOF
+
+Global options:
+  -h, --help     Show help for telos or for a command
+      --dev      Layer docker-compose.dev.yml (binds host ports for local work)
+
+Environment:
+  TELOS_DEV=1        same as --dev
+  TELOS_HEALTH_URL   gateway health endpoint
+                     (default http://127.0.0.1:8080/api/v1/health)
+  NO_COLOR           disable colored output
+
+Exit codes:
+  0 success   1 failure   2 telos could not run
+EOF
+}
+
+# --- global option pre-pass ------------------------------------------------
+# Pulled out before dispatch so any command can be invoked with --dev.
+ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --dev) TELOS_DEV=1 ;;
+    *)     ARGS+=("$arg") ;;
+  esac
+done
+export TELOS_DEV="${TELOS_DEV:-0}"
+set -- ${ARGS+"${ARGS[@]}"}
+
+cmd="${1:-}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  ""|-h|--help|help)
+    usage
+    exit 0
+    ;;
+esac
+
+file="$(command_file "$cmd")"
+if [ ! -f "$file" ]; then
+  printf 'telos: unknown command %s\n\n' "'$cmd'" >&2
+  printf 'Available commands:\n' >&2
+  while IFS=$'\t' read -r name summary; do
+    [ -n "$name" ] || continue
+    printf '  %-12s %s\n' "$name" "$summary" >&2
+  done < <(list_commands)
+  exit 2
+fi
+
+# shellcheck source=/dev/null
+. "$file"
+
+if ! declare -F run >/dev/null; then
+  die "command '$cmd' is malformed (no run() function in $file)"
+fi
+
+run "$@"

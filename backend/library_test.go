@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -13,10 +15,13 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func setupManagementGrimmory(t *testing.T, upstream http.HandlerFunc) func() {
 	t.Helper()
+	installCatalogIdentityTest(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -70,6 +75,14 @@ func fakeGrimmory(t *testing.T, logins *int) *httptest.Server {
 				"authors":["Jane Austen"],"categories":["Love stories","England -- Fiction"]},
 			"primaryFile":{"bookType":"EPUB","extension":"epub","fileName":"pp.epub","fileSizeKb":24253}}]`))
 	})
+	mux.HandleFunc("GET /api/v1/books/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok-1" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":1,"libraryId":1,"libraryName":"Books","metadata":{"title":"Pride and Prejudice","authors":["Jane Austen"]},"primaryFile":{"bookType":"EPUB"}}`)
+	})
 	mux.HandleFunc("GET /api/v1/media/book/1/thumbnail", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok-1" {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -92,6 +105,7 @@ func fakeGrimmory(t *testing.T, logins *int) *httptest.Server {
 
 func setupGrimmoryTest(t *testing.T) func() {
 	t.Helper()
+	installCatalogIdentityTest(t)
 	logins := 0
 	srv := fakeGrimmory(t, &logins)
 	oldURL := grimmoryBaseURL
@@ -104,21 +118,122 @@ func setupGrimmoryTest(t *testing.T) func() {
 	return func() { grimmoryBaseURL = oldURL; srv.Close() }
 }
 
-func TestHandleLibraryBooksTranslates(t *testing.T) {
+func setupCurrentGrimmoryDetails(t *testing.T, formats map[string]string) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/auth/login", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"accessToken": "detail-token", "expires": 7200})
+	})
+	mux.HandleFunc("GET /api/v1/books/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		format, ok := formats[id]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, `{"id":%s,"libraryId":1,"metadata":{"title":"Book %s"},"primaryFile":{"bookType":%q}}`, id, id, format)
+	})
+	server := httptest.NewServer(mux)
+	oldURL, oldRedis := grimmoryBaseURL, redisClient
+	grimmoryBaseURL, redisClient = server.URL, nil
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		server.Close()
+		grimmoryBaseURL, redisClient = oldURL, oldRedis
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+}
+
+func TestHandleLibraryBooksReturnsCanonicalID(t *testing.T) {
 	defer setupGrimmoryTest(t)()
+	f := withFixture(t)
+	oldContinuity := continuityRepo
+	continuityRepo = NewContinuityRepository(f.DB)
+	t.Cleanup(func() { continuityRepo = oldContinuity })
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash)
+		VALUES ('library-catalog-reader', 'x') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
 	req := httptest.NewRequest("GET", "/api/v1/library/books", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
 	rec := httptest.NewRecorder()
 	handleLibraryBooks(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	var books []LibraryBook
+	var books []LibraryItem
 	if err := json.Unmarshal(rec.Body.Bytes(), &books); err != nil {
 		t.Fatal(err)
 	}
 	if len(books) != 1 || books[0].Title != "Pride and Prejudice" ||
-		books[0].Format != "EPUB" || books[0].Authors[0] != "Jane Austen" {
+		books[0].Kind != "epub" || books[0].Format != "EPUB" || books[0].Authors[0] != "Jane Austen" {
 		t.Fatalf("bad translation: %+v", books)
+	}
+	if !looksLikeUUID(fmt.Sprint(books[0].ID)) {
+		t.Fatalf("public id = %q, want canonical UUID", fmt.Sprint(books[0].ID))
+	}
+}
+
+func TestFreshLegacyGrimmoryDeepLinkDiscoversSupportedCurrentBook(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000012"
+	var observed CatalogObservation
+	providerPaths := []string{}
+	cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		providerPaths = append(providerPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/v1/books/12":
+			io.WriteString(w, `{"id":12,"libraryId":1,"metadata":{"title":"Fresh book"},"primaryFile":{"bookType":"EPUB"}}`)
+		case "/api/v1/books/12/content":
+			io.WriteString(w, "epub")
+		default:
+			http.NotFound(w, r)
+		}
+	})
+	defer cleanup()
+	oldObserve, oldResolve := observeCatalogIdentity, resolveCatalogIdentity
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		observed = in
+		return CatalogResolution{ID: canonicalID, Provider: in.Provider, UpstreamID: in.UpstreamID,
+			LibraryID: in.LibraryID, Surface: in.Surface, Kind: in.Kind, Active: true, Available: true}, nil
+	}
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		if rawID == "12" {
+			return CatalogResolution{}, errCatalogNotFound
+		}
+		if rawID == canonicalID {
+			return CatalogResolution{ID: canonicalID, Provider: ProviderGrimmory, UpstreamID: "12",
+				LibraryID: "1", Surface: surface, Kind: "epub", Active: true, Available: true}, nil
+		}
+		return CatalogResolution{}, errors.New("unexpected catalog identifier")
+	}
+	t.Cleanup(func() { observeCatalogIdentity, resolveCatalogIdentity = oldObserve, oldResolve })
+	oldAuthorizer := grimmoryAuthorizer
+	grimmoryAuthorizer, _ = NewGrimmoryAuthorizer(grimmoryAPIResolver{}, []string{"1"})
+	t.Cleanup(func() { grimmoryAuthorizer = oldAuthorizer })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/12/content", nil)
+	req.SetPathValue("id", "12")
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{Roles: []string{"Owner"}}))
+	rec := httptest.NewRecorder()
+	handleLibraryBookContent(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if observed.Provider != ProviderGrimmory || observed.UpstreamID != "12" || observed.LibraryID != "1" || observed.Kind != "epub" {
+		t.Fatalf("observation=%+v, want current supported Grimmory source", observed)
+	}
+	for _, path := range providerPaths {
+		if strings.Contains(path, canonicalID) {
+			t.Fatalf("canonical UUID reached Grimmory: %q", path)
+		}
 	}
 }
 
@@ -164,6 +279,24 @@ func TestHandleLibraryBookContentStreams(t *testing.T) {
 	}
 }
 
+func TestCanonicalLibraryBookContentUsesLegacyGrimmoryID(t *testing.T) {
+	defer setupGrimmoryTest(t)()
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "1", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/"+resolution.ID+"/content", nil)
+	req.SetPathValue("id", resolution.ID)
+	rec := httptest.NewRecorder()
+	handleLibraryBookContent(rec, req)
+	if rec.Code != http.StatusOK || !bytes.HasPrefix(rec.Body.Bytes(), []byte("PK")) {
+		t.Fatalf("status=%d body=%q", rec.Code, rec.Body.Bytes())
+	}
+}
+
 func TestLibraryBooksReturnsUnavailable(t *testing.T) {
 	oldURL := grimmoryBaseURL
 	grimmoryBaseURL = "http://127.0.0.1:1" // unreachable
@@ -172,6 +305,7 @@ func TestLibraryBooksReturnsUnavailable(t *testing.T) {
 	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
 	grimmoryTok.mu.Unlock()
 	req := httptest.NewRequest("GET", "/api/v1/library/books", nil)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: "00000000-0000-4000-8000-000000000001"}))
 	rec := httptest.NewRecorder()
 	handleLibraryBooks(rec, req)
 	if rec.Code != http.StatusServiceUnavailable {
@@ -274,6 +408,227 @@ func TestValidateBookProgressFormatSpecific(t *testing.T) {
 	}
 }
 
+func TestGrimmoryCatalogKindDoesNotMislabelUnknownFormats(t *testing.T) {
+	for _, format := range []string{"EPUB", "PDF", "AUDIOBOOK"} {
+		if _, ok := grimmoryCatalogKind(format); !ok {
+			t.Fatalf("supported format %q rejected", format)
+		}
+	}
+	if kind, ok := grimmoryCatalogKind("MOBI"); ok || kind != "" {
+		t.Fatalf("MOBI mapped to %q, want unsupported", kind)
+	}
+}
+
+func TestCanonicalizeGrimmoryBookSuppressesInactiveAliasAfterStreamCutover(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000211"
+	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer
+	grimmoryAuthorizer = nil
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceLibrary, Kind: in.Kind,
+			Provider: ProviderGrimmory, UpstreamID: in.UpstreamID, LibraryID: in.LibraryID,
+			Active: false, Available: true,
+		}, nil
+	}
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{}, errCatalogWrongSurface
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer = oldObserve, oldResolve, oldAuthorizer
+	})
+
+	book := LibraryBook{UpstreamID: 211, LibraryID: "books", Title: "Cut over", Format: "EPUB"}
+	if _, err := canonicalizeGrimmoryBook(t.Context(), book); err == nil {
+		t.Fatal("inactive Grimmory alias remained visible after active source moved to Stream")
+	}
+}
+
+func TestCanonicalizeGrimmoryBookPublishesAliasAfterLibraryRollback(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000212"
+	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer
+	grimmoryAuthorizer = nil
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		return CatalogResolution{ID: canonicalID, Provider: in.Provider, UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Surface: in.Surface, Kind: in.Kind}, nil
+	}
+	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
+		return CatalogResolution{
+			ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "212", LibraryID: "books", Active: true, Available: true,
+		}, nil
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer = oldObserve, oldResolve, oldAuthorizer
+	})
+
+	book, err := canonicalizeGrimmoryBook(t.Context(), LibraryBook{UpstreamID: 212, LibraryID: "books", Title: "Rolled back", Format: "EPUB"})
+	if err != nil || book.ID != canonicalID {
+		t.Fatalf("rollback book = %+v, err=%v", book, err)
+	}
+}
+
+func TestResolveGrimmoryBookRejectsCurrentUnsupportedFormat(t *testing.T) {
+	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/7" {
+			io.WriteString(w, `{"id":7,"libraryId":1,"metadata":{"title":"Comic"},"primaryFile":{"bookType":"CBX"}}`)
+			return
+		}
+		http.NotFound(w, r)
+	})()
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "7", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/"+resolution.ID, nil)
+	rec := httptest.NewRecorder()
+	if _, _, ok := resolveGrimmoryBookHTTP(rec, req, resolution.ID, BookRead); ok {
+		t.Fatal("unsupported current Grimmory format authorized from stale catalog kind")
+	}
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want 404", rec.Code, rec.Body.String())
+	}
+}
+
+func TestLegacyBookProgressMigratesToCanonicalContinuity(t *testing.T) {
+	f := withFixture(t)
+	setupCurrentGrimmoryDetails(t, map[string]string{"7": "EPUB"})
+	oldCatalog, oldContinuity := catalogRepo, continuityRepo
+	catalogRepo, continuityRepo = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB)
+	t.Cleanup(func() { catalogRepo, continuityRepo = oldCatalog, oldContinuity })
+
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash) VALUES ('reader-progress', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	book, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "7", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `
+		INSERT INTO book_progress (user_id, book_id, locator, percent)
+		VALUES ($1::uuid, 7, '{"cfi":"legacy","fraction":0.4}'::jsonb, 0.4)`, userID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/library/books/7/progress", nil)
+	req.SetPathValue("id", "7")
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	rec := httptest.NewRecorder()
+	handleGetBookProgress(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var canonicalRows int
+	if err := f.DB.QueryRow(t.Context(), `
+		SELECT count(*) FROM member_progress
+		WHERE user_id=$1::uuid AND catalog_item_id=$2::uuid`, userID, book.ID).Scan(&canonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalRows != 1 {
+		t.Fatalf("canonical progress rows = %d, want 1", canonicalRows)
+	}
+}
+
+func TestBookProgressDualWritesOnlyEPUBAndPDF(t *testing.T) {
+	f := withFixture(t)
+	setupCurrentGrimmoryDetails(t, map[string]string{"8": "EPUB", "9": "PDF", "10": "AUDIOBOOK"})
+	oldCatalog, oldContinuity := catalogRepo, continuityRepo
+	catalogRepo, continuityRepo = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB)
+	t.Cleanup(func() { catalogRepo, continuityRepo = oldCatalog, oldContinuity })
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash) VALUES ('writer-progress', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		upstream, kind, body string
+		wantLegacy           int
+	}{
+		{"8", "epub", `{"locator":{"cfi":"x","fraction":0.5},"percent":0.5}`, 1},
+		{"9", "pdf", `{"locator":{"page":2,"zoom":1},"percent":0.2}`, 1},
+		{"10", "audiobook", `{"locator":{"trackIndex":1},"positionMs":1000,"durationMs":5000,"percent":0.2}`, 0},
+	}
+	for _, tc := range cases {
+		item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+			Provider: ProviderGrimmory, UpstreamID: tc.upstream, LibraryID: "1",
+			Surface: SurfaceLibrary, Kind: CatalogKind(tc.kind),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPut, "/api/v1/library/books/"+item.ID+"/progress", strings.NewReader(tc.body))
+		req.SetPathValue("id", item.ID)
+		req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+		rec := httptest.NewRecorder()
+		handlePutBookProgress(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", tc.kind, rec.Code, rec.Body.String())
+		}
+		var legacyRows int
+		if err := f.DB.QueryRow(t.Context(), `SELECT count(*) FROM book_progress WHERE user_id=$1::uuid AND book_id=$2::bigint`, userID, tc.upstream).Scan(&legacyRows); err != nil {
+			t.Fatal(err)
+		}
+		if legacyRows != tc.wantLegacy {
+			t.Fatalf("%s legacy rows=%d, want %d", tc.kind, legacyRows, tc.wantLegacy)
+		}
+	}
+}
+
+func TestBookProgressDualWriteRollsBackCanonicalOnLegacyFailure(t *testing.T) {
+	f := withFixture(t)
+	setupCurrentGrimmoryDetails(t, map[string]string{"11": "EPUB"})
+	oldCatalog, oldContinuity := catalogRepo, continuityRepo
+	catalogRepo, continuityRepo = NewCatalogRepository(f.DB), NewContinuityRepository(f.DB)
+	t.Cleanup(func() { catalogRepo, continuityRepo = oldCatalog, oldContinuity })
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `
+		INSERT INTO users (username, password_hash) VALUES ('atomic-progress', 'x')
+		RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "11", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `
+		ALTER TABLE book_progress ADD CONSTRAINT task4_legacy_write_failure CHECK (book_id <> 11)`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		f.DB.Exec(context.Background(), `ALTER TABLE book_progress DROP CONSTRAINT IF EXISTS task4_legacy_write_failure`)
+	})
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/library/books/"+item.ID+"/progress",
+		strings.NewReader(`{"locator":{"cfi":"x","fraction":0.5},"percent":0.5}`))
+	req.SetPathValue("id", item.ID)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	rec := httptest.NewRecorder()
+	handlePutBookProgress(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want 500", rec.Code, rec.Body.String())
+	}
+	var canonicalRows int
+	if err := f.DB.QueryRow(t.Context(), `
+		SELECT count(*) FROM member_progress WHERE user_id=$1::uuid AND catalog_item_id=$2::uuid`,
+		userID, item.ID).Scan(&canonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if canonicalRows != 0 {
+		t.Fatalf("canonical rows=%d after legacy failure, want transaction rollback", canonicalRows)
+	}
+}
+
 func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T) {
 	var forwarded map[string]any
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
@@ -292,7 +647,7 @@ func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T)
 			_ = json.NewEncoder(w).Encode(map[string]any{"title": "New title"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/7":
 			w.Header().Set("Content-Type", "application/json")
-			io.WriteString(w, `{"id":7,"libraryName":"Books","metadata":{"title":"New title","subtitle":"Sub","authors":["A"],"categories":["C"],"description":"D","seriesNumber":2.5},"primaryFile":{"bookType":"EPUB","fileSizeKb":10}}`)
+			io.WriteString(w, `{"id":7,"libraryId":1,"libraryName":"Books","metadata":{"title":"New title","subtitle":"Sub","authors":["A"],"categories":["C"],"description":"D","seriesNumber":2.5},"primaryFile":{"bookType":"EPUB","fileSizeKb":10}}`)
 		default:
 			http.Error(w, "unexpected", http.StatusNotFound)
 		}
@@ -326,6 +681,42 @@ func TestUpdateLibraryMetadataWhitelistsAndPreservesUpstreamFields(t *testing.T)
 	if updated.Title != "New title" || updated.SeriesNumber == nil || *updated.SeriesNumber != 2.5 {
 		t.Fatalf("bad normalized response: %+v", updated)
 	}
+	if !looksLikeUUID(updated.ID) {
+		t.Fatalf("updated public id = %q, want canonical UUID", updated.ID)
+	}
+}
+
+func TestUpdateLibraryMetadataRejectsUnsupportedReload(t *testing.T) {
+	changed := false
+	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/7":
+			format := "EPUB"
+			if changed {
+				format = "CBX"
+			}
+			fmt.Fprintf(w, `{"id":7,"libraryId":1,"metadata":{"title":"Book"},"primaryFile":{"bookType":%q}}`, format)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/books/7/metadata":
+			changed = true
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, r)
+		}
+	})()
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "7", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/library/books/"+resolution.ID+"/metadata", strings.NewReader(`{"title":"Book"}`))
+	req.SetPathValue("id", resolution.ID)
+	rec := httptest.NewRecorder()
+	handleUpdateLibraryBookMetadata(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s, want unsupported reload hidden", rec.Code, rec.Body.String())
+	}
 }
 
 func TestUpdateLibraryMetadataMapsUpstreamErrors(t *testing.T) {
@@ -340,6 +731,10 @@ func TestUpdateLibraryMetadataMapsUpstreamErrors(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/7" {
+					io.WriteString(w, `{"id":7,"libraryId":1,"metadata":{"title":"Book"},"primaryFile":{"bookType":"EPUB"}}`)
+					return
+				}
 				if r.Method == http.MethodPut {
 					http.Error(w, "no", test.upstream)
 					return
@@ -359,6 +754,10 @@ func TestUpdateLibraryMetadataMapsUpstreamErrors(t *testing.T) {
 
 func TestFetchLibraryMetadataNormalizesSSE(t *testing.T) {
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/4" {
+			io.WriteString(w, `{"id":4,"libraryId":1,"metadata":{"title":"Book"},"primaryFile":{"bookType":"EPUB"}}`)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/books/4/metadata/prospective" {
 			http.Error(w, "unexpected", http.StatusNotFound)
 			return
@@ -416,6 +815,10 @@ func TestUpdateLibraryCoverValidatesAndForwardsMultipart(t *testing.T) {
 	jpeg := append([]byte{0xff, 0xd8, 0xff, 0xe0}, bytes.Repeat([]byte{0}, 600)...)
 	forwarded := false
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/9" {
+			io.WriteString(w, `{"id":9,"libraryId":1,"metadata":{"title":"Book"},"primaryFile":{"bookType":"EPUB"}}`)
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/books/9/metadata/cover/upload" {
 			http.Error(w, "unexpected", http.StatusNotFound)
 			return
@@ -451,6 +854,8 @@ func TestUpdateLibraryCoverValidatesAndForwardsMultipart(t *testing.T) {
 }
 
 func TestUpdateLibraryCoverRejectsPrivateURL(t *testing.T) {
+	installCatalogIdentityTest(t)
+	setupCurrentGrimmoryDetails(t, map[string]string{"2": "EPUB"})
 	for _, rawURL := range []string{
 		"http://127.0.0.1/cover.jpg",
 		"http://10.0.0.1/cover.jpg",
@@ -471,6 +876,10 @@ func TestUpdateLibraryCoverRejectsPrivateURL(t *testing.T) {
 func TestDeleteLibraryBookOnlyCleansUpAfterUpstreamSuccess(t *testing.T) {
 	called := 0
 	defer setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/11" {
+			io.WriteString(w, `{"id":11,"libraryId":1,"metadata":{"title":"Book"},"primaryFile":{"bookType":"EPUB"}}`)
+			return
+		}
 		called++
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/v1/books" || r.URL.Query().Get("ids") != "11" {
 			http.Error(w, "unexpected", http.StatusNotFound)
@@ -487,7 +896,199 @@ func TestDeleteLibraryBookOnlyCleansUpAfterUpstreamSuccess(t *testing.T) {
 	}
 }
 
-func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
+func TestDeleteLibraryBookRemovesLegacyAndCanonicalProgress(t *testing.T) {
+	f := withFixture(t)
+	oldDB, oldCatalog, oldAuthorizer := dbPool, catalogRepo, grimmoryAuthorizer
+	dbPool, catalogRepo = f.DB, NewCatalogRepository(f.DB)
+	grimmoryAuthorizer, _ = NewGrimmoryAuthorizer(grimmoryAPIResolver{}, []string{"1"})
+	t.Cleanup(func() { dbPool, catalogRepo, grimmoryAuthorizer = oldDB, oldCatalog, oldAuthorizer })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login":
+			json.NewEncoder(w).Encode(map[string]any{"accessToken": "delete-token", "expires": 7200})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/31":
+			io.WriteString(w, `{"id":31,"libraryId":1,"metadata":{"title":"Delete me"},"primaryFile":{"bookType":"EPUB"}}`)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/books" && r.URL.Query().Get("ids") == "31":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldURL := grimmoryBaseURL
+	grimmoryBaseURL = server.URL
+	t.Setenv("GRIMMORY_ADMIN_USER", "gateway")
+	t.Setenv("GRIMMORY_ADMIN_PASSWORD", "secret")
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		grimmoryBaseURL = oldURL
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: "31", LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `INSERT INTO users (username, password_hash) VALUES ('delete-progress', 'x') RETURNING id::text`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `
+		INSERT INTO book_progress (user_id, book_id, locator, percent)
+		VALUES ($1::uuid, 31, '{"cfi":"legacy","fraction":0.5}'::jsonb, 0.5)`, userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `
+		INSERT INTO member_progress (user_id, catalog_item_id, locator, percent)
+		VALUES ($1::uuid, $2::uuid, '{"cfi":"canonical","fraction":0.5}'::jsonb, 0.5)`, userID, item.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/library/books/"+item.ID, nil)
+	req.SetPathValue("id", item.ID)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID, Roles: []string{"Owner"}}))
+	rec := httptest.NewRecorder()
+	handleDeleteLibraryBook(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var legacyRows, canonicalRows int
+	if err := f.DB.QueryRow(t.Context(), `SELECT count(*) FROM book_progress WHERE book_id=31`).Scan(&legacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.DB.QueryRow(t.Context(), `SELECT count(*) FROM member_progress WHERE catalog_item_id=$1::uuid`, item.ID).Scan(&canonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if legacyRows != 0 || canonicalRows != 0 {
+		t.Fatalf("progress rows legacy/canonical=%d/%d, want 0/0", legacyRows, canonicalRows)
+	}
+}
+
+func setupDeletionProgressScenario(t *testing.T, upstreamDeleteStatus int, upstreamID string) (*pgxpool.Pool, CatalogResolution, string) {
+	t.Helper()
+	f := withFixture(t)
+	oldDB, oldCatalog, oldAuthorizer := dbPool, catalogRepo, grimmoryAuthorizer
+	dbPool, catalogRepo = f.DB, NewCatalogRepository(f.DB)
+	grimmoryAuthorizer, _ = NewGrimmoryAuthorizer(grimmoryAPIResolver{}, []string{"1"})
+	t.Cleanup(func() { dbPool, catalogRepo, grimmoryAuthorizer = oldDB, oldCatalog, oldAuthorizer })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login":
+			json.NewEncoder(w).Encode(map[string]any{"accessToken": "delete-scenario-token", "expires": 7200})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/books/"+upstreamID:
+			fmt.Fprintf(w, `{"id":%s,"libraryId":1,"metadata":{"title":"Delete scenario"},"primaryFile":{"bookType":"EPUB"}}`, upstreamID)
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/v1/books" && r.URL.Query().Get("ids") == upstreamID:
+			w.WriteHeader(upstreamDeleteStatus)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	oldURL := grimmoryBaseURL
+	grimmoryBaseURL = server.URL
+	t.Setenv("GRIMMORY_ADMIN_USER", "gateway")
+	t.Setenv("GRIMMORY_ADMIN_PASSWORD", "secret")
+	grimmoryTok.mu.Lock()
+	oldToken, oldExpiry := grimmoryTok.token, grimmoryTok.expiresAt
+	grimmoryTok.token, grimmoryTok.expiresAt = "", time.Time{}
+	grimmoryTok.mu.Unlock()
+	t.Cleanup(func() {
+		grimmoryBaseURL = oldURL
+		grimmoryTok.mu.Lock()
+		grimmoryTok.token, grimmoryTok.expiresAt = oldToken, oldExpiry
+		grimmoryTok.mu.Unlock()
+	})
+
+	item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
+		Provider: ProviderGrimmory, UpstreamID: upstreamID, LibraryID: "1",
+		Surface: SurfaceLibrary, Kind: "epub",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userID string
+	if err := f.DB.QueryRow(t.Context(), `INSERT INTO users (username, password_hash) VALUES ($1, 'x') RETURNING id::text`, "delete-scenario-"+upstreamID).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `INSERT INTO book_progress (user_id, book_id, locator, percent) VALUES ($1::uuid, $2::bigint, '{}', 0.5)`, userID, upstreamID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.DB.Exec(t.Context(), `INSERT INTO member_progress (user_id, catalog_item_id, locator, percent) VALUES ($1::uuid, $2::uuid, '{}', 0.5)`, userID, item.ID); err != nil {
+		t.Fatal(err)
+	}
+	return f.DB, item, userID
+}
+
+func assertDeletionProgressCounts(t *testing.T, db *pgxpool.Pool, item CatalogResolution, upstreamID string, wantLegacy, wantCanonical int) {
+	t.Helper()
+	var legacyRows, canonicalRows int
+	if err := db.QueryRow(t.Context(), `SELECT count(*) FROM book_progress WHERE book_id=$1::bigint`, upstreamID).Scan(&legacyRows); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(t.Context(), `SELECT count(*) FROM member_progress WHERE catalog_item_id=$1::uuid`, item.ID).Scan(&canonicalRows); err != nil {
+		t.Fatal(err)
+	}
+	if legacyRows != wantLegacy || canonicalRows != wantCanonical {
+		t.Fatalf("progress rows legacy/canonical=%d/%d, want %d/%d", legacyRows, canonicalRows, wantLegacy, wantCanonical)
+	}
+}
+
+func deleteScenarioRequest(t *testing.T, item CatalogResolution, userID string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/library/books/"+item.ID, nil)
+	req.SetPathValue("id", item.ID)
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID, Roles: []string{"Owner"}}))
+	rec := httptest.NewRecorder()
+	handleDeleteLibraryBook(rec, req)
+	return rec
+}
+
+func TestDeleteLibraryBookUpstreamFailurePreservesBothProgressTables(t *testing.T) {
+	db, item, userID := setupDeletionProgressScenario(t, http.StatusInternalServerError, "32")
+	rec := deleteScenarioRequest(t, item, userID)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s, want upstream failure", rec.Code, rec.Body.String())
+	}
+	assertDeletionProgressCounts(t, db, item, "32", 1, 1)
+}
+
+func TestDeleteLibraryBookProgressCleanupRollsBackBothTables(t *testing.T) {
+	db, item, userID := setupDeletionProgressScenario(t, http.StatusNoContent, "33")
+	if _, err := db.Exec(t.Context(), `
+		CREATE FUNCTION fail_member_progress_delete() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN RAISE EXCEPTION 'forced canonical cleanup failure'; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(t.Context(), `
+		CREATE TRIGGER fail_member_progress_delete
+		BEFORE DELETE ON member_progress FOR EACH ROW
+		EXECUTE FUNCTION fail_member_progress_delete()`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		db.Exec(context.Background(), `DROP TRIGGER IF EXISTS fail_member_progress_delete ON member_progress`)
+		db.Exec(context.Background(), `DROP FUNCTION IF EXISTS fail_member_progress_delete()`)
+	})
+
+	rec := deleteScenarioRequest(t, item, userID)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status=%d body=%s, want cleanup failure", rec.Code, rec.Body.String())
+	}
+	assertDeletionProgressCounts(t, db, item, "33", 1, 1)
+}
+
+func TestHandleMediaReturnsCanonicalLibraryIDs(t *testing.T) {
+	installCatalogIdentityTest(t)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/Users", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]map[string]string{{"Id": "id-alice", "Name": "alice"}})
@@ -519,7 +1120,7 @@ func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
-	var libs []LibraryItem
+	var libs []mediaLibrary
 	if err := json.Unmarshal(rec.Body.Bytes(), &libs); err != nil {
 		t.Fatal(err)
 	}
@@ -531,5 +1132,10 @@ func TestHandleMediaMapsAudiobooksCollectionType(t *testing.T) {
 	}
 	if libs[0].Type != "video" || libs[0].CollectionType != "movies" {
 		t.Fatalf("expected video/movies mapping, got %+v", libs[0])
+	}
+	for _, library := range libs {
+		if !looksLikeUUID(library.ID) {
+			t.Fatalf("public id = %q, want canonical UUID", library.ID)
+		}
 	}
 }

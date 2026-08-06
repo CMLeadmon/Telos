@@ -1,5 +1,5 @@
-import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("next/navigation", () => ({
   usePathname: () => "/chat",
@@ -30,17 +30,33 @@ vi.mock("@/stores/useChatSessionStore", () => ({
 }));
 
 import { MobileNavigation } from "./MobileNavigation";
+import { useMobileNavStore } from "@/stores/useMobileNavStore";
 
 describe("MobileNavigation", () => {
-  it("renders mobile bottom navigation bar and drawer toggle", () => {
-    render(<MobileNavigation />);
-    expect(screen.getByTestId("mobile-bottom-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("mobile-channels-toggle")).toBeInTheDocument();
+  beforeEach(() => {
+    useMobileNavStore.setState({ channelDrawerOpen: false });
   });
 
-  it("opens channels drawer when toggle button is clicked", () => {
+  // The DS specifies a four-item tabbar: Chat, Stream, Library, Files. The
+  // channel list is reached from the chat header, not a fifth tab.
+  it("renders exactly the four module tabs", () => {
     render(<MobileNavigation />);
-    fireEvent.click(screen.getByTestId("mobile-channels-toggle"));
+    const nav = screen.getByTestId("mobile-bottom-nav");
+    expect(nav).toBeInTheDocument();
+    expect(nav.querySelectorAll("a")).toHaveLength(4);
+    for (const label of ["Chat", "Stream", "Library", "Files"]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("keeps the drawer closed until the shared store opens it", () => {
+    render(<MobileNavigation />);
+    expect(screen.queryByTestId("mobile-channels-drawer")).not.toBeInTheDocument();
+  });
+
+  it("renders the channel list when the store opens the drawer", () => {
+    useMobileNavStore.setState({ channelDrawerOpen: true });
+    render(<MobileNavigation />);
     expect(screen.getByTestId("mobile-channels-drawer")).toBeInTheDocument();
     expect(screen.getByText("general")).toBeInTheDocument();
     expect(screen.getByText("lounge")).toBeInTheDocument();

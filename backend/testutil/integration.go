@@ -174,6 +174,12 @@ func (f *Fixture) Reset(ctx context.Context) error {
 		SELECT tablename FROM pg_tables
 		WHERE schemaname = 'public'
 		  AND tablename NOT IN ('roles','permissions','role_permissions')
+		ORDER BY CASE tablename
+			WHEN 'member_progress' THEN 0
+			WHEN 'catalog_sources' THEN 1
+			WHEN 'catalog_items' THEN 2
+			ELSE 3
+		END, tablename
 	`)
 	if err != nil {
 		return err

@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpen, Folder, ImageOff, Music, Settings, Share2 } from "lucide-react";
-import { apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { useRouter } from "next/navigation";
+import { ImageOff, Info, Music, Settings, Share2 } from "lucide-react";
+import { api, apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
-  type FacetValue,
   type LibraryBook,
   useLibraryStore,
 } from "@/stores/useLibraryStore";
@@ -14,8 +14,8 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
-import { FilesBrowser } from "@/components/library/FilesBrowser";
-import { VaporwaveScene } from "@/components/VaporwaveScene";
+import { AudiobookPlayer } from "@/components/library/AudiobookPlayer";
+import { LibraryItemDetail } from "@/components/library/LibraryItemDetail";
 
 function AudiobookRow({
   item,
@@ -127,51 +127,27 @@ function AudiobookShelf() {
   );
 }
 
-function FacetGroup({
-  title,
-  values,
-  active,
-  onToggle,
-}: {
-  title: string;
-  values: FacetValue[] | null;
-  active: string | null;
-  onToggle: (value: string | null) => void;
-}) {
-  const list = asList(values);
-  if (list.length === 0) return null;
-  return (
-    <div className="railgroup">
-      <span className="railhead">{`// ${title}`}</span>
-      {list.slice(0, 12).map((f) => (
-        <button
-          key={f.value}
-          className={`facetbtn${active === f.value ? " on" : ""}`}
-          onClick={() => onToggle(active === f.value ? null : f.value)}
-        >
-          <span>{f.value}</span>
-          <span className="fcount">{f.count}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
 
 function BookCard({
   book,
   onRead,
   onManage,
+  onDetail,
   canManage,
 }: {
   book: LibraryBook;
   onRead: () => void;
   onManage: () => void;
+  onDetail: () => void;
   canManage: boolean;
 }) {
   const [coverBroken, setCoverBroken] = useState(false);
   const isEpub = book.format === "EPUB";
-  // Both EPUB and PDF open in-app; only an unreadable format falls back to a tab.
-  const readable = book.format === "EPUB" || book.format === "PDF";
+  // EPUB, PDF and audiobooks all open in-app; only an unsupported format falls
+  // back to a tab. Audiobooks belong here too — without them the card opens a
+  // raw content URL instead of the Library player.
+  const readable =
+    book.format === "EPUB" || book.format === "PDF" || book.kind === "audiobook";
   const open = () => {
     if (readable) onRead();
     else window.open(libraryContentUrl(book.id), "_blank", "noopener");
@@ -211,11 +187,22 @@ function BookCard({
       <div className="brow">
         <span className={`fmtpill${isEpub ? "" : " pdf"}`}>{book.format}</span>
         <div className="book-actions">
+          <button
+            className="btn-ghost btn-sm"
+            aria-label={`details for ${book.title}`}
+            title="Details"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDetail();
+            }}
+          >
+            <Info size={12} />
+          </button>
           <a
             className="btn-ghost btn-sm"
             aria-label={`share ${book.title}`}
             title="Share to chat"
-            href={`/chat?share_kind=library_book&share_ref=${book.id}`}
+            href={`/chat?share_kind=library_book&share_ref=${encodeURIComponent(book.id)}`}
             onClick={(e) => e.stopPropagation()}
           >
             <Share2 size={12} />
@@ -253,33 +240,21 @@ export default function LibraryPage() {
   const canManage = useAuthStore(
     (state) => hasCapability(state.user, "manage_library"),
   );
-  const canViewFiles = useAuthStore(
-    (state) => hasCapability(state.user, "view_files"),
-  );
+  const router = useRouter();
   const [reading, setReading] = useState<LibraryBook | null>(null);
   const [managing, setManaging] = useState<LibraryBook | null>(null);
-  // Initialize the active segment from the URL once (the ?view=files deep link
-  // and the /files redirect both land here). A lazy initializer avoids a
-  // setState-in-effect and the books-first flash it would cause.
-  const [view, setView] = useState<"books" | "files">(() =>
-    typeof window !== "undefined" &&
-    new URLSearchParams(window.location.search).get("view") === "files"
-      ? "files"
-      : "books",
-  );
+  const [audioPlayerId, setAudioPlayerId] = useState<string | null>(null);
+  const [detailItem, setDetailItem] = useState<LibraryBook | null>(null);
 
   const books = filtered();
 
-  // Reflect the active segment in the URL so it is shareable and survives a
-  // reload, without a full navigation.
-  const selectView = (next: "books" | "files") => {
-    setView(next);
-    const url =
-      next === "files"
-        ? `${window.location.pathname}?view=files`
-        : window.location.pathname;
-    window.history.replaceState({}, "", url);
-  };
+  // Files graduated back to its own module. Forward the old deep link so
+  // existing bookmarks and shared chat cards keep resolving.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("view") === "files") {
+      router.replace("/files");
+    }
+  }, [router]);
 
   useEffect(() => {
     if (status === "idle") void fetchCatalog();
@@ -289,9 +264,17 @@ export default function LibraryPage() {
     const params = new URLSearchParams(window.location.search);
     const readId = params.get("read");
     if (readId && books.length > 0) {
-      const found = books.find((b) => String(b.id) === readId);
+      const found = books.find((b) => b.id === readId);
       if (found) {
         setTimeout(() => setReading(found), 0);
+      } else {
+        api<LibraryBook>(
+          `/api/v1/library/books/${encodeURIComponent(readId)}`,
+        )
+          .then((resolved) => setReading(resolved))
+          .catch(() => {
+            // A stale or unauthorized deep link leaves the catalog usable.
+          });
       }
       const newUrl = window.location.pathname;
       window.history.replaceState({}, "", newUrl);
@@ -306,86 +289,51 @@ export default function LibraryPage() {
 
   return (
     <>
-      <VaporwaveScene />
-      <div className="arenahead">
-        <div className="name">
-          <BookOpen size={17} />
-          Library
+      {/* The DS Library leads with a tools bar rather than an arenahead and
+          banner: format filters as chips, then search, then the count. Authors
+          and collections moved to the rail, where the DS puts them. */}
+      <div className="libtools">
+        <div className="filters">
+          <button
+            className={`chip${filters.format === null ? " on" : ""}`}
+            onClick={() => setFilter("format", null)}
+          >
+            All
+          </button>
+          {asList(facets?.formats).map((f) => (
+            <button
+              key={f.value}
+              className={`chip${filters.format === f.value ? " on" : ""}`}
+              onClick={() =>
+                setFilter("format", filters.format === f.value ? null : f.value)
+              }
+            >
+              {f.value}
+            </button>
+          ))}
         </div>
-        {canViewFiles && (
-          <div className="segmented" role="tablist" aria-label="Library view">
-            <button
-              role="tab"
-              aria-selected={view === "books"}
-              className={`seg${view === "books" ? " on" : ""}`}
-              onClick={() => selectView("books")}
-            >
-              <BookOpen size={14} /> Books
-            </button>
-            <button
-              role="tab"
-              aria-selected={view === "files"}
-              className={`seg${view === "files" ? " on" : ""}`}
-              data-testid="library-files-tab"
-              onClick={() => selectView("files")}
-            >
-              <Folder size={14} /> Files
-            </button>
-          </div>
+
+        <input
+          className="library-search"
+          data-testid="library-search"
+          placeholder="search title or author…"
+          value={filters.search}
+          onChange={(e) => setFilter("search", e.target.value)}
+        />
+
+        <div className="sortby">
+          {status === "ready" &&
+            `${books.length} book${books.length === 1 ? "" : "s"}`}
+        </div>
+        {anyFilter && (
+          <button className="btn-ghost btn-sm" onClick={clearFilters}>
+            clear filters
+          </button>
         )}
-        <span className="kicker">
-          {view === "books" ? `// ${books.length} on the shelf` : `// shared files`}
-        </span>
       </div>
 
-      {view === "files" ? (
-        <FilesBrowser />
-      ) : (
-      <>
-      <div className="banner">one shelf for the whole node</div>
-
       <div className="library">
-        <aside className="library-rail">
-          <FacetGroup
-            title="authors"
-            values={facets?.authors ?? null}
-            active={filters.author}
-            onToggle={(v) => setFilter("author", v)}
-          />
-          <FacetGroup
-            title="categories"
-            values={facets?.categories ?? null}
-            active={filters.category}
-            onToggle={(v) => setFilter("category", v)}
-          />
-          <FacetGroup
-            title="formats"
-            values={facets?.formats ?? null}
-            active={filters.format}
-            onToggle={(v) => setFilter("format", v)}
-          />
-          {anyFilter && (
-            <button className="btn-ghost btn-sm" onClick={clearFilters}>
-              clear filters
-            </button>
-          )}
-        </aside>
-
         <div className="library-main">
-          <div className="library-tools">
-            <input
-              className="library-search"
-              data-testid="library-search"
-              placeholder="search title or author…"
-              value={filters.search}
-              onChange={(e) => setFilter("search", e.target.value)}
-            />
-            {status === "ready" && (
-              <span className="library-count">
-                {books.length} book{books.length === 1 ? "" : "s"}
-              </span>
-            )}
-          </div>
 
           {status === "error" && (
             <div className="placeholder">
@@ -423,8 +371,15 @@ export default function LibraryPage() {
                   key={b.id}
                   book={b}
                   canManage={canManage}
-                  onRead={() => setReading(b)}
+                  onRead={() => {
+                    if (b.kind === "audiobook" || b.format === "AUDIOBOOK") {
+                      setAudioPlayerId(b.id);
+                    } else {
+                      setReading(b);
+                    }
+                  }}
                   onManage={() => setManaging(b)}
+                  onDetail={() => setDetailItem(b)}
                 />
               ))}
             </div>
@@ -433,8 +388,6 @@ export default function LibraryPage() {
           <AudiobookShelf />
         </div>
       </div>
-      </>
-      )}
 
       {reading && (
         <BookReader book={reading} onClose={() => setReading(null)} />
@@ -443,6 +396,26 @@ export default function LibraryPage() {
         <BookManageModal
           book={managing}
           onClose={() => setManaging(null)}
+        />
+      )}
+      {audioPlayerId && (
+        <AudiobookPlayer
+          itemId={audioPlayerId}
+          onClose={() => setAudioPlayerId(null)}
+        />
+      )}
+      {detailItem && (
+        <LibraryItemDetail
+          item={detailItem}
+          onClose={() => setDetailItem(null)}
+          onOpenItem={(item) => {
+            setDetailItem(null);
+            if (item.kind === "audiobook") {
+              setAudioPlayerId(item.id);
+            } else {
+              setReading(item);
+            }
+          }}
         />
       )}
     </>

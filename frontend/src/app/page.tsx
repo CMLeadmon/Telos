@@ -1,3 +1,5 @@
+"use client";
+
 import Link from "next/link";
 import {
   BookOpen,
@@ -8,15 +10,18 @@ import {
   Tv,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { useThemeStore } from "@/stores/useThemeStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 export default function LandingPage() {
+  // The ink mockups set the wordmark in title case, the synthwave ones in caps.
+  const wordmark = useThemeStore((s) => (s.theme === "ink" ? "Telos" : "TELOS"));
   return (
     <div className="page">
       <nav className="lnav">
         <div className="brand">
           <BrandLogo size={67} />
-          <span className="word">TELOS</span>
+          <span className="word">{wordmark}</span>
         </div>
         <div className="navlinks">
           <a href="#product">Product</a>
@@ -34,6 +39,7 @@ export default function LandingPage() {
 
       <header className="hero">
         <VaporwaveScene />
+        <div className="scrim" aria-hidden="true" />
         <div className="inner">
           <span className="kicker">Open-source · Self-hosted · Sovereign</span>
           <h1>
@@ -179,7 +185,7 @@ export default function LandingPage() {
         <div className="wrap">
           <div className="lockup">
             <BrandLogo size={29} />
-            TELOS
+            {wordmark}
           </div>
           <span className="mono" style={{ color: "var(--faint)", fontSize: 12 }}>
             node: telos-node-1

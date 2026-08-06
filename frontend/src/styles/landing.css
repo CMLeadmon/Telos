@@ -13,6 +13,12 @@
 .hero{position:relative;padding:70px 0 120px;overflow:hidden}
 .hero .scene{--horizon:150px}
 .hero .scene .sun{width:400px;height:400px}
+/* The hero copy sits over the scene, and --muted body text on the bright sun
+   loses contrast at ordinary viewport heights (the DS landing is a fixed
+   1440x1180 poster, so it never meets this). Same scrim the DS uses on the
+   Stream hero — a flat gradient, not an elevation effect. */
+.hero .scrim{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background:linear-gradient(90deg,var(--canvas) 0%,color-mix(in srgb,var(--canvas) 62%,transparent) 42%,transparent 72%)}
 .hero .inner{position:relative;z-index:3;max-width:1200px;margin:0 auto;padding:0 48px}
 .hero h1{font-family:var(--f-display);font-weight:700;font-size:clamp(44px,6vw,82px);line-height:.98;
   letter-spacing:-.03em;margin:22px 0 0;max-width:920px;text-wrap:balance}

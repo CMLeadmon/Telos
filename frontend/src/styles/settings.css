@@ -1,5 +1,8 @@
 /* Settings module — Telos Design System */
-.settings{display:flex;gap:26px;height:100%;min-height:0;padding:26px;overflow:hidden}
+/* Section nav moved to the module rail, so the arena is a single column with
+   an arenahead above it — the same shape the other modules use. */
+.settings{display:flex;flex-direction:column;height:100%;min-height:0;overflow:hidden}
+.settings .setpanel{padding:26px}
 .setnav{width:210px;flex:none;display:flex;flex-direction:column;gap:4px;overflow-y:auto}
 .setnav .grouplabel{margin:14px 0 6px}
 .setnavbtn{display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:var(--r);

@@ -24,13 +24,16 @@ import { hasCapability } from "@/lib/capabilities";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ChatAside } from "@/components/chat/ChatAside";
 import { MobileNavigation } from "@/components/MobileNavigation";
+import { ModuleRail, ModuleRailFooter } from "@/components/rail/ModuleRail";
 import { ConnectivityBanner } from "@/components/ConnectivityBanner";
 
 const MODULES = [
   { href: "/chat", label: "Chat", icon: MessageSquare, capability: "view_channel" },
   { href: "/stream", label: "Stream", icon: Tv, capability: "view_media" },
   { href: "/library", label: "Library", icon: BookOpen, capability: "view_library" },
+  { href: "/files", label: "Files", icon: Folder, capability: "view_files" },
 ];
+
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -40,7 +43,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Theme toggling routes through usePreferencesStore so it persists server-side.
   const prefsLoaded = usePreferencesStore((s) => s.loaded);
   const loadPrefs = usePreferencesStore((s) => s.load);
-  const { channels, activeChannelId, fetchChannels, connect, onlineCount } =
+  const themeSaveFailed = usePreferencesStore((s) => s.saveStatus === "error");
+  const prefsSaveError = usePreferencesStore((s) => s.saveError);
+  const { channels, fetchChannels, connect, onlineCount } =
     useChatSessionStore();
 
   // Bind the app height to the visual viewport so the bottom nav and the chat
@@ -71,7 +76,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   interface SearchBook {
-    id: number;
+    id: string;
     title: string;
     authors: string[] | null;
     categories: string[] | null;
@@ -186,11 +191,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } else if (item.$type === "user") {
       router.push("/chat/");
     } else if (item.$type === "book") {
-      router.push(`/library?read=${item.id}`);
+      router.push(`/library?read=${encodeURIComponent(item.id)}`);
     } else if (item.$type === "media") {
-      router.push(`/stream?play=${item.id}`);
+      router.push(`/stream?play=${encodeURIComponent(item.id)}`);
     } else if (item.$type === "file") {
-      window.open(`/api/v1/files/${item.id}/download`, "_blank");
+      window.open(
+        `/api/v1/files/${encodeURIComponent(item.id)}/download`,
+        "_blank",
+      );
     }
   };
 
@@ -217,7 +225,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const renderSearchSection = <T extends { id: string | number }>(
+  const renderSearchSection = <T extends { id: string }>(
     title: string,
     items: T[] | undefined,
     type: "channel" | "user" | "book" | "media" | "file"
@@ -228,7 +236,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="search-section-title">{title}</div>
         {items.map((item) => {
           const flatIndex = flatResults.findIndex(
-            (f) => String(f.id) === String(item.id) && f.$type === type
+            (f) => f.id === item.id && f.$type === type
           );
           const isActive = flatIndex === searchActiveIndex;
 
@@ -335,7 +343,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="topbar">
         <div className="brand">
           <BrandLogo size={62} />
-          <span className="word">TELOS</span>
+          {/* Per-theme, not an inconsistency: the ink mockups set "Telos",
+              the synthwave ones "TELOS". */}
+          <span className="word">{theme === "ink" ? "Telos" : "TELOS"}</span>
         </div>
         <div className="searchbar" ref={searchContainerRef}>
           <Search size={16} style={{ position: "absolute", left: 14 }} />
@@ -400,9 +410,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             <Settings size={18} />
           </Link>
+          {/* A failed save used to be invisible here: the icon flipped, the
+              PUT 400'd, and the theme silently reverted on the next load.
+              Surface it so the failure is visible where the action happens. */}
           <button
-            className="iconbtn"
+            className={`iconbtn${themeSaveFailed ? " save-failed" : ""}`}
             aria-label="toggle theme"
+            title={
+              themeSaveFailed
+                ? `Theme not saved: ${prefsSaveError ?? "unknown error"}`
+                : undefined
+            }
             onClick={() =>
               void usePreferencesStore
                 .getState()
@@ -411,6 +429,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           >
             {theme === "synthwave" ? <Sun size={18} /> : <Moon size={18} />}
           </button>
+          {themeSaveFailed && (
+            <span role="status" className="sr-only">
+              {`Theme not saved: ${prefsSaveError ?? "unknown error"}`}
+            </span>
+          )}
           <button
             className="iconbtn"
             aria-label="log out"
@@ -439,38 +462,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               )}
             </nav>
 
-            {channels.length > 0 && (
-              <div>
-                <h3 className="grouplabel">Channels</h3>
-                <div className="chanlist">
-                  {channels.map((c) => (
-                    <button
-                      key={c.id}
-                      className={`chan${
-                        onChat && c.id === activeChannelId ? " on" : ""
-                      }`}
-                      onClick={() => {
-                        if (!onChat) router.push("/chat/");
-                        connect(c.id);
-                      }}
-                    >
-                      <span className="l">
-                        <Hash size={15} />
-                        {c.name}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+            <ModuleRail />
           </div>
-          <div className="railfoot">
-            <div className="row">
-              <span className="dot" style={{ width: 5, height: 5 }} /> tunnel:
-              encrypted
-            </div>
-            <div className="row">node: telos-node-1</div>
-          </div>
+          <ModuleRailFooter />
         </aside>
 
         <main className="arena">{children}</main>

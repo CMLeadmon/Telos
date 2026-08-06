@@ -21,21 +21,15 @@ import { hasCapability } from "@/lib/capabilities";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { HlsPlayer } from "@/components/stream/HlsPlayer";
 import { CommentaryPanel } from "@/components/CommentaryPanel";
-
-const POSTER_CLASSES = ["c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7"];
-const DARK_TEXT = new Set(["c2", "c6"]);
+import { MediaShelf } from "@/components/stream/MediaShelf";
+import { StreamItemDetail } from "@/components/stream/StreamItemDetail";
+import { DARK_TEXT, posterClass, posterMeta } from "@/components/stream/poster";
 
 interface StreamItemResponse {
   id: string;
   title: string;
   durationSec?: number;
   kind: string;
-}
-
-function posterClass(id: string): string {
-  let h = 0;
-  for (const ch of id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return POSTER_CLASSES[h % POSTER_CLASSES.length];
 }
 
 function isAudioItem(item: MediaItem, library: MediaLibrary): boolean {
@@ -49,28 +43,6 @@ function isAudioItem(item: MediaItem, library: MediaLibrary): boolean {
 function streamUrl(item: MediaItem, library: MediaLibrary): string {
   const kind = isAudioItem(item, library) ? "audio" : "video";
   return `${apiBase()}/api/v1/stream/${kind}/${encodeURIComponent(item.id)}`;
-}
-
-// A folder's meta line describes what's inside instead of a duration —
-// folders (series, seasons, audiobooks) carry no runtime of their own.
-function folderNoun(type: string): string {
-  switch (type) {
-    case "Series":
-      return "season";
-    case "Season":
-      return "episode";
-    default:
-      return "item";
-  }
-}
-
-function posterMeta(item: MediaItem): string {
-  if (item.isFolder) {
-    const count = item.childCount ?? 0;
-    const noun = folderNoun(item.type);
-    return `${count} ${noun}${count === 1 ? "" : "s"}`;
-  }
-  return `${item.duration} · ${item.type.toLowerCase()}`;
 }
 
 function PosterGrid({
@@ -98,16 +70,20 @@ function PosterGrid({
               className={`poster ${cls}${DARK_TEXT.has(cls) ? " pdark" : ""}`}
               data-testid={item.isFolder ? "poster-folder" : "poster-leaf"}
               onClick={() => onOpen(item)}
-              style={{ width: "100%" }}
             >
-              <div className="motif" />
+              {item.coverUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img className="pcover" src={item.coverUrl} alt="" aria-hidden="true" />
+              ) : (
+                <div className="motif" />
+              )}
               <span className="pt">{item.title}</span>
               <span className="pm">{posterMeta(item)}</span>
             </button>
             {!item.isFolder && (
               <a
                 className="poster-share"
-                href={`/chat?share_kind=stream_film&share_ref=${item.id}`}
+                href={`/chat?share_kind=stream_film&share_ref=${encodeURIComponent(item.id)}`}
                 title="Share to chat"
                 aria-label={`share ${item.title} to chat`}
               >
@@ -137,6 +113,8 @@ export default function StreamPage() {
     activeLibraryId,
     itemsByParent,
     itemsStatusByParent,
+    continueItems,
+    recentItems,
     path,
     rootLibrary,
     nowPlaying,
@@ -145,6 +123,8 @@ export default function StreamPage() {
     refreshProgress,
     refreshNotice,
     fetchLibraries,
+    fetchContinue,
+    fetchRecent,
     refresh,
     clearRefreshNotice,
     open,
@@ -152,16 +132,21 @@ export default function StreamPage() {
     play,
     stop,
   } = useMediaStore();
+  const [detailItemId, setDetailItemId] = useState<string | null>(null);
 
   useEffect(() => {
     if (libraryStatus === "idle") void fetchLibraries();
-  }, [libraryStatus, fetchLibraries]);
+    void fetchContinue();
+    void fetchRecent();
+  }, [libraryStatus, fetchLibraries, fetchContinue, fetchRecent]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const playId = params.get("play");
     if (playId) {
-      api<StreamItemResponse>(`/api/v1/media/items/${playId}`)
+      api<StreamItemResponse>(
+        `/api/v1/media/items/${encodeURIComponent(playId)}`,
+      )
         .then((item) => {
           if (item) {
             const mediaItem: MediaItem = {
@@ -208,6 +193,20 @@ export default function StreamPage() {
     : refreshPhase === "complete"
       ? "scan complete"
       : "rescan jellyfin";
+
+  // Rendered by both the library grid and the drilled-in folder view, which
+  // return separate trees.
+  const itemDetail = detailItemId ? (
+    <StreamItemDetail
+      itemId={detailItemId}
+      onClose={() => setDetailItemId(null)}
+      onPlay={(item) => {
+        setDetailItemId(null);
+        const lib = activeLibrary || libraries[0] || { id: "root", name: "Shared Stream", type: "video" };
+        play(item, lib);
+      }}
+    />
+  ) : null;
 
   if (nowPlaying) {
     return (
@@ -266,10 +265,20 @@ export default function StreamPage() {
             <PosterGrid
               items={items}
               status={status}
-              onOpen={(item) => open(item, rootLibrary)}
+              onOpen={(item) => {
+                // A leaf opens its detail surface here too. Every episode and
+                // audiobook chapter lives below the root, so wiring detail only
+                // into the library grid means most items never get one.
+                if (item.isFolder) {
+                  open(item, rootLibrary);
+                } else {
+                  setDetailItemId(item.id);
+                }
+              }}
             />
           </section>
         </div>
+        {itemDetail}
       </div>
     );
   }
@@ -376,11 +385,27 @@ export default function StreamPage() {
           </div>
         )}
 
+        {continueItems.length > 0 && (
+          <MediaShelf
+            title="Continue Watching"
+            items={continueItems}
+            onSelectItem={(item) => setDetailItemId(item.id)}
+          />
+        )}
+
+        {recentItems.length > 0 && (
+          <MediaShelf
+            title="Recently Added"
+            items={recentItems}
+            onSelectItem={(item) => setDetailItemId(item.id)}
+          />
+        )}
+
         {libraries.map((lib) => {
           const items = itemsByParent[lib.id] ?? [];
           const status = itemsStatusByParent[lib.id] ?? "idle";
           return (
-            <section className="row" key={lib.id}>
+            <section className="row" key={lib.id} id={`lib-${lib.id}`}>
               <div className="rowhead">
                 <h2>{lib.name}</h2>
                 <span className="more">
@@ -394,12 +419,20 @@ export default function StreamPage() {
               <PosterGrid
                 items={items}
                 status={status}
-                onOpen={(item) => open(item, lib)}
+                onOpen={(item) => {
+                  if (item.isFolder) {
+                    open(item, lib);
+                  } else {
+                    setDetailItemId(item.id);
+                  }
+                }}
               />
             </section>
           );
         })}
       </div>
+
+      {itemDetail}
     </div>
   );
 }

@@ -1,16 +1,21 @@
-/* Library module — facet rail, cover grid, reader overlay (DS tokens throughout) */
-.library{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);gap:0;
+/* Library module — cover grid, reader overlay (DS tokens throughout).
+   Facets moved to the module rail, so the arena is a single column. */
+.library{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr);gap:0;
   position:relative;z-index:2;overflow:hidden}
-@media (max-width:720px){.library{grid-template-columns:1fr}.library-rail{display:none}}
 
-/* Books | Files segmented control in the Library header. */
-.segmented{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line-2);
-  border-radius:var(--r-pill);background:var(--surface-2)}
-.segmented .seg{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border:none;
-  border-radius:var(--r-pill);background:transparent;color:var(--muted);font-size:var(--fs-sm);
-  font-weight:500;cursor:pointer;transition:background .12s,color .12s}
-.segmented .seg:hover{color:var(--ink)}
-.segmented .seg.on{background:var(--primary);color:var(--on-primary)}
+/* Tools bar — the DS Library opens with this instead of an arenahead+banner:
+   format chips, then search, then the count. */
+.libtools{flex:none;display:flex;align-items:center;gap:12px;padding:16px 30px;
+  border-bottom:1px solid var(--line);background:var(--surface);position:relative;z-index:2}
+.libtools .filters{display:flex;gap:8px;flex-wrap:wrap}
+.libtools .chip{cursor:pointer}
+.libtools .sortby{margin-left:auto;display:flex;align-items:center;gap:8px;
+  font-family:var(--f-mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted);white-space:nowrap}
+@media (max-width:720px){
+  .libtools{padding:12px 14px;flex-wrap:wrap;gap:8px}
+  .libtools .sortby{margin-left:0}
+}
 
 .library-rail{border-right:1px solid var(--line);padding:18px 16px;overflow-y:auto;
   display:flex;flex-direction:column;gap:18px}
@@ -148,7 +153,7 @@
 .pdf-reader{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
 .pdf-scroll{flex:1;overflow:auto;display:flex;justify-content:center;padding:16px;background:var(--surface-2)}
 .pdf-page{position:relative}
-.pdf-page canvas{display:block;box-shadow:0 2px 16px rgba(0,0,0,.35)}
+.pdf-page canvas{display:block;border:1px solid var(--line)}
 .pdf-text-layer{position:absolute;inset:0;overflow:hidden;opacity:.2;line-height:1;user-select:text}
 .pdf-text-layer span{position:absolute;white-space:pre;transform-origin:0 0;color:transparent}
 .pdf-controls{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px;
@@ -176,7 +181,7 @@
     border-left:none;border-top:1px solid var(--line-2);
     border-radius:var(--r-lg) var(--r-lg) 0 0;
     transform:translateY(100%);transition:transform .2s ease;
-    box-shadow:0 -8px 24px rgba(0,0,0,.3);z-index:5;
+    z-index:5;
     padding-bottom:var(--safe-bottom)}
   .reader-side.open{transform:translateY(0)}
 }
@@ -205,8 +210,68 @@
   background:var(--surface-2);color:var(--ink);font-size:13px;resize:vertical}
 .annot-visibility{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
 .annot-actions{display:flex;gap:8px}
-.annot-actions button{padding:4px 12px;border-radius:var(--r-xs);border:none;background:var(--rose);color:#000;
+.annot-actions button{padding:4px 12px;border-radius:var(--r-xs);border:none;background:var(--primary);color:var(--on-primary);
   font-size:12px;cursor:pointer}
 .annot-actions .annot-cancel{background:transparent;border:1px solid var(--line-2);color:var(--muted)}
 .annot-error{color:var(--rose);font-size:12px}
 .annot-empty{padding:16px 14px;color:var(--muted);font-size:13px}
+
+/* ============================================================
+   AUDIOBOOK PLAYER — a full-surface Library-owned listener.
+   Flat: hairline separators, token radii, no elevation.
+   ============================================================ */
+.abp { position: fixed; inset: 0; z-index: 1100; background: var(--canvas);
+  display: flex; flex-direction: column; }
+.abp-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 20px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.abp-head h2 { font-family: var(--f-display); font-size: 17px; font-weight: 700; margin: 0; }
+.abp-head .by { font-size: 12px; color: var(--muted); margin: 2px 0 0; }
+
+.abp-body { flex: 1; overflow-y: auto; display: flex; flex-direction: column;
+  align-items: center; gap: 18px; padding: 24px 20px; }
+.abp-cover { width: 220px; aspect-ratio: 1; flex: none; border-radius: var(--r);
+  border: 1px solid var(--line-2); background: var(--surface-2); overflow: hidden;
+  display: flex; align-items: center; justify-content: center; }
+.abp-cover img { width: 100%; height: 100%; object-fit: cover; }
+.abp-cover .nocover { font-family: var(--f-mono); font-size: 11px; color: var(--faint); }
+
+.abp-tracks { width: min(520px, 100%); display: flex; flex-direction: column; gap: 3px; }
+.abp-tracks h3 { font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--faint); margin: 0 0 4px; font-weight: 400; }
+.abp-track { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 8px 10px; background: none; border: none; border-radius: var(--r-xs);
+  color: var(--muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.abp-track:hover, .abp-track:focus-visible { background: var(--surface-3); color: var(--ink); }
+.abp-track.on { background: var(--surface-3); color: var(--accent); }
+.abp-track .tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.abp-track .td { font-family: var(--f-mono); font-size: 11px; color: var(--faint); flex: none; }
+
+.abp-foot { border-top: 1px solid var(--line-2); background: var(--surface);
+  padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 12px; }
+.abp-scrub { width: 100%; accent-color: var(--accent); cursor: pointer; }
+.abp-times { display: flex; justify-content: space-between; font-family: var(--f-mono);
+  font-size: 11px; color: var(--faint); }
+.abp-controls { display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; width: min(520px, 100%); margin: 0 auto; }
+.abp-rates { display: flex; gap: 2px; }
+.abp-rate { padding: 4px 8px; background: none; border: none; border-radius: var(--r-xs);
+  font-family: var(--f-mono); font-size: 11px; color: var(--faint); cursor: pointer; }
+.abp-rate:hover { color: var(--ink); }
+.abp-rate.on { background: var(--accent); color: var(--on-primary); }
+.abp-transport { display: flex; align-items: center; gap: 10px; }
+.abp-skip { display: flex; align-items: center; gap: 3px; background: none; border: none;
+  padding: 8px; border-radius: var(--r-xs); color: var(--muted); font-family: var(--f-mono);
+  font-size: 11px; cursor: pointer; }
+.abp-skip:hover { color: var(--ink); background: var(--surface-3); }
+.abp-play { width: 46px; height: 46px; flex: none; border-radius: var(--r-pill);
+  border: none; background: var(--accent); color: var(--on-primary);
+  display: flex; align-items: center; justify-content: center; cursor: pointer; }
+.abp-play:hover { background: var(--accent-hover); }
+
+@media (max-width: 720px) {
+  .abp-cover { width: min(220px, 62vw); }
+  .abp-controls { flex-direction: column-reverse; gap: 14px; }
+  .abp-play, .abp-skip, .abp-rate { min-height: 44px; }
+  .abp-play { width: 56px; height: 56px; }
+}

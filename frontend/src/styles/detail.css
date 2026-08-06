@@ -1,0 +1,88 @@
+/* ============================================================
+   ITEM DETAIL — the surface a member meets before playback.
+
+   Library and Stream open the same shape (cover, metadata, one
+   primary action) so the two modules stay consistent, per the
+   design's shared shelf/detail vocabulary. Flat: no elevation,
+   no shadow, 1px hairlines, token radii only.
+   ============================================================ */
+
+.idetail-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 1100; }
+
+.idetail {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(720px, calc(100vw - 32px)); max-height: min(680px, calc(100vh - 32px));
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r);
+  display: flex; flex-direction: column; overflow: hidden; z-index: 1105;
+}
+
+.idetail-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; border-bottom: 1px solid var(--line-2); background: var(--surface);
+}
+.idetail-kicker {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--accent);
+}
+.idetail-head h2 { font-family: var(--f-display); font-size: 19px; font-weight: 700; margin: 2px 0 0; line-height: 1.15; }
+.idetail-sub { font-size: 13px; color: var(--muted); margin: 2px 0 0; }
+
+.idetail-body { flex: 1; overflow-y: auto; padding: 16px; display: flex; gap: 18px; }
+
+.idetail-cover {
+  flex: none; width: 168px; aspect-ratio: 2 / 3; border-radius: var(--r-xs);
+  border: 1px solid var(--line-2); background: var(--surface); overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.idetail-cover img { width: 100%; height: 100%; object-fit: cover; }
+.idetail-cover .nocover { font-family: var(--f-mono); font-size: 10px; color: var(--faint); }
+
+.idetail-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.idetail-byline { font-size: 13px; color: var(--ink); }
+.idetail-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; font-family: var(--f-mono); font-size: 11px; color: var(--faint); }
+.idetail-desc { font-size: 13px; line-height: 1.55; color: var(--muted); }
+.idetail-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.idetail-tag {
+  font-size: 11px; padding: 2px 9px; border-radius: var(--r-pill);
+  border: 1px solid var(--line-2); color: var(--muted);
+}
+
+.idetail-section { display: flex; flex-direction: column; gap: 6px; }
+.idetail-section h3 {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--faint); margin: 0; font-weight: 400;
+}
+.idetail-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 10px;
+  max-height: 148px; overflow-y: auto; font-size: 12px; color: var(--muted); }
+.idetail-list button {
+  text-align: left; background: none; border: none; padding: 3px 6px; border-radius: var(--r-xs);
+  color: inherit; font: inherit; cursor: pointer;
+}
+.idetail-list button:hover, .idetail-list button:focus-visible { background: var(--surface-3); color: var(--ink); }
+.idetail-list button.on { color: var(--accent); }
+
+/* Progress. The bar is a hairline-bounded track, never a shadowed pill. */
+.idetail-progress { display: flex; flex-direction: column; gap: 4px; }
+.idetail-progress .plabel { display: flex; justify-content: space-between; font-family: var(--f-mono); font-size: 10px; color: var(--faint); }
+.idetail-track { height: 4px; border-radius: var(--r-pill); background: var(--line); overflow: hidden; }
+.idetail-track span { display: block; height: 100%; background: var(--accent); }
+
+.idetail-foot {
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px;
+  border-top: 1px solid var(--line-2); background: var(--surface);
+}
+.idetail-foot .grow { flex: 1; }
+.idetail-note { font-family: var(--f-mono); font-size: 11px; color: var(--faint); }
+.idetail-error { font-size: 13px; color: var(--rose); }
+
+@media (max-width: 720px) {
+  .idetail {
+    inset: 0; top: 0; left: 0; transform: none;
+    width: 100vw; max-height: none; height: 100dvh; border: none; border-radius: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .idetail-body { flex-direction: column; }
+  .idetail-cover { width: 132px; align-self: center; }
+  .idetail-list { grid-template-columns: minmax(0, 1fr); }
+  .idetail-foot .btn, .idetail-foot button { min-height: 44px; }
+}

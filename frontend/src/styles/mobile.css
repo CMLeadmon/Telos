@@ -11,6 +11,16 @@
   .mobile-bottom-nav {
     display: flex;
   }
+
+  /* The rail is gone here, so the chat header carries the only route back to
+     the channel list — the DS mobile chat pattern (chevron-left beside the
+     channel name). Full 44px target. */
+  .chan-back {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    flex: none;
+  }
 }
 
 @media (max-width: 720px) {

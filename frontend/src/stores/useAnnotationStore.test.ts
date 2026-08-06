@@ -9,12 +9,13 @@ import { api } from "@/lib/api";
 import { useAnnotationStore, type Annotation } from "./useAnnotationStore";
 
 const apiMock = api as unknown as ReturnType<typeof vi.fn>;
+const BOOK_ID = "11111111-1111-4111-8111-111111111111";
 
 function ann(id: string, visibility: "private" | "community" = "private", note = "n"): Annotation {
   return {
     id,
     targetType: "book",
-    targetId: "42",
+    targetId: BOOK_ID,
     ownerId: "o",
     visibility,
     locator: { kind: "epub", cfi: "x" },
@@ -27,10 +28,20 @@ function ann(id: string, visibility: "private" | "community" = "private", note =
 
 beforeEach(() => {
   apiMock.mockReset();
-  useAnnotationStore.setState({ bookId: 42, annotations: [], replies: {}, activeId: null, status: "idle", error: null });
+  useAnnotationStore.setState({ bookId: BOOK_ID, annotations: [], replies: {}, activeId: null, status: "idle", error: null });
 });
 
 describe("useAnnotationStore", () => {
+  it("encodes the opaque book ID when loading annotations", async () => {
+    apiMock.mockResolvedValue({ annotations: [] });
+
+    await useAnnotationStore.getState().load("catalog/book ?edition=1");
+
+    expect(apiMock).toHaveBeenCalledWith(
+      "/api/v1/library/books/catalog%2Fbook%20%3Fedition%3D1/annotations",
+    );
+  });
+
   it("creates a private-default annotation and sends visibility=private", () => {
     let sentBody: Record<string, unknown> = {};
     apiMock.mockImplementation(async (_p: string, init?: RequestInit) => {

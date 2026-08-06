@@ -17,7 +17,7 @@ const VIEWPORTS = [
   { w: 915, h: 412, name: "Pixel landscape" },
 ];
 
-const ROUTES = ["/chat/", "/stream/", "/library/", "/library?view=files", "/settings/"];
+const ROUTES = ["/chat/", "/stream/", "/library/", "/files/", "/settings/"];
 
 async function login(page: Page) {
   await page.goto("/login/");
@@ -91,5 +91,46 @@ test.describe("authenticated mobile matrix", () => {
     expect(box).not.toBeNull();
     // The composer must sit within the viewport, not scrolled off the bottom.
     expect(box!.y).toBeLessThan(844);
+  });
+
+  // The DS mobile tabbar is exactly the four surfaces; the channel list is
+  // reached by backing out of the current channel, not by a fifth tab. This
+  // is the only route to another channel on a phone, so it must keep working.
+  test("the tabbar holds only the four module surfaces", async ({ page }) => {
+    await page.setViewportSize({ width: 412, height: 915 });
+    await login(page);
+    await page.goto("/chat/");
+    await page.waitForLoadState("networkidle");
+    const tabs = page.locator('[data-testid="mobile-bottom-nav"] a');
+    await expect(tabs).toHaveCount(4);
+    for (const label of ["Chat", "Stream", "Library", "Files"]) {
+      await expect(page.getByLabel(label)).toBeVisible();
+    }
+  });
+
+  test("the chat header switches text channels on a phone", async ({ page }) => {
+    await page.setViewportSize({ width: 412, height: 915 });
+    await login(page);
+    await page.goto("/chat/");
+    await page.waitForLoadState("networkidle");
+
+    const heading = page.locator(".arenahead .name");
+    const before = (await heading.innerText()).trim();
+
+    const back = page.getByTestId("mobile-channel-switch");
+    await expect(back).toBeVisible();
+    await expect(page.getByTestId("mobile-channels-drawer")).toHaveCount(0);
+
+    await back.click();
+    const drawer = page.getByTestId("mobile-channels-drawer");
+    await expect(drawer).toBeVisible();
+
+    // Pick any channel other than the one already open.
+    const others = drawer.locator(".chan", { hasNotText: before });
+    expect(await others.count()).toBeGreaterThan(0);
+    await others.first().click();
+
+    await expect(heading).not.toHaveText(before);
+    await expect(drawer).toHaveCount(0);
   });
 });

@@ -84,15 +84,7 @@ func (a *GrimmoryAuthorizer) AuthorizeBook(ctx context.Context, user *UserContex
 		return AuthorizedBook{}, err
 	}
 	if libraryID == "" {
-		// Unmapped: a single configured library resolves unambiguously; more
-		// than one is genuinely ambiguous and fails closed.
-		if len(a.allowed) == 1 {
-			for id := range a.allowed {
-				libraryID = id
-			}
-		} else {
-			return AuthorizedBook{}, errBookAmbiguous
-		}
+		return AuthorizedBook{}, errBookAmbiguous
 	}
 	if _, ok := a.allowed[libraryID]; !ok {
 		return AuthorizedBook{}, errBookNotAuthorized
@@ -110,9 +102,7 @@ func (grimmoryAPIResolver) ResolveBook(ctx context.Context, bookID string) (stri
 	if err != nil {
 		return "", "", "", errBookNotAuthorized
 	}
-	// The current Grimmory DTO exposes no library ID; membership is resolved by
-	// the authorizer's single-library rule. An empty ID means "unmapped".
-	return book.Title, book.Format, "", nil
+	return book.Title, book.Format, book.LibraryID, nil
 }
 
 var grimmoryAuthorizer *GrimmoryAuthorizer

@@ -18,7 +18,8 @@ Chat — plus Settings.
 | Channel chat with one-level threads, reactions, pins, presence, mentions | Shipping |
 | Recipient-scoped user-event stream (WebSocket catch-up + live delivery) for mentions and replies | Shipping |
 | Jellyfin streaming with an in-app HLS player (playback rate, Picture-in-Picture) | Shipping |
-| E-book catalog (Grimmory) in a Library with facet filtering; in-app EPUB and PDF readers with durable progress | Shipping |
+| EPUB/PDF catalog (Grimmory) in Library with facet filtering, stable catalog IDs, in-app readers, and per-member continuity | Shipping |
+| Audiobook records cataloged by Grimmory and listed in Library | Phase 1 catalog-only. The Library player/resume work remains member-experience Phase 2; verified Jellyfin migration/cutover remains Phase 4. |
 | Commentary on any media target — book highlights plus comments on streamed items and files — private by default, explicitly community-shareable, replies, author edit/delete, moderator removal | Shipping |
 | Files browser folded into Library (Books \| Files segment): upload (scanned by ClamAV), folders, download, delete | Shipping |
 | Channel CRUD and role overrides via `manage_channels` | Shipping |

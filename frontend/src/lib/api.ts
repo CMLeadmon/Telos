@@ -10,12 +10,12 @@ export function avatarUrl(userId: string): string {
   return `${apiBase()}/api/v1/users/${userId}/avatar`;
 }
 
-export function libraryCoverUrl(bookId: number): string {
-  return `${apiBase()}/api/v1/library/books/${bookId}/cover`;
+export function libraryCoverUrl(bookId: string): string {
+  return `${apiBase()}/api/v1/library/books/${encodeURIComponent(bookId)}/cover`;
 }
 
-export function libraryContentUrl(bookId: number): string {
-  return `${apiBase()}/api/v1/library/books/${bookId}/content`;
+export function libraryContentUrl(bookId: string): string {
+  return `${apiBase()}/api/v1/library/books/${encodeURIComponent(bookId)}/content`;
 }
 
 export function wsBase(): string {

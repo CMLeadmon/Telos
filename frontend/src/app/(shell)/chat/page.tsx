@@ -1,32 +1,61 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Hash, Plus, Send, Smile, X } from "lucide-react";
+import { ChevronLeft, Hash, Plus, Send, Smile, X } from "lucide-react";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
+import { useMobileNavStore } from "@/stores/useMobileNavStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
-import { VaporwaveScene } from "@/components/VaporwaveScene";
 import { ChatMessage } from "@/components/chat/ChatMessage";
 import { EmojiPicker } from "@/components/chat/EmojiPicker";
 import { MentionAutocomplete, type SearchUser } from "@/components/chat/MentionAutocomplete";
-import { SharePicker } from "@/components/chat/SharePicker";
+import { SharePicker, type ShareKind, type ShareTab } from "@/components/chat/SharePicker";
 import { ThreadPanel } from "@/components/chat/ThreadPanel";
 import { api } from "@/lib/api";
 
 interface ShareItemMetadata {
-  id: string | number;
+  id: string;
   title: string;
+}
+
+// The picker opens on the matching tab, but every tab stays reachable from
+// inside it — these are shortcuts, not separate pickers.
+const ATTACH_OPTIONS: { tab: ShareTab; label: string }[] = [
+  { tab: "book", label: "Share from Library" },
+  { tab: "film", label: "Share from Stream" },
+  { tab: "file", label: "Share a file" },
+];
+
+// Files carry no metadata endpoint, but the browser's IDs are
+// base64url(relative path), so the label comes out of the ref itself — nothing
+// separate to trust. The gateway still builds the authoritative snapshot when
+// the message is sent; this is only the staged chip's caption.
+function fileLabelFromRef(ref: string): string {
+  const fallback = "Shared file";
+  try {
+    const b64 = ref.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(b64.padEnd(Math.ceil(b64.length / 4) * 4, "="));
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(
+      Uint8Array.from(binary, (c) => c.charCodeAt(0)),
+    );
+    // A UUID decodes to bytes too; only a plausible path is worth showing.
+    if (!decoded || [...decoded].some((c) => c.charCodeAt(0) < 0x20)) return fallback;
+    return decoded.split("/").pop() || fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export default function ChatPage() {
   const { channels, activeChannelId, messages, connection, connect, send } =
     useChatSessionStore();
+  const openChannelDrawer = useMobileNavStore((s) => s.openChannelDrawer);
   const [draft, setDraft] = useState("");
   const [showPicker, setShowPicker] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showSharePicker, setShowSharePicker] = useState(false);
-  const [pickerInitialTab, setPickerInitialTab] = useState<"book" | "film">("book");
-  const [stagedEmbed, setStagedEmbed] = useState<{ kind: "library_book" | "stream_film"; ref: string; title: string } | null>(null);
+  const [pickerInitialTab, setPickerInitialTab] = useState<ShareTab>("book");
+  const [stagedEmbed, setStagedEmbed] = useState<{ kind: ShareKind; ref: string; title: string } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -51,23 +80,37 @@ export default function ChatPage() {
     const params = new URLSearchParams(window.location.search);
     const shareKind = params.get("share_kind");
     const shareRef = params.get("share_ref");
-    if (shareKind && shareRef) {
-      const kind = shareKind as "library_book" | "stream_film";
-      const url = kind === "library_book"
-        ? `/api/v1/library/books/${shareRef}`
-        : `/api/v1/media/items/${shareRef}`;
+    if (shareKind === "library_book" || shareKind === "stream_film" || shareKind === "file") {
+      if (!shareRef) return;
 
-      api<ShareItemMetadata>(url)
-        .then((item) => {
-          if (item) {
-            setStagedEmbed({
-              kind,
-              ref: shareRef,
-              title: item.title,
-            });
-          }
-        })
-        .catch((err) => console.error("failed to fetch shared item", err));
+      if (shareKind === "file") {
+        // Files are not catalog items, so there is nothing to canonicalize and
+        // no metadata route to ask. The label is derived from the ref, but it
+        // still has to land out of a callback — this effect may not setState
+        // inline.
+        void Promise.resolve(fileLabelFromRef(shareRef)).then((title) => {
+          setStagedEmbed({ kind: "file", ref: shareRef, title });
+        });
+      } else {
+        const url =
+          shareKind === "library_book"
+            ? `/api/v1/library/books/${encodeURIComponent(shareRef)}`
+            : `/api/v1/media/items/${encodeURIComponent(shareRef)}`;
+
+        // A legacy upstream ID in the link resolves to its canonical Telos ID,
+        // so stage what the server returned rather than what the URL carried.
+        api<ShareItemMetadata>(url)
+          .then((item) => {
+            if (item) {
+              setStagedEmbed({
+                kind: shareKind,
+                ref: item.id,
+                title: item.title,
+              });
+            }
+          })
+          .catch((err) => console.error("failed to fetch shared item", err));
+      }
 
       const newUrl = window.location.pathname;
       window.history.replaceState({}, "", newUrl);
@@ -196,8 +239,18 @@ export default function ChatPage() {
 
   return (
     <>
-      <VaporwaveScene />
       <div className="arenahead">
+        {/* Mobile has no rail, so the channel list is reached by backing out of
+            the current channel — the DS mobile chat pattern. Hidden on desktop,
+            where the rail already lists every channel. */}
+        <button
+          className="iconbtn chan-back"
+          aria-label="Switch channel"
+          data-testid="mobile-channel-switch"
+          onClick={openChannelDrawer}
+        >
+          <ChevronLeft size={22} />
+        </button>
         <div className="name">
           <Hash size={17} />
           {active?.name ?? "…"}
@@ -243,7 +296,13 @@ export default function ChatPage() {
             Staged Embed:
           </span>
           <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {stagedEmbed.title} ({stagedEmbed.kind === "library_book" ? "Book" : "Media"})
+            {stagedEmbed.title} (
+            {stagedEmbed.kind === "library_book"
+              ? "Book"
+              : stagedEmbed.kind === "stream_film"
+                ? "Media"
+                : "File"}
+            )
           </span>
           <button
             onClick={() => setStagedEmbed(null)}
@@ -269,65 +328,20 @@ export default function ChatPage() {
           {showAttachMenu && (
             <>
               <div style={{ position: "fixed", inset: 0, zIndex: 1050 }} onClick={() => setShowAttachMenu(false)} />
-              <div
-                style={{
-                  position: "absolute",
-                  bottom: "100%",
-                  left: 0,
-                  marginBottom: "8px",
-                  background: "var(--surface-2)",
-                  border: "1px solid var(--line)",
-                  borderRadius: "var(--r-xs)",
-                  padding: "4px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "2px",
-                  zIndex: 1055,
-                  minWidth: "160px",
-                  boxShadow: "0 -4px 12px rgba(0,0,0,0.2)",
-                  backdropFilter: "blur(8px)",
-                }}
-              >
-                <button
-                  onClick={() => {
-                    setPickerInitialTab("book");
-                    setShowSharePicker(true);
-                    setShowAttachMenu(false);
-                  }}
-                  style={{
-                    padding: "6px 12px",
-                    background: "transparent",
-                    border: "none",
-                    borderRadius: "var(--r-xs)",
-                    textAlign: "left",
-                    color: "var(--ink)",
-                    fontSize: "12.5px",
-                    cursor: "pointer",
-                  }}
-                  className="attach-opt-btn"
-                >
-                  Share from Library
-                </button>
-                <button
-                  onClick={() => {
-                    setPickerInitialTab("film");
-                    setShowSharePicker(true);
-                    setShowAttachMenu(false);
-                  }}
-                  style={{
-                    padding: "6px 12px",
-                    background: "transparent",
-                    border: "none",
-                    borderRadius: "var(--r-xs)",
-                    textAlign: "left",
-                    color: "var(--ink)",
-                    fontSize: "12.5px",
-                    cursor: "pointer",
-                  }}
-                  className="attach-opt-btn"
-                >
-                  Share from Stream
-                </button>
+              <div className="attach-menu">
+                {ATTACH_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.tab}
+                    className="attach-opt-btn"
+                    onClick={() => {
+                      setPickerInitialTab(opt.tab);
+                      setShowSharePicker(true);
+                      setShowAttachMenu(false);
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
               </div>
             </>
           )}

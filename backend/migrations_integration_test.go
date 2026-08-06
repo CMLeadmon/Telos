@@ -82,6 +82,105 @@ func TestMigration0020RemovesRealtimeExtras(t *testing.T) {
 	}
 }
 
+func TestMigration0022CatalogIdentityAndProgress(t *testing.T) {
+	pool := testutil.FreshDatabase(t)
+	ctx := context.Background()
+	if _, err := RunMigrations(ctx, pool, migrationsFS); err != nil {
+		t.Fatalf("RunMigrations: %v", err)
+	}
+
+	var itemID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO catalog_items (surface, kind)
+		VALUES ('stream', 'video')
+		RETURNING id
+	`).Scan(&itemID); err != nil {
+		t.Fatalf("insert catalog item: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO catalog_sources (catalog_item_id, provider, upstream_id, upstream_library_id)
+		VALUES ($1, 'jellyfin', 'video-1', 'movies')
+	`, itemID); err != nil {
+		t.Fatalf("insert active source: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO catalog_sources (catalog_item_id, provider, upstream_id, upstream_library_id)
+		VALUES ($1, 'grimmory', 'book-1', 'books')
+	`, itemID); err == nil {
+		t.Fatal("second active source for one catalog item was accepted")
+	}
+
+	for _, upstreamID := range []string{"video-alias-1", "video-alias-2"} {
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO catalog_sources (
+				catalog_item_id, provider, upstream_id, upstream_library_id, active
+			) VALUES ($1, 'jellyfin', $2, 'movies', false)
+		`, itemID, upstreamID); err != nil {
+			t.Fatalf("insert inactive alias %q: %v", upstreamID, err)
+		}
+	}
+
+	var aliceID, bobID string
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash)
+		VALUES ('alice', 'x')
+		RETURNING id
+	`).Scan(&aliceID); err != nil {
+		t.Fatalf("insert alice: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash)
+		VALUES ('bob', 'x')
+		RETURNING id
+	`).Scan(&bobID); err != nil {
+		t.Fatalf("insert bob: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO member_progress (user_id, catalog_item_id, percent)
+		VALUES ($1, $3, 0.25), ($2, $3, 0.75)
+	`, aliceID, bobID, itemID); err != nil {
+		t.Fatalf("insert member progress: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM users WHERE id = $1`, aliceID); err != nil {
+		t.Fatalf("delete alice: %v", err)
+	}
+
+	var remaining, bobRemaining int
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE user_id = $2)
+		FROM member_progress
+		WHERE catalog_item_id = $1
+	`, itemID, bobID).Scan(&remaining, &bobRemaining); err != nil {
+		t.Fatalf("count remaining progress: %v", err)
+	}
+	if remaining != 1 || bobRemaining != 1 {
+		t.Fatalf("remaining progress rows = %d (bob=%d), want 1 (bob=1)", remaining, bobRemaining)
+	}
+
+	var bookProgress, annotationTargets, messageEmbedRefs bool
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			to_regclass('public.book_progress') IS NOT NULL,
+			EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'annotations' AND column_name = 'target_id'
+			),
+			EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_schema = 'public' AND table_name = 'messages' AND column_name = 'embed_ref'
+			)
+	`).Scan(&bookProgress, &annotationTargets, &messageEmbedRefs); err != nil {
+		t.Fatalf("check preserved continuity sources: %v", err)
+	}
+	if !bookProgress || !annotationTargets || !messageEmbedRefs {
+		t.Fatalf(
+			"preserved continuity sources: book_progress=%t annotations.target_id=%t messages.embed_ref=%t",
+			bookProgress, annotationTargets, messageEmbedRefs,
+		)
+	}
+}
+
 func TestRunMigrationsEmptyAppliesAtomically(t *testing.T) {
 	pool := testutil.FreshDatabase(t)
 	ctx := context.Background()

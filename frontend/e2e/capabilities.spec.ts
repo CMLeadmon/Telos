@@ -24,8 +24,8 @@ test("capability-driven navigation and settings visibility", async ({ page }) =>
   await expect(page.getByTestId("settings-page")).toBeVisible();
 
   // Profile, Security, Appearance, Credits are always present
-  await expect(page.getByRole("button", { name: "Profile" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Security" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Appearance" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Credits" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Profile", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Security", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Appearance", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Credits", exact: true })).toBeVisible();
 });

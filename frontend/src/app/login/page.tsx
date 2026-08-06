@@ -6,6 +6,7 @@ import { Eye, EyeOff } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { ApiError } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
+import { useThemeStore } from "@/stores/useThemeStore";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 type Mode = "login" | "bootstrap" | "invite";
@@ -197,6 +198,8 @@ const errorFeedback = (mode: Mode, error: unknown): Feedback => {
 };
 
 export default function LoginPage() {
+  // The ink mockups set the wordmark in title case, the synthwave ones in caps.
+  const wordmark = useThemeStore((s) => (s.theme === "ink" ? "Telos" : "TELOS"));
   const router = useRouter();
   const { status, fetchMe, login, bootstrap, acceptInvite } = useAuthStore();
   const [mode, setMode] = useState<Mode>("login");
@@ -277,7 +280,7 @@ export default function LoginPage() {
       <form className="authcard" onSubmit={submit} noValidate>
         <div className="lockup">
           <BrandLogo size={67} />
-          <span className="word">TELOS</span>
+          <span className="word">{wordmark}</span>
         </div>
         <span className="kicker" style={{ textAlign: "center" }}>
           {MODE_COPY[mode].kicker}

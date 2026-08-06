@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +17,53 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type catalogIdentityTestState struct {
+	items map[string]CatalogResolution
+	next  int
+}
+
+func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
+	t.Helper()
+	state := &catalogIdentityTestState{items: map[string]CatalogResolution{}}
+	oldObserve, oldResolve, oldReconcile := observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration
+	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
+		key := string(in.Provider) + "\x00" + in.UpstreamID
+		if existing, ok := state.items[key]; ok {
+			return existing, nil
+		}
+		state.next++
+		resolution := CatalogResolution{
+			ID:      fmt.Sprintf("00000000-0000-4000-8000-%012d", state.next),
+			Surface: in.Surface, Kind: in.Kind, Provider: in.Provider,
+			UpstreamID: in.UpstreamID, LibraryID: in.LibraryID,
+			Active: true, Available: true, Revision: 1,
+		}
+		state.items[key] = resolution
+		return resolution, nil
+	}
+	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		for _, item := range state.items {
+			if (item.ID == rawID || item.UpstreamID == rawID) && item.Surface == surface {
+				return item, nil
+			}
+		}
+		observation := CatalogObservation{UpstreamID: rawID, Surface: surface}
+		if surface == SurfaceLibrary {
+			observation.Provider, observation.LibraryID, observation.Kind = ProviderGrimmory, "1", "epub"
+		} else {
+			observation.Provider, observation.LibraryID, observation.Kind = ProviderJellyfin, "lib-allowed", "folder"
+		}
+		return observeCatalogIdentity(context.Background(), observation)
+	}
+	reconcileCatalogEnumeration = func(_ context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Observed: len(enumeration.Observations), Scans: map[string]CatalogScanReport{}}, nil
+	}
+	t.Cleanup(func() {
+		observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration = oldObserve, oldResolve, oldReconcile
+	})
+	return state
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Argon2id Password Hashing Tests
@@ -328,7 +376,8 @@ func TestJellyfinProxyPathValidation(t *testing.T) {
 	}
 }
 
-func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
+func TestHandleMediaItemsReturnsCanonicalDirectChildren(t *testing.T) {
+	installCatalogIdentityTest(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/Users":
@@ -377,9 +426,13 @@ func TestHandleMediaItemsReturnsDirectChildren(t *testing.T) {
 	if !got[0].IsFolder || got[0].ChildCount != 13 || got[0].Title != "Season 1" {
 		t.Errorf("got %+v, want a Season 1 folder with ChildCount 13", got[0])
 	}
+	if !looksLikeUUID(got[0].ID) {
+		t.Fatalf("public child id = %q, want canonical UUID", got[0].ID)
+	}
 }
 
 func TestHandleMediaItemReturnsUnavailableWithoutMock(t *testing.T) {
+	installCatalogIdentityTest(t)
 	oldBase := jellyfinBaseURL
 	jellyfinBaseURL = "http://127.0.0.1:1"
 	defer func() { jellyfinBaseURL = oldBase }()
@@ -401,17 +454,65 @@ func TestHandleMediaItemReturnsUnavailableWithoutMock(t *testing.T) {
 	}
 }
 
+func TestHandleMediaItemReturnsCanonicalIDAndCoverURL(t *testing.T) {
+	installCatalogIdentityTest(t)
+	resolution, err := observeCatalogIdentity(t.Context(), CatalogObservation{
+		Provider: ProviderJellyfin, UpstreamID: "movie-22", LibraryID: "lib-allowed",
+		Surface: SurfaceStream, Kind: "video",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Users":
+			json.NewEncoder(w).Encode([]map[string]string{{"Id": "user-1", "Name": "admin"}})
+		case "/Users/user-1/Items/movie-22":
+			json.NewEncoder(w).Encode(map[string]any{"Id": "movie-22", "Name": "Film", "Type": "Movie"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldBase, oldRedis := jellyfinBaseURL, redisClient
+	jellyfinBaseURL, redisClient = server.URL, nil
+	t.Cleanup(func() { jellyfinBaseURL, redisClient = oldBase, oldRedis })
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/media/items/"+resolution.ID, nil)
+	req.SetPathValue("id", resolution.ID)
+	rec := httptest.NewRecorder()
+	handleMediaItemByID(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		ID       string `json:"id"`
+		CoverURL string `json:"coverUrl"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != resolution.ID || got.CoverURL != "/api/v1/media/items/"+resolution.ID+"/cover" {
+		t.Fatalf("response = %+v, want canonical id and cover", got)
+	}
+}
+
 func configureMediaRefreshTest(t *testing.T) {
 	t.Helper()
 	oldPollInterval := mediaRefreshPollInterval
 	oldMaxDuration := mediaRefreshMaxDuration
 	oldResponse := getMediaRefreshResponse()
+	oldReconcile := reconcileJellyfinCatalog
 	mediaRefreshPollInterval = 2 * time.Millisecond
 	mediaRefreshMaxDuration = 200 * time.Millisecond
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Scans: map[string]CatalogScanReport{}}, nil
+	}
 	setMediaRefreshResponse("idle", "No Jellyfin scan is running.", nil)
 	t.Cleanup(func() {
 		mediaRefreshPollInterval = oldPollInterval
 		mediaRefreshMaxDuration = oldMaxDuration
+		reconcileJellyfinCatalog = oldReconcile
 		mediaRefreshState.Lock()
 		mediaRefreshState.response = oldResponse
 		mediaRefreshState.Unlock()
@@ -492,6 +593,63 @@ func TestHandleMediaRefreshWaitsForJellyfinCompletion(t *testing.T) {
 	}
 	if refreshPosts.Load() != 1 {
 		t.Errorf("refresh posts = %d, want 1", refreshPosts.Load())
+	}
+}
+
+func TestMonitorJellyfinRefreshReconcilesBeforeReportingComplete(t *testing.T) {
+	configureMediaRefreshTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ScheduledTasks/refresh-task" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: "2026-07-15T12:01:00Z"},
+		})
+	}))
+	defer server.Close()
+	oldBase, oldReconcile, oldRedis := jellyfinBaseURL, reconcileJellyfinCatalog, redisClient
+	jellyfinBaseURL, redisClient = server.URL, nil
+	events := []string{}
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		events = append(events, "reconcile")
+		if status := getMediaRefreshResponse().Status; status != "refreshing" {
+			t.Fatalf("status during reconciliation = %q, want refreshing", status)
+		}
+		return CatalogReconciliationReport{Observed: 2, Backfill: CatalogBackfillReport{Updated: 1}}, nil
+	}
+	t.Cleanup(func() {
+		jellyfinBaseURL, reconcileJellyfinCatalog, redisClient = oldBase, oldReconcile, oldRedis
+	})
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	events = append(events, "status:"+getMediaRefreshResponse().Status)
+	if got, want := strings.Join(events, ","), "reconcile,status:complete"; got != want {
+		t.Fatalf("events = %q, want %q", got, want)
+	}
+}
+
+func TestMonitorJellyfinRefreshReportsReconciliationFailure(t *testing.T) {
+	configureMediaRefreshTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(jellyfinTaskInfo{
+			ID: "refresh-task", Key: "RefreshLibrary", State: "Idle",
+			LastExecutionResult: &jellyfinTaskResult{Status: "Completed", EndTimeUTC: "2026-07-15T12:01:00Z"},
+		})
+	}))
+	defer server.Close()
+	oldBase, oldReconcile := jellyfinBaseURL, reconcileJellyfinCatalog
+	jellyfinBaseURL = server.URL
+	reconcileJellyfinCatalog = func(context.Context) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{Observed: 1}, errors.New("forced incomplete enumeration")
+	}
+	t.Cleanup(func() { jellyfinBaseURL, reconcileJellyfinCatalog = oldBase, oldReconcile })
+
+	monitorJellyfinRefresh("refresh-task", "2026-07-15T12:00:00Z", false)
+	response := getMediaRefreshResponse()
+	if response.Status != "failed" || response.Message != "Jellyfin scan completed, but Telos catalog reconciliation failed." {
+		t.Fatalf("response = %+v", response)
 	}
 }
 
