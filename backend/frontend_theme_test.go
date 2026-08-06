@@ -1,3 +1,5 @@
+//go:build embedfrontend
+
 package main
 
 import (

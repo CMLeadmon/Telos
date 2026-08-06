@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"log"
 	"net"
 	"net/http"
@@ -113,9 +112,6 @@ func upstreamRequestContext(ctx context.Context) (context.Context, context.Cance
 
 //go:embed db/migrations/*.sql
 var migrationsFS embed.FS
-
-//go:embed all:out
-var frontendFS embed.FS
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types
@@ -388,15 +384,11 @@ func main() {
 		log.Printf("Warning: Failed to create bookdrop dir: %v", err)
 	}
 
-	// Get sub-filesystem for the frontend static files
-	subFS, err := fs.Sub(frontendFS, "out")
-	if err != nil {
-		log.Fatalf("Failed to locate frontend out/ directory: %v", err)
-	}
-	fileServer := http.FileServer(http.FS(subFS))
-
 	// Create ServeMux
 	mux := http.NewServeMux()
+
+	// Register frontend static file handler (no-op in headless mode)
+	registerFrontend(mux)
 
 	// Public Routes
 	mux.HandleFunc("GET /api/v1/health/live", handleLiveness)
@@ -542,11 +534,6 @@ func main() {
 	mux.Handle("GET /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleListAnnotationReplies), ""))
 	mux.Handle("POST /api/v1/library/annotations/{aid}/replies", withAuth(http.HandlerFunc(handleCreateAnnotationReply), ""))
 	mux.Handle("DELETE /api/v1/library/annotation-replies/{rid}", withAuth(http.HandlerFunc(handleDeleteAnnotationReply), ""))
-
-	// Frontend static assets handler
-	// Stamps the theme cookie into served documents so the first paint matches
-	// the user's theme instead of flashing the built-in default.
-	mux.Handle("/", themedFrontend(fileServer))
 
 	// Internet-facing boundary chain (outermost first): correlation ID,
 	// response security headers, bounded admission before any auth/DB/Redis
