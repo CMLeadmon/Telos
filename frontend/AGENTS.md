@@ -9,28 +9,38 @@ Two themes, toggled by `data-theme` on `<html>`: `synthwave` (dark, default) and
 This Next.js version is newer than model training data — consult `node_modules/next/dist/docs/` before nontrivial Next.js work. Static export (`output: "export"`, `trailingSlash: true`); no server components at runtime, no API routes, no dynamic routes without `generateStaticParams`.
 
 ## Layout
-- Routes: `/` (landing), `/login`, and `(shell)/` group: `/chat`, `/stream`, `/library`, `/files` sharing `AppShell` (topbar · rail · arena · tabbar).
-- Stores (`src/stores/`): `useThemeStore` (persisted), `useAuthStore` (cookie session via `/api/v1/auth/*`), `useChatSessionStore` (channels + chat WS), `useVoiceSessionStore` (LiveKit).
+- Routes: `/` (landing), `/login`, and the `(shell)/` group — `/chat`, `/stream`, `/library`, `/files`, `/settings` — sharing `AppShell` (topbar · rail · arena · tabbar).
+- The four capability-gated top-level modules are the `MODULES` array in `src/components/AppShell.tsx`: Chat, Stream, Library, Files. Settings hangs off the topbar, not the module rail. `/library?view=files` is a legacy deep link that redirects to `/files`.
+- Stores (`src/stores/`), all Zustand:
+  - **Session/shell:** `useAuthStore` (cookie session via `/api/v1/auth/*`), `useThemeStore` (persisted), `usePreferencesStore`, `useSettingsStore`, `useMobileNavStore`
+  - **Per-module:** `useChatSessionStore` (channels, chat WS, threads), `useMediaStore`, `useLibraryStore`, `useFilesStore`, `useAnnotationStore` (commentary on any target)
 - `src/lib/api.ts` is always single-origin. The development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway; production serves the static export from that gateway directly.
+- Mount-time data loaders must be **sync** `useCallback`s using promise chains — `api<T>(...).then(setX).catch(() => setX(fallback))`. The React Compiler lint rule `react-hooks/set-state-in-effect` traces from an effect into an async callback and rejects `setState(await ...)`. See `components/settings/SecuritySection.tsx` for the sanctioned pattern.
 
 ## Commands
 ```bash
-npm run dev      # public dev server on :3000; proxies to loopback gateway/LiveKit
-npm run build    # static export to out/ (embedded by the Go gateway)
+npm run dev        # public dev server on :3000; proxies /api/* to the loopback gateway
+npm run build      # static export to out/ (embedded by the Go gateway)
 npm run lint
+npx tsc --noEmit
+npm run test:unit  # vitest + node:test
 npx playwright test   # needs `npm run dev` already running — no webServer in config
 ```
 
+The full gate before handing frontend work off:
+`npm run lint && npx tsc --noEmit && npm run test:unit && npm run build`.
+
 For access through a hostname other than `localhost`, list each trusted
 hostname or IP in comma-separated `TELOS_DEV_ORIGINS` values in the ignored
-`.env.development.local`. The development-only gateway and LiveKit loopback
-bindings are defined in `../docker-compose.dev.yml`; clients only need :3000.
+`.env.development.local`. The development-only gateway loopback bindings are
+defined in `../docker-compose.dev.yml`; clients only need :3000.
 
-Port 3000 is plain HTTP. Browsers allow microphone capture on HTTP localhost as
-a development exception, but not on LAN IPs, Tailscale IPs, public IPs, or
-ordinary hostnames. Remote clients can render the development app over port
-3000, but voice requires a trusted HTTPS proxy or tunnel. Production users must
-use the Traefik-served `https://${TELOS_DOMAIN}` origin.
+Serving the app from a non-`localhost` origin also requires
+`TELOS_PUBLIC_ORIGIN` to name that origin, or every POST returns 403
+`origin_forbidden` while GETs keep working — which presents as "the app is
+broken." Keep `http://localhost:8080` in `TELOS_DEV_ORIGINS` so local browsing
+retains its writes. Note the static export uses absolute `/_next/...` asset
+paths, so it cannot be served under a path prefix.
 
 ## Assets
 `public/logos/*.svg` are copied from `../resources/logos/` — the original SVGs have clean transparent backgrounds.
