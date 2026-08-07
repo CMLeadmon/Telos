@@ -18,8 +18,12 @@ out/
 dist/
 bin/
 
-# Compiled binaries
+# Compiled binaries. The operator CLI cross-compiles for Windows, so the .exe
+# variants land here during a GOOS=windows build and must never be committed.
 backend/telos-core
+backend/telos
+backend/telos.exe
+backend/telos-core.exe
 
 # Local certificates and secret files
 config/certs/
