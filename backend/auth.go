@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"net/netip"
 	"regexp"
 	"strings"
@@ -405,3 +407,185 @@ func (a *degradedAttempt) complete(outcome LoginOutcome) error {
 }
 
 var loginLimiter LoginLimiter
+
+// ---------------------------------------------------------------------------
+// Device authentication and management HTTP handlers
+// ---------------------------------------------------------------------------
+
+func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+
+	uc, err := getAuthenticatedUser(r)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required to register device")
+		return
+	}
+
+	clientAddr, ipErr := clientIP(r, securityConfig.TrustedProxyRanges)
+	if ipErr != nil {
+		writeAPIError(w, r, http.StatusBadRequest, "bad_client_address", "The client address could not be determined.")
+		return
+	}
+
+	if loginLimiter != nil {
+		attempt, err := loginLimiter.Reserve(r.Context(), uc.Username, clientAddr)
+		if err != nil {
+			switch {
+			case errors.Is(err, errLoginThrottled):
+				writeAPIError(w, r, http.StatusTooManyRequests, "too_many_attempts", "Too many attempts; try again later.")
+			case errors.Is(err, errAuthThrottleUnavailable):
+				writeAPIError(w, r, http.StatusServiceUnavailable, "auth_throttle_unavailable", "Service temporarily unavailable.")
+			default:
+				writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "Failed to check rate limits")
+			}
+			return
+		}
+		defer attempt.Complete(r.Context(), LoginSuccess)
+	}
+
+	var req struct {
+		DeviceName    string `json:"deviceName"`
+		Platform      string `json:"platform"`
+		ClientVersion string `json:"clientVersion"`
+	}
+	if err := decodeJSON(w, r, &req, securityConfig.AuthJSONBytes); err != nil {
+		return
+	}
+
+	if req.DeviceName == "" || req.Platform == "" || req.ClientVersion == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_parameters", "deviceName, platform, and clientVersion are required")
+		return
+	}
+
+	deviceID, refreshToken, accessToken, err := registerDevice(r.Context(), uc.ID, req.DeviceName, req.Platform, req.ClientVersion)
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "registration_failed", "Failed to register device")
+		return
+	}
+
+	log.Printf("[AUDIT] Device registered: user_id=%s device_id=%s device_name=%s platform=%s client_version=%s ip=%s",
+		uc.ID, deviceID, req.DeviceName, req.Platform, req.ClientVersion, clientAddr.String())
+
+	writeJSON(w, map[string]interface{}{
+		"deviceId":        deviceID,
+		"refreshToken":    refreshToken,
+		"accessToken":     accessToken,
+		"accessExpiresIn": 900,
+	})
+}
+
+func handleRefreshDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+
+	var req struct {
+		RefreshToken string `json:"refreshToken"`
+	}
+	if err := decodeJSON(w, r, &req, securityConfig.AuthJSONBytes); err != nil {
+		return
+	}
+
+	if req.RefreshToken == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_parameters", "refreshToken is required")
+		return
+	}
+
+	newRefresh, newAccess, err := rotateDeviceToken(r.Context(), req.RefreshToken)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_token", err.Error())
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"refreshToken":    newRefresh,
+		"accessToken":     newAccess,
+		"accessExpiresIn": 900,
+	})
+}
+
+func handleListDevices(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "GET required")
+		return
+	}
+
+	uc, err := getAuthenticatedUser(r)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	devs, err := listDevices(r.Context(), uc.ID)
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "db_error", "Failed to list devices")
+		return
+	}
+
+	writeJSON(w, devs)
+}
+
+func handleRevokeDevice(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "DELETE required")
+		return
+	}
+
+	uc, err := getAuthenticatedUser(r)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	targetID := r.PathValue("id")
+	if targetID == "" {
+		targetID = strings.TrimPrefix(r.URL.Path, "/api/v1/users/me/devices/")
+	}
+	if targetID == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_id", "Device ID is required")
+		return
+	}
+
+	// Verify target device belongs to the requesting user (returns 404 on mismatch to prevent registry leakage)
+	var deviceOwnerID string
+	err = dbPool.QueryRow(r.Context(), `SELECT user_id FROM devices WHERE id = $1 AND revoked_at IS NULL`, targetID).Scan(&deviceOwnerID)
+	if err != nil || deviceOwnerID != uc.ID {
+		writeAPIError(w, r, http.StatusNotFound, "device_not_found", "Device not found")
+		return
+	}
+
+	if err := revokeDevice(r.Context(), targetID); err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "revocation_failed", "Failed to revoke device")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleWSTicket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeAPIError(w, r, http.StatusMethodNotAllowed, "method_not_allowed", "POST required")
+		return
+	}
+
+	uc, err := getAuthenticatedUser(r)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required")
+		return
+	}
+
+	ticket, err := issueWSTicket(r.Context(), uc.ID, "")
+	if err != nil {
+		writeAPIError(w, r, http.StatusInternalServerError, "ticket_error", "Failed to issue WS ticket")
+		return
+	}
+
+	writeJSON(w, map[string]interface{}{
+		"ticket":    ticket,
+		"expiresIn": 30,
+	})
+}

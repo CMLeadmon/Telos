@@ -170,6 +170,26 @@
         }
       }
     },
+    "/api/v1/auth/devices/refresh": {
+      "post": {
+        "operationId": "post_auth_devices_refresh",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/devices/register": {
+      "post": {
+        "operationId": "post_auth_devices_register",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/auth/invites": {
       "post": {
         "operationId": "post_auth_invites",
@@ -213,6 +233,16 @@
     "/api/v1/auth/me": {
       "get": {
         "operationId": "get_auth_me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/ws-ticket": {
+      "post": {
+        "operationId": "post_auth_ws_ticket",
         "responses": {
           "200": {
             "description": "Success"
@@ -967,6 +997,26 @@
       },
       "post": {
         "operationId": "post_users_me_avatar",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/devices": {
+      "get": {
+        "operationId": "get_users_me_devices",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/users/me/devices/{id}": {
+      "delete": {
+        "operationId": "delete_users_me_devices_id",
         "responses": {
           "200": {
             "description": "Success"

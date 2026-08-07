@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -195,6 +196,10 @@ func rotateDeviceToken(ctx context.Context, presentedRefresh string) (refreshTok
 		if err := tx.Commit(ctx); err != nil {
 			return "", "", fmt.Errorf("reuse detected but revocation commit failed: %w", err)
 		}
+		// The highest-signal event this subsystem emits: a replayed refresh
+		// token means a credential left the device it was issued to.
+		log.Printf("[AUDIT] Device token reuse detected: user_id=%s device_id=%s token_id=%s; device revoked",
+			userID, deviceID, tokenID)
 		if hubInstance != nil {
 			hubInstance.DisconnectDevice(deviceID)
 		}
@@ -302,6 +307,7 @@ func revokeDevice(ctx context.Context, deviceID string) error {
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
+	log.Printf("[AUDIT] Device revoked: device_id=%s", deviceID)
 	if hubInstance != nil {
 		hubInstance.DisconnectDevice(deviceID)
 	}

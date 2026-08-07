@@ -397,6 +397,12 @@ func main() {
 	mux.HandleFunc("POST /api/v1/auth/bootstrap", handleBootstrap)
 	mux.HandleFunc("POST /api/v1/auth/login", handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/invites/accept", handleAcceptInvite)
+	// Only the refresh exchange is public: it authenticates by presenting a
+	// valid refresh token in the body. Everything else here needs an existing
+	// credential, so it goes through withAuth like every other guarded route —
+	// the route table is how this codebase's auth posture is audited, and a bare
+	// HandleFunc on a device route reads as public at a glance.
+	mux.HandleFunc("POST /api/v1/auth/devices/refresh", handleRefreshDevice)
 
 	// Authenticated Routes (Requires Session check)
 	mux.Handle("POST /api/v1/auth/logout", withAuth(http.HandlerFunc(handleLogout), ""))
@@ -408,11 +414,15 @@ func main() {
 	mux.Handle("GET /api/v1/users/me/preferences", withAuth(http.HandlerFunc(handleGetPreferences), ""))
 	mux.Handle("PUT /api/v1/users/me/preferences", withAuth(http.HandlerFunc(handlePutPreferences), ""))
 
-	// Settings — password & sessions
+	// Settings — password & sessions & devices
 	mux.Handle("POST /api/v1/users/me/password", withAuth(http.HandlerFunc(handleChangePassword), ""))
 	mux.Handle("GET /api/v1/users/me/sessions", withAuth(http.HandlerFunc(handleListMySessions), ""))
 	mux.Handle("DELETE /api/v1/users/me/sessions/{id}", withAuth(http.HandlerFunc(handleRevokeSession), ""))
 	mux.Handle("POST /api/v1/users/me/sessions/revoke-others", withAuth(http.HandlerFunc(handleRevokeOtherSessions), ""))
+	mux.Handle("POST /api/v1/auth/devices/register", withAuth(http.HandlerFunc(handleRegisterDevice), ""))
+	mux.Handle("POST /api/v1/auth/ws-ticket", withAuth(http.HandlerFunc(handleWSTicket), ""))
+	mux.Handle("GET /api/v1/users/me/devices", withAuth(http.HandlerFunc(handleListDevices), ""))
+	mux.Handle("DELETE /api/v1/users/me/devices/{id}", withAuth(http.HandlerFunc(handleRevokeDevice), ""))
 
 	// Settings — avatars
 	mux.Handle("POST /api/v1/users/me/avatar", withAuth(http.HandlerFunc(handleUploadAvatar), ""))
@@ -669,11 +679,25 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 		return nil, errors.New("db uninitialized")
 	}
 
-	// Cookie-only: a session token is never accepted from a query string,
-	// fragment, or header, so it can never be relayed to an upstream proxy.
+	// Two credential classes, deliberately rescoped from the original
+	// cookie-only invariant. Browser sessions still arrive only in the HttpOnly
+	// SameSite=Strict cookie, and sessionTokenFromRequest stays cookie-only so a
+	// session token can never be relayed to an upstream proxy. Native clients
+	// present a bearer token instead, read here in a separate branch that applies
+	// the same opacity check — a token carrying URL or header structure is
+	// rejected rather than looked up.
 	token, err := sessionTokenFromRequest(r)
 	if err != nil {
-		return nil, errors.New("missing session token")
+		if raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			raw = strings.TrimSpace(raw)
+			if raw != "" && !strings.ContainsAny(raw, " \t\r\n/?#&=") {
+				token = raw
+			}
+		}
+	}
+
+	if token == "" {
+		return nil, errors.New("missing authentication token")
 	}
 
 	h := sha256.Sum256([]byte(token))
