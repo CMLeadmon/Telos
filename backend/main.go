@@ -195,6 +195,8 @@ type UserContext struct {
 	Permissions []string
 	DisplayName string
 	HasAvatar   bool
+	DeviceID    string
+	SessionHash string
 }
 
 type contextKey string
@@ -685,7 +687,8 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	// session token can never be relayed to an upstream proxy. Native clients
 	// present a bearer token instead, read here in a separate branch that applies
 	// the same opacity check — a token carrying URL or header structure is
-	// rejected rather than looked up.
+	// rejected rather than looked up. WebSocket single-use tickets arrive in
+	// Sec-WebSocket-Protocol header (format: telos-ticket.<ticket>).
 	token, err := sessionTokenFromRequest(r)
 	if err != nil {
 		if raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
@@ -697,6 +700,24 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	}
 
 	if token == "" {
+		if isWebSocketUpgrade(r) {
+			if ticket := parseWSTicketHeader(r); ticket != "" {
+				userID, deviceID, err := consumeWSTicket(r.Context(), ticket)
+				if err != nil {
+					return nil, fmt.Errorf("invalid websocket ticket: %w", err)
+				}
+				if err := assertTicketSubjectUsable(r.Context(), userID, deviceID); err != nil {
+					return nil, err
+				}
+				uc, err := loadUserContext(r.Context(), userID)
+				if err != nil {
+					return nil, err
+				}
+				uc.SessionHash = sha256Hex(ticket)
+				uc.DeviceID = deviceID
+				return uc, nil
+			}
+		}
 		return nil, errors.New("missing authentication token")
 	}
 
@@ -707,6 +728,13 @@ func getAuthenticatedUser(r *http.Request) (*UserContext, error) {
 	uc, err := LoadAuthenticatedUser(r.Context(), dbPool, tokenHash)
 	if err != nil {
 		return nil, err
+	}
+	uc.SessionHash = tokenHash
+
+	var devID *string
+	_ = dbPool.QueryRow(r.Context(), `SELECT device_id::text FROM sessions WHERE token_hash = $1 AND revoked_at IS NULL`, tokenHash).Scan(&devID)
+	if devID != nil {
+		uc.DeviceID = *devID
 	}
 
 	// Coalesced, bounded last-seen stamp — never blocks or spawns a goroutine.
@@ -1278,14 +1306,23 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Session hash keys the socket for targeted revocation.
-	rawToken, tokErr := sessionTokenFromRequest(r)
-	if tokErr != nil {
-		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required.")
-		return
+	sessionHash := user.SessionHash
+	deviceID := user.DeviceID
+	if sessionHash == "" {
+		rawToken, tokErr := sessionTokenFromRequest(r)
+		if tokErr != nil {
+			writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required.")
+			return
+		}
+		sessionHash = sha256Hex(rawToken)
 	}
-	sessionHash := sha256Hex(rawToken)
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	var responseHeader http.Header
+	if ticket := parseWSTicketHeader(r); ticket != "" {
+		responseHeader = http.Header{"Sec-WebSocket-Protocol": []string{"telos-ticket." + ticket}}
+	}
+
+	conn, err := upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		log.Printf("WebSocket upgrade failed request_id=%s: %v", requestIDFrom(r.Context()), err)
 		return
@@ -1293,7 +1330,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	client := newWSClient(conn)
 	defer client.close()
 
-	release, ok := sessionRegistryInstance.Register(sessionHash, userID, client)
+	release, ok := sessionRegistryInstance.RegisterDevice(sessionHash, userID, deviceID, client)
 	if !ok {
 		// Per-user socket cap reached.
 		client.CloseWithCode(websocket.ClosePolicyViolation, "too many connections")

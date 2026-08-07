@@ -24,6 +24,8 @@ type SecurityConfig struct {
 	Environment        string
 	PublicOrigin       *url.URL
 	AllowedDevOrigins  map[string]struct{}
+	AllowedOrigins     map[string]struct{}
+	AllowedOriginList  []string
 	TrustedProxyRanges []netip.Prefix
 	MaxHeaderBytes     int
 	MaxInFlightHTTP    int
@@ -42,6 +44,7 @@ func init() {
 	securityConfig = SecurityConfig{
 		Environment:       "production",
 		AllowedDevOrigins: map[string]struct{}{},
+		AllowedOrigins:    map[string]struct{}{},
 		MaxHeaderBytes:    16 << 10,
 		MaxInFlightHTTP:   128,
 		AuthJSONBytes:     16 << 10,
@@ -59,8 +62,8 @@ func normalizeOrigin(raw string) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("origin must be http(s): %s", u.Scheme)
+	if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "tauri" {
+		return nil, fmt.Errorf("origin must be http(s) or tauri: %s", u.Scheme)
 	}
 	if u.User != nil || u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
 		return nil, errors.New("origin must be scheme://host[:port] only")
@@ -73,11 +76,15 @@ func normalizeOrigin(raw string) (*url.URL, error) {
 	if port == "" {
 		if u.Scheme == "https" {
 			port = "443"
-		} else {
+		} else if u.Scheme == "http" {
 			port = "80"
 		}
 	}
-	return &url.URL{Scheme: u.Scheme, Host: net.JoinHostPort(host, port)}, nil
+	finalHost := host
+	if port != "" {
+		finalHost = net.JoinHostPort(host, port)
+	}
+	return &url.URL{Scheme: u.Scheme, Host: finalHost}, nil
 }
 
 // sameOrigin compares two already-normalized origins exactly by scheme,
@@ -129,6 +136,32 @@ func loadSecurityConfig() (SecurityConfig, error) {
 		}
 	}
 
+	// TELOS_ALLOWED_ORIGINS is empty by default and widens THREE boundaries at
+	// once, not just CORS: originAllowed backs the CORS middleware, the
+	// exact-origin CSRF check in requireTrustedOrigin, and the WebSocket upgrade
+	// check. That is required for a cross-origin client to work at all — CORS
+	// alone would let it read responses but still fail every write — but it does
+	// mean setting this variable is a deliberate, broader relaxation than the
+	// name suggests. An invalid entry fails startup rather than being skipped.
+	cfg.AllowedOrigins = map[string]struct{}{}
+	rawAllowed := os.Getenv("TELOS_ALLOWED_ORIGINS")
+	if rawAllowed != "" {
+		for _, o := range strings.Split(rawAllowed, ",") {
+			o = strings.TrimSpace(o)
+			if o == "" {
+				continue
+			}
+			norm, err := normalizeOrigin(o)
+			if err != nil {
+				return cfg, fmt.Errorf("TELOS_ALLOWED_ORIGINS entry is invalid: %w", err)
+			}
+			// Store the normalized form in both, so the CSP directive and the
+			// membership test can never disagree about the same origin.
+			cfg.AllowedOrigins[norm.String()] = struct{}{}
+			cfg.AllowedOriginList = append(cfg.AllowedOriginList, norm.String())
+		}
+	}
+
 	for _, c := range strings.Split(os.Getenv("TELOS_TRUSTED_PROXY_CIDRS"), ",") {
 		c = strings.TrimSpace(c)
 		if c == "" {
@@ -154,6 +187,9 @@ func originAllowed(cfg SecurityConfig, rawOrigin string) bool {
 		return false
 	}
 	if sameOrigin(norm, cfg.PublicOrigin) {
+		return true
+	}
+	if _, ok := cfg.AllowedOrigins[norm.String()]; ok {
 		return true
 	}
 	if cfg.Environment == "development" {
@@ -208,7 +244,7 @@ func admissionMiddleware(next http.Handler, max int) http.Handler {
 
 // securityHeaders applies the production response-header policy. The CSP
 // connect-src carries exactly the public origin's wss endpoint — never bare
-// wss:, wildcards, or reflected request origins.
+// wss:, wildcards, or reflected request origins — plus any explicitly allowed origins.
 func securityHeaders(next http.Handler, cfg SecurityConfig) http.Handler {
 	csp := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
 		"img-src 'self' data: blob:; media-src 'self' blob:; " +
@@ -216,11 +252,14 @@ func securityHeaders(next http.Handler, cfg SecurityConfig) http.Handler {
 		"font-src 'self'; worker-src 'self' blob:; frame-src 'self' blob:; " +
 		"object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; " +
 		"upgrade-insecure-requests"
-	wss := ""
+	extraConnect := ""
 	if cfg.PublicOrigin != nil && cfg.PublicOrigin.Scheme == "https" {
-		wss = " wss://" + cfg.PublicOrigin.Host
+		extraConnect += " wss://" + cfg.PublicOrigin.Host
 	}
-	rendered := fmt.Sprintf(csp, wss)
+	for _, o := range cfg.AllowedOriginList {
+		extraConnect += " " + o
+	}
+	rendered := fmt.Sprintf(csp, extraConnect)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("X-Content-Type-Options", "nosniff")
@@ -236,10 +275,11 @@ func securityHeaders(next http.Handler, cfg SecurityConfig) http.Handler {
 }
 
 // devCORS allows credentialed cross-origin calls only from the finite
-// development allowlist. Production emits no permissive CORS headers.
+// development allowlist or configured TELOS_ALLOWED_ORIGINS. Production
+// emits no permissive CORS headers unless TELOS_ALLOWED_ORIGINS is set.
 func devCORS(next http.Handler, cfg SecurityConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cfg.Environment == "development" {
+		if cfg.Environment == "development" || len(cfg.AllowedOrigins) > 0 {
 			origin := r.Header.Get("Origin")
 			if origin != "" && originAllowed(cfg, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
@@ -391,22 +431,22 @@ var lookupIPAddr = func(ctx context.Context, host string) ([]net.IPAddr, error) 
 
 var disallowedRanges = func() []netip.Prefix {
 	raw := []string{
-		"0.0.0.0/8",       // "this network"
-		"127.0.0.0/8",     // loopback
-		"10.0.0.0/8",      // private
-		"172.16.0.0/12",   // private
-		"192.168.0.0/16",  // private
-		"169.254.0.0/16",  // link-local
-		"100.64.0.0/10",   // CGNAT
-		"224.0.0.0/4",     // multicast
-		"240.0.0.0/4",     // reserved
-		"::/128",          // unspecified
-		"::1/128",         // loopback
-		"fc00::/7",        // unique-local
-		"fe80::/10",       // link-local
-		"ff00::/8",        // multicast
-		"64:ff9b::/96",    // NAT64 of anything — validate the mapped form
-		"2001:db8::/32",   // documentation
+		"0.0.0.0/8",      // "this network"
+		"127.0.0.0/8",    // loopback
+		"10.0.0.0/8",     // private
+		"172.16.0.0/12",  // private
+		"192.168.0.0/16", // private
+		"169.254.0.0/16", // link-local
+		"100.64.0.0/10",  // CGNAT
+		"224.0.0.0/4",    // multicast
+		"240.0.0.0/4",    // reserved
+		"::/128",         // unspecified
+		"::1/128",        // loopback
+		"fc00::/7",       // unique-local
+		"fe80::/10",      // link-local
+		"ff00::/8",       // multicast
+		"64:ff9b::/96",   // NAT64 of anything — validate the mapped form
+		"2001:db8::/32",  // documentation
 	}
 	out := make([]netip.Prefix, 0, len(raw))
 	for _, c := range raw {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -57,5 +58,30 @@ func TestWSTicketStoreExpiryAndSingleUse(t *testing.T) {
 	_, _, err = shortStore.Consume(expTicket)
 	if err == nil {
 		t.Fatalf("negative test failed: expected error on expired ticket")
+	}
+}
+
+func TestParseWSTicketHeader(t *testing.T) {
+	req1 := httptest.NewRequest("GET", "/api/v1/chat/ws", nil)
+	req1.Header.Set("Sec-WebSocket-Protocol", "telos-ticket.sampleticket123")
+
+	ticket := parseWSTicketHeader(req1)
+	if ticket != "sampleticket123" {
+		t.Fatalf("expected ticket 'sampleticket123', got %q", ticket)
+	}
+
+	req2 := httptest.NewRequest("GET", "/api/v1/events/ws", nil)
+	req2.Header.Set("Sec-WebSocket-Protocol", "vite-hmr, telos-ticket.multiticket456, json")
+
+	ticket2 := parseWSTicketHeader(req2)
+	if ticket2 != "multiticket456" {
+		t.Fatalf("expected ticket 'multiticket456', got %q", ticket2)
+	}
+
+	// Critical constraint: Query parameters MUST NOT be parsed as tickets
+	reqQuery := httptest.NewRequest("GET", "/api/v1/chat/ws?ticket=queryticket789", nil)
+	ticketQuery := parseWSTicketHeader(reqQuery)
+	if ticketQuery != "" {
+		t.Fatalf("CRITICAL SECURITY FAILURE: ticket was extracted from query parameter: %q", ticketQuery)
 	}
 }

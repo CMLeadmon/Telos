@@ -122,17 +122,21 @@ type RevocableConnection interface {
 }
 
 // SessionRegistry tracks every live socket by session hash and user ID so a
+// SessionRegistry tracks every live socket by session hash and user ID so a
 // revocation, expiry, disable, delete, or permission change can close it
 // immediately rather than waiting for the periodic revalidation fallback.
 type SessionRegistry interface {
 	Register(sessionHash, userID string, conn RevocableConnection) (release func(), ok bool)
+	RegisterDevice(sessionHash, userID, deviceID string, conn RevocableConnection) (release func(), ok bool)
 	RevokeSession(sessionHash string)
 	RevokeUser(userID string)
+	RevokeDevice(deviceID string) int
 }
 
 type registeredConn struct {
 	sessionHash string
 	userID      string
+	deviceID    string
 	conn        RevocableConnection
 }
 
@@ -154,12 +158,16 @@ func newSessionRegistry() *sessionRegistry {
 // Register adds a socket. It returns ok=false (and registers nothing) when the
 // user already holds maxSocketsPerUser live sockets.
 func (r *sessionRegistry) Register(sessionHash, userID string, conn RevocableConnection) (func(), bool) {
+	return r.RegisterDevice(sessionHash, userID, "", conn)
+}
+
+func (r *sessionRegistry) RegisterDevice(sessionHash, userID, deviceID string, conn RevocableConnection) (func(), bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.perUser[userID] >= maxSocketsPerUser {
 		return nil, false
 	}
-	rc := &registeredConn{sessionHash: sessionHash, userID: userID, conn: conn}
+	rc := &registeredConn{sessionHash: sessionHash, userID: userID, deviceID: deviceID, conn: conn}
 	if r.bySess[sessionHash] == nil {
 		r.bySess[sessionHash] = make(map[*registeredConn]struct{})
 	}
@@ -222,6 +230,26 @@ func (r *sessionRegistry) RevokeUser(userID string) {
 	}
 }
 
+func (r *sessionRegistry) RevokeDevice(deviceID string) int {
+	if deviceID == "" {
+		return 0
+	}
+	r.mu.Lock()
+	conns := make([]RevocableConnection, 0)
+	for _, set := range r.byUser {
+		for rc := range set {
+			if rc.deviceID == deviceID {
+				conns = append(conns, rc.conn)
+			}
+		}
+	}
+	r.mu.Unlock()
+	for _, c := range conns {
+		c.CloseWithCode(4001, "Device Revoked")
+	}
+	return len(conns)
+}
+
 // CloseAll closes every live socket (used during graceful shutdown).
 func (r *sessionRegistry) CloseAll(reason string) {
 	r.mu.Lock()
@@ -246,6 +274,19 @@ func (r *sessionRegistry) LiveCount(userID string) int {
 }
 
 var sessionRegistryInstance = newSessionRegistry()
+
+type Hub struct{}
+
+func (h *Hub) DisconnectDevice(deviceID string) int {
+	if sessionRegistryInstance == nil {
+		return 0
+	}
+	return sessionRegistryInstance.RevokeDevice(deviceID)
+}
+
+func init() {
+	hubInstance = &Hub{}
+}
 
 // revokeSessionHash / revokeUserSockets are the wiring points called by the
 // auth mutation handlers (logout, password change, disable, delete, role

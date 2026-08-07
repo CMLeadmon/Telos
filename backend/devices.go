@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -80,6 +82,69 @@ func (s *wsTicketStore) Consume(ticket string) (userID, deviceID string, err err
 		return "", "", errors.New("expired ticket")
 	}
 	return entry.userID, entry.deviceID, nil
+}
+
+func parseWSTicketHeader(r *http.Request) string {
+	proto := r.Header.Get("Sec-WebSocket-Protocol")
+	if proto == "" {
+		return ""
+	}
+	for _, part := range strings.Split(proto, ",") {
+		part = strings.TrimSpace(part)
+		if raw, ok := strings.CutPrefix(part, "telos-ticket."); ok {
+			raw = strings.TrimSpace(raw)
+			if raw != "" && !strings.ContainsAny(raw, " \t\r\n/?#&=") {
+				return raw
+			}
+		}
+	}
+	return ""
+}
+
+// isWebSocketUpgrade reports whether this request is a WebSocket handshake.
+// A ticket is a credential for an upgrade and nothing else, so the ticket path
+// is gated on this: the header it travels in is one a client will happily send
+// on any request, and honoring it everywhere would quietly turn a narrow,
+// single-use handshake credential into a general-purpose bearer token that an
+// ordinary REST call could spend.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	for _, v := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(v), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// assertTicketSubjectUsable rejects a ticket whose account was disabled or whose
+// device was revoked between issue and use. The cookie and bearer paths inherit
+// this from LoadAuthenticatedUser, which fails closed on an inactive account;
+// loadUserContext performs no such check, so without this a disabled member
+// could still open a socket inside the ticket's TTL.
+func assertTicketSubjectUsable(ctx context.Context, userID, deviceID string) error {
+	if dbPool == nil {
+		return errors.New("db uninitialized")
+	}
+	var active bool
+	if err := dbPool.QueryRow(ctx, `SELECT active FROM users WHERE id = $1`, userID).Scan(&active); err != nil {
+		return err
+	}
+	if !active {
+		return errors.New("account disabled")
+	}
+	if deviceID != "" {
+		var revokedAt *time.Time
+		if err := dbPool.QueryRow(ctx, `SELECT revoked_at FROM devices WHERE id = $1`, deviceID).Scan(&revokedAt); err != nil {
+			return err
+		}
+		if revokedAt != nil {
+			return errors.New("device revoked")
+		}
+	}
+	return nil
 }
 
 func generateSecureTokenPair() (token string, hash string, err error) {

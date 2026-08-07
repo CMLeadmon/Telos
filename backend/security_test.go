@@ -349,6 +349,99 @@ func TestNoReflectiveCORSInProduction(t *testing.T) {
 	}
 }
 
+func TestAllowedOriginsCORSAndCSP(t *testing.T) {
+	t.Run("allowed origins set", func(t *testing.T) {
+		t.Setenv("TELOS_ENV", "production")
+		t.Setenv("TELOS_PUBLIC_ORIGIN", "https://community.example.org")
+		t.Setenv("TELOS_ALLOWED_ORIGINS", "https://client.example.com,tauri://localhost")
+
+		cfg, err := loadSecurityConfig()
+		if err != nil {
+			t.Fatalf("loadSecurityConfig failed: %v", err)
+		}
+
+		// Verify CORS header generation for allowed origin
+		req := httptest.NewRequest("OPTIONS", "/api/v1/auth/devices/register", nil)
+		req.Header.Set("Origin", "https://client.example.com")
+		rec := httptest.NewRecorder()
+
+		handler := devCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		handler.ServeHTTP(rec, req)
+
+		if rec.Header().Get("Access-Control-Allow-Origin") != "https://client.example.com" {
+			t.Fatalf("expected CORS allow origin header, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+		}
+		if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+			t.Fatalf("expected CORS allow credentials header true, got %q", rec.Header().Get("Access-Control-Allow-Credentials"))
+		}
+
+		// Verify unlisted origin receives no CORS headers
+		reqUnlisted := httptest.NewRequest("OPTIONS", "/api/v1/auth/devices/register", nil)
+		reqUnlisted.Header.Set("Origin", "https://unlisted.example.com")
+		recUnlisted := httptest.NewRecorder()
+
+		handler.ServeHTTP(recUnlisted, reqUnlisted)
+
+		if recUnlisted.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("expected no CORS allow origin header for unlisted origin, got %q", recUnlisted.Header().Get("Access-Control-Allow-Origin"))
+		}
+
+		// Verify CSP connect-src contains allowed origins
+		secHandler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		recSec := httptest.NewRecorder()
+		secHandler.ServeHTTP(recSec, httptest.NewRequest("GET", "/", nil))
+
+		csp := recSec.Header().Get("Content-Security-Policy")
+		if !strings.Contains(csp, "https://client.example.com") || !strings.Contains(csp, "tauri://localhost") {
+			t.Fatalf("Content-Security-Policy connect-src missing allowed origins: %s", csp)
+		}
+		// Allowed origins land in the directive in their normalized form, which is
+		// why https:// carries an explicit :443 here — the same canonical shape the
+		// wss:// entry already uses. Emitting the raw configured string instead
+		// would let the CSP directive and the membership test disagree.
+		if !strings.Contains(csp, "connect-src 'self' wss://community.example.org:443 https://client.example.com:443 tauri://localhost;") {
+			t.Fatalf("Content-Security-Policy connect-src not exact: %s", csp)
+		}
+	})
+
+	t.Run("allowed origins unset", func(t *testing.T) {
+		t.Setenv("TELOS_ENV", "production")
+		t.Setenv("TELOS_PUBLIC_ORIGIN", "https://community.example.org")
+		t.Setenv("TELOS_ALLOWED_ORIGINS", "")
+
+		cfg, err := loadSecurityConfig()
+		if err != nil {
+			t.Fatalf("loadSecurityConfig failed: %v", err)
+		}
+
+		req := httptest.NewRequest("OPTIONS", "/api/v1/auth/devices/register", nil)
+		req.Header.Set("Origin", "https://client.example.com")
+		rec := httptest.NewRecorder()
+
+		handler := devCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		handler.ServeHTTP(rec, req)
+
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" {
+			t.Fatalf("expected no CORS allow origin header when unset, got %q", rec.Header().Get("Access-Control-Allow-Origin"))
+		}
+		if rec.Header().Get("Access-Control-Allow-Credentials") != "" {
+			t.Fatalf("expected no CORS allow credentials header when unset, got %q", rec.Header().Get("Access-Control-Allow-Credentials"))
+		}
+
+		secHandler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		recSec := httptest.NewRecorder()
+		secHandler.ServeHTTP(recSec, httptest.NewRequest("GET", "/", nil))
+
+		csp := recSec.Header().Get("Content-Security-Policy")
+		if strings.Contains(csp, "https://client.example.com") || strings.Contains(csp, "tauri://localhost") {
+			t.Fatalf("Content-Security-Policy connect-src improperly widened: %s", csp)
+		}
+		if !strings.Contains(csp, "connect-src 'self' wss://community.example.org:443;") {
+			t.Fatalf("Content-Security-Policy connect-src wrong: %s", csp)
+		}
+	})
+}
+
 // --- client IP trust -----------------------------------------------------------
 
 func TestClientIP(t *testing.T) {
@@ -499,4 +592,58 @@ func TestNormalizeOrigin(t *testing.T) {
 			t.Fatalf("normalizeOrigin(%q) accepted", bad)
 		}
 	}
+}
+
+// The exact-origin CSRF boundary must be identical to its pre-feature behavior
+// whenever TELOS_ALLOWED_ORIGINS is unset, and must widen only to origins that
+// were explicitly listed when it is set. originAllowed backs requireTrustedOrigin
+// as well as CORS, so this is the test that pins the blast radius of that
+// variable rather than assuming it only affects response headers.
+func TestAllowedOriginsCSRFBoundary(t *testing.T) {
+	post := func(cfg SecurityConfig, origin string) int {
+		req := httptest.NewRequest("POST", "/api/v1/auth/devices/register", nil)
+		req.Header.Set("Origin", origin)
+		rec := httptest.NewRecorder()
+		requireTrustedOrigin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}), cfg).ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("unset rejects every cross origin write", func(t *testing.T) {
+		t.Setenv("TELOS_ENV", "production")
+		t.Setenv("TELOS_PUBLIC_ORIGIN", "https://community.example.org")
+		t.Setenv("TELOS_ALLOWED_ORIGINS", "")
+		cfg, err := loadSecurityConfig()
+		if err != nil {
+			t.Fatalf("loadSecurityConfig: %v", err)
+		}
+
+		if got := post(cfg, "https://client.example.com"); got != http.StatusForbidden {
+			t.Fatalf("cross-origin write returned %d; want 403 when the allowlist is empty", got)
+		}
+		if got := post(cfg, "https://community.example.org"); got != http.StatusNoContent {
+			t.Fatalf("same-origin write returned %d; want 204", got)
+		}
+	})
+
+	t.Run("set widens only to listed origins", func(t *testing.T) {
+		t.Setenv("TELOS_ENV", "production")
+		t.Setenv("TELOS_PUBLIC_ORIGIN", "https://community.example.org")
+		t.Setenv("TELOS_ALLOWED_ORIGINS", "https://client.example.com")
+		cfg, err := loadSecurityConfig()
+		if err != nil {
+			t.Fatalf("loadSecurityConfig: %v", err)
+		}
+
+		if got := post(cfg, "https://client.example.com"); got != http.StatusNoContent {
+			t.Fatalf("listed origin returned %d; want 204", got)
+		}
+		if got := post(cfg, "https://attacker.example.net"); got != http.StatusForbidden {
+			t.Fatalf("unlisted origin returned %d; want 403", got)
+		}
+		if got := post(cfg, ""); got != http.StatusForbidden {
+			t.Fatalf("absent Origin returned %d; want 403", got)
+		}
+	})
 }

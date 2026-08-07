@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -130,5 +132,95 @@ func TestRefreshReplayRevokesDeviceAndItsAccessTokens(t *testing.T) {
 
 	if _, err := LoadAuthenticatedUser(ctx, f.DB, sha256Hex(access2)); err == nil {
 		t.Fatal("access token still authenticates after replay-triggered revocation")
+	}
+}
+
+// A ticket authenticates a WebSocket handshake and nothing else. Sec-WebSocket-Protocol
+// is a header a client can attach to any request, so accepting a ticket outside an
+// upgrade would turn a single-use handshake credential into a general bearer token.
+func TestWSTicketRejectedOnNonUpgradeRequest(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	var userID string
+	if err := f.DB.QueryRow(ctx,
+		`INSERT INTO users (username, password_hash) VALUES ('ticketscope','x') RETURNING id`,
+	).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	deviceID, _, _, err := registerDevice(ctx, userID, "Laptop", "linux", "1.0.0")
+	if err != nil {
+		t.Fatalf("registerDevice: %v", err)
+	}
+	ticket, err := issueWSTicket(ctx, userID, deviceID)
+	if err != nil {
+		t.Fatalf("issueWSTicket: %v", err)
+	}
+
+	plain := httptest.NewRequest(http.MethodGet, "/api/v1/users/me", nil)
+	plain.Header.Set("Sec-WebSocket-Protocol", "telos-ticket."+ticket)
+	if _, err := getAuthenticatedUser(plain); err == nil {
+		t.Fatal("a ticket authenticated an ordinary request; it must only work on an upgrade")
+	}
+
+	// Unspent by the rejected call, it must still work for a real handshake.
+	up := httptest.NewRequest(http.MethodGet, "/api/v1/chat/ws", nil)
+	up.Header.Set("Sec-WebSocket-Protocol", "telos-ticket."+ticket)
+	up.Header.Set("Upgrade", "websocket")
+	up.Header.Set("Connection", "Upgrade")
+	if _, err := getAuthenticatedUser(up); err != nil {
+		t.Fatalf("ticket should authenticate a genuine upgrade: %v", err)
+	}
+}
+
+// The cookie and bearer paths reject a disabled account via LoadAuthenticatedUser.
+// The ticket path uses loadUserContext, which performs no such check, so the
+// equivalent guard has to be explicit or the boundaries disagree.
+func TestWSTicketRejectedForDisabledAccountAndRevokedDevice(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+
+	newTicket := func(username string) (string, string, string) {
+		t.Helper()
+		var uid string
+		if err := f.DB.QueryRow(ctx,
+			`INSERT INTO users (username, password_hash) VALUES ($1,'x') RETURNING id`, username,
+		).Scan(&uid); err != nil {
+			t.Fatalf("seed user: %v", err)
+		}
+		did, _, _, err := registerDevice(ctx, uid, "Laptop", "linux", "1.0.0")
+		if err != nil {
+			t.Fatalf("registerDevice: %v", err)
+		}
+		tk, err := issueWSTicket(ctx, uid, did)
+		if err != nil {
+			t.Fatalf("issueWSTicket: %v", err)
+		}
+		return uid, did, tk
+	}
+
+	upgrade := func(ticket string) error {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/chat/ws", nil)
+		r.Header.Set("Sec-WebSocket-Protocol", "telos-ticket."+ticket)
+		r.Header.Set("Upgrade", "websocket")
+		r.Header.Set("Connection", "Upgrade")
+		_, err := getAuthenticatedUser(r)
+		return err
+	}
+
+	uidA, _, ticketA := newTicket("disableduser")
+	if _, err := f.DB.Exec(ctx, `UPDATE users SET active = FALSE WHERE id = $1`, uidA); err != nil {
+		t.Fatalf("disable user: %v", err)
+	}
+	if err := upgrade(ticketA); err == nil {
+		t.Fatal("a disabled account opened a socket with a ticket")
+	}
+
+	_, didB, ticketB := newTicket("revokeddeviceuser")
+	if err := revokeDevice(ctx, didB); err != nil {
+		t.Fatalf("revokeDevice: %v", err)
+	}
+	if err := upgrade(ticketB); err == nil {
+		t.Fatal("a revoked device opened a socket with a ticket issued before revocation")
 	}
 }
