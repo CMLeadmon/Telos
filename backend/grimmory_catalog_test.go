@@ -750,4 +750,3 @@ func TestGrimmoryCatalogRecentAndAuthors(t *testing.T) {
 		t.Fatalf("SeriesBooks=%+v", seriesBooks)
 	}
 }
-

@@ -29,18 +29,18 @@ func libraryCatalogError(err error) error {
 // LibraryItem is the member-facing Library contract. Provider identifiers and
 // library names deliberately stay in the adapter's internal LibraryBook DTO.
 type LibraryItem struct {
-	ID            string      `json:"id"`
-	Title         string      `json:"title"`
-	Subtitle      string      `json:"subtitle"`
-	Authors       []string    `json:"authors"`
-	Narrator      string      `json:"narrator,omitempty"`
-	Categories    []string    `json:"categories"`
-	Description   string      `json:"description"`
-	Language      string      `json:"language"`
-	SeriesName    string      `json:"seriesName"`
-	SeriesNumber  *float64    `json:"seriesNumber"`
-	PublishedDate string      `json:"publishedDate"`
-	AddedOn       string      `json:"addedOn"`
+	ID            string   `json:"id"`
+	Title         string   `json:"title"`
+	Subtitle      string   `json:"subtitle"`
+	Authors       []string `json:"authors"`
+	Narrator      string   `json:"narrator,omitempty"`
+	Categories    []string `json:"categories"`
+	Description   string   `json:"description"`
+	Language      string   `json:"language"`
+	SeriesName    string   `json:"seriesName"`
+	SeriesNumber  *float64 `json:"seriesNumber"`
+	PublishedDate string   `json:"publishedDate"`
+	AddedOn       string   `json:"addedOn"`
 	// Publisher and the ISBNs are bibliographic, not provider-internal, so they
 	// belong in the member-facing contract. They are also load-bearing: the
 	// manage modal prefills its form from this shape and PUTs the whole form
@@ -519,4 +519,3 @@ func (c *GrimmoryCatalog) SeriesBooks(ctx context.Context, userID, name string) 
 	}
 	return c.authorizedShelf(ctx, userID, bodyBytes, 0)
 }
-
