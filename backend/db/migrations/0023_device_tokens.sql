@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS device_refresh_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_device_refresh_tokens_device ON device_refresh_tokens(device_id);
+CREATE INDEX IF NOT EXISTS idx_device_refresh_tokens_replaced_by ON device_refresh_tokens(replaced_by) WHERE replaced_by IS NOT NULL;
 
 -- Device access tokens are stored in sessions so authentication keeps a single
 -- lookup path, but they must stay distinguishable from browser sessions:

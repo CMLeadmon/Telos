@@ -54,14 +54,23 @@ func handleEventsWS(w http.ResponseWriter, r *http.Request) {
 	user := r.Context().Value(userContextKey).(*UserContext)
 	userID := user.ID
 
-	rawToken, tokErr := sessionTokenFromRequest(r)
-	if tokErr != nil {
-		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required.")
-		return
+	sessionHash := user.SessionHash
+	deviceID := user.DeviceID
+	if sessionHash == "" {
+		rawToken, tokErr := sessionTokenFromRequest(r)
+		if tokErr != nil {
+			writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required.")
+			return
+		}
+		sessionHash = sha256Hex(rawToken)
 	}
-	sessionHash := sha256Hex(rawToken)
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	var responseHeader http.Header
+	if ticket := parseWSTicketHeader(r); ticket != "" {
+		responseHeader = http.Header{"Sec-WebSocket-Protocol": []string{"telos-ticket." + ticket}}
+	}
+
+	conn, err := upgrader.Upgrade(w, r, responseHeader)
 	if err != nil {
 		log.Printf("events WS upgrade failed request_id=%s: %v", requestIDFrom(r.Context()), err)
 		return
@@ -69,7 +78,7 @@ func handleEventsWS(w http.ResponseWriter, r *http.Request) {
 	client := newWSClient(conn)
 	defer client.close()
 
-	release, ok := sessionRegistryInstance.Register(sessionHash, userID, client)
+	release, ok := sessionRegistryInstance.RegisterDevice(sessionHash, userID, deviceID, client)
 	if !ok {
 		client.CloseWithCode(websocket.ClosePolicyViolation, "too many connections")
 		return

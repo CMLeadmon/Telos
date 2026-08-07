@@ -635,4 +635,3 @@ func TestCrossUserWSTicketIsolation(t *testing.T) {
 		t.Fatalf("unexpected ticket resolution: got user=%s dev=%s, want userA=%s devA=%s", claimedUser, claimedDev, userA, devA)
 	}
 }
-

@@ -91,3 +91,26 @@ func TestSessionRegistryConcurrentSafe(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestHubDisconnectDeviceClosesSockets(t *testing.T) {
+	reg := newSessionRegistry()
+	c1, c2 := &fakeConn{}, &fakeConn{}
+	rel1, ok1 := reg.RegisterDevice("sessA", "user1", "dev-A", c1)
+	rel2, ok2 := reg.RegisterDevice("sessB", "user1", "dev-B", c2)
+	if !ok1 || !ok2 {
+		t.Fatalf("failed to register mock connections")
+	}
+	defer rel1()
+	defer rel2()
+
+	count := reg.RevokeDevice("dev-A")
+	if count != 1 {
+		t.Fatalf("RevokeDevice returned count %d, want 1", count)
+	}
+	if c1.closed.Load() == 0 {
+		t.Fatalf("expected c1 for dev-A to be closed")
+	}
+	if c2.closed.Load() != 0 {
+		t.Fatalf("c2 for dev-B was closed unexpectedly")
+	}
+}

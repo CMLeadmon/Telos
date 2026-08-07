@@ -388,4 +388,3 @@ func TestDeviceTokensMigrationSchemaConstraints(t *testing.T) {
 		t.Fatalf("expected device row to be deleted via CASCADE, got count=%d err=%v", count, err)
 	}
 }
-
