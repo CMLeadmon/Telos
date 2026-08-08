@@ -1,0 +1,31 @@
+# Windows / Docker Desktop overlay. Layer this over docker-compose.yml when running
+# on Windows hosts via Docker Desktop or WSL2.
+services:
+  telos-audiobook-migrate:
+    volumes:
+      - ${STORAGE_PATH:-/data/shared}:/data/shared
+
+  telos-core:
+    volumes:
+      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared
+
+  jellyfin:
+    # NOTE: user is deliberately NOT overridden here.
+    #
+    # jellyfin is the only service in the stack given an explicit non-root user
+    # (docker-compose.yml:262, "${APP_UID}:${APP_GID}"), so overriding it is the
+    # one change in this file that would weaken the security posture rather than
+    # just adapt it to the platform. Docker Desktop runs a real Linux kernel under
+    # WSL2, where numeric UID/GID mapping works normally; what differs is only
+    # ownership synthesis on bind mounts backed by Windows drives.
+    #
+    # If a genuine permission failure shows up in real Windows testing, fix it
+    # then, with the error in hand, and prefer keeping the storage tree on the
+    # Linux filesystem over granting root.
+    volumes:
+      - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro
+
+  grimmory:
+    volumes:
+      - ${STORAGE_PATH:-/mnt/storage/shared}/books:/books
+      - ${STORAGE_PATH:-/mnt/storage/shared}/bookdrop:/bookdrop
