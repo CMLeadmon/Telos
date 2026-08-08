@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # uninstall.sh — remove what install.sh added, and nothing else.
 #
-# Removes the PATH symlink and (optionally) the application tree. Your .env,
-# your storage directory, and your container volumes are NEVER touched here:
+# Removes the PATH symlink and, with --purge, the application tree.
+#
+# Your storage directory and your container volumes are NEVER touched here:
 # those are node data, not installed files. Removing them is a separate,
 # explicit act (`telos stop --volumes`, and deleting STORAGE_PATH by hand).
+#
+# .env is different, and this used to claim otherwise. It lives INSIDE the
+# application tree, so --purge does delete it along with everything else. That
+# step always asks first, and it asks even under --yes, because losing a node's
+# credentials desynchronizes them from the existing Postgres and MariaDB
+# volumes and there is no way back.
 set -uo pipefail
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,8 +35,13 @@ Options:
   --yes     Do not prompt
 
 Never removed by this script:
-  .env, your STORAGE_PATH data, and container volumes. Those are node data.
+  Your STORAGE_PATH data and container volumes. Those are node data.
   To destroy the database and volumes:  telos stop --volumes
+
+Note on .env:
+  It lives inside the application directory, so --purge deletes it too. That
+  one step always prompts, even with --yes, and refuses to proceed when there
+  is no terminal to prompt on.
 EOF
 }
 
@@ -81,7 +93,17 @@ done
 if [ "$PURGE" -eq 1 ]; then
   if [ -f "$SOURCE_DIR/.env" ]; then
     warn "$SOURCE_DIR/.env exists — it holds this node's credentials."
-    printf 'Purge would delete it. Copy it somewhere safe first if you want it.\n'
+    printf 'Purge deletes it. Copy it somewhere safe first if you want to keep it.\n'
+    # Deliberately NOT covered by --yes. These credentials are paired with the
+    # existing Postgres and MariaDB volumes; regenerating them later leaves a
+    # node that cannot read its own data.
+    #
+    # Without a terminal, `read` returns immediately on EOF and the empty reply
+    # used to fall through to "Kept", exiting 0 — so a scripted
+    # `--purge --yes` reported success while doing nothing. Fail loudly instead.
+    if [ ! -t 0 ]; then
+      die "refusing to delete $SOURCE_DIR/.env with no terminal to confirm on — re-run interactively, or move .env aside first"
+    fi
     printf 'Delete anyway? [y/N] '
     read -r reply
     case "$reply" in [yY]|[yY][eE][sS]) ;; *) info "Kept $SOURCE_DIR."; exit 0 ;; esac
