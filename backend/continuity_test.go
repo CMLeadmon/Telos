@@ -47,7 +47,7 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			name: "audiobook locator",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator:    json.RawMessage(`{"trackIndex":2}`),
+				Locator:    json.RawMessage(`{"trackIndex":2,"positionMs":9000}`),
 				PositionMS: 9000,
 				DurationMS: 12000,
 				Percent:    0.75,
@@ -157,14 +157,35 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			name: "negative audiobook track",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{"trackIndex":-1}`),
+				Locator: json.RawMessage(`{"trackIndex":-1,"positionMs":9000}`),
+			},
+		},
+		{
+			name: "negative audiobook positionMs",
+			kind: "audiobook",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"trackIndex":2,"positionMs":-1}`),
 			},
 		},
 		{
 			name: "missing audiobook track",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{}`),
+				Locator: json.RawMessage(`{"positionMs":9000}`),
+			},
+		},
+		{
+			name: "missing audiobook positionMs",
+			kind: "audiobook",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"trackIndex":2}`),
+			},
+		},
+		{
+			name: "audiobook with extra key",
+			kind: "audiobook",
+			in: ProgressInput{
+				Locator: json.RawMessage(`{"trackIndex":2,"positionMs":9000,"extra":1}`),
 			},
 		},
 		{
@@ -213,14 +234,14 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			name: "large fractional audiobook track does not round to integer",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{"trackIndex":9007199254740992.5}`),
+				Locator: json.RawMessage(`{"trackIndex":9007199254740992.5,"positionMs":9000}`),
 			},
 		},
 		{
 			name: "audiobook track must be a number token",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{"trackIndex":"2"}`),
+				Locator: json.RawMessage(`{"trackIndex":"2","positionMs":9000}`),
 			},
 		},
 		{
@@ -255,7 +276,7 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			name: "fractional audiobook track",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{"trackIndex":1.5}`),
+				Locator: json.RawMessage(`{"trackIndex":1.5,"positionMs":9000}`),
 			},
 		},
 		{
@@ -276,7 +297,7 @@ func TestValidateMemberProgressByKind(t *testing.T) {
 			name: "audiobook with pdf field",
 			kind: "audiobook",
 			in: ProgressInput{
-				Locator: json.RawMessage(`{"trackIndex":2,"page":1}`),
+				Locator: json.RawMessage(`{"trackIndex":2,"positionMs":9000,"page":1}`),
 			},
 		},
 		{

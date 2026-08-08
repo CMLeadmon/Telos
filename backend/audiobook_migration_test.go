@@ -1,7 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -80,4 +85,39 @@ func TestAudiobookMigrationManifestValidationAndIO(t *testing.T) {
 	if readM.ManifestSHA256 == "" {
 		t.Fatal("expected non-empty ManifestSHA256")
 	}
+}
+
+func TestAudiobookMigrateCommandUnimplemented(t *testing.T) {
+	subcmds := []string{"inventory", "copy", "verify", "switch", "rollback", "cleanup"}
+	for _, subcmd := range subcmds {
+		t.Run(subcmd, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestAudiobookMigrateHelperProcess")
+			cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1", "TEST_AUDIOBOOK_SUBCMD="+subcmd)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			err := cmd.Run()
+			if err == nil {
+				t.Fatalf("expected subcmd %s to fail with non-zero exit code, but it succeeded", subcmd)
+			}
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("expected exec.ExitError for subcmd %s, got %v", subcmd, err)
+			}
+			if strings.Contains(stdout.String(), "completed") {
+				t.Fatalf("stdout contained success message for subcmd %s: %s", subcmd, stdout.String())
+			}
+			if !strings.Contains(stderr.String(), "not implemented") {
+				t.Fatalf("stderr did not report 'not implemented' for subcmd %s: %s", subcmd, stderr.String())
+			}
+		})
+	}
+}
+
+func TestAudiobookMigrateHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	subcmd := os.Getenv("TEST_AUDIOBOOK_SUBCMD")
+	runAudiobookMigrateCommand([]string{subcmd})
 }

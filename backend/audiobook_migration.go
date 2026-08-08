@@ -193,7 +193,8 @@ func runAudiobookMigrateCommand(args []string) {
 	subcmd := args[0]
 	switch subcmd {
 	case "inventory", "copy", "verify", "switch", "rollback", "cleanup":
-		fmt.Printf("Audiobook migration mode %s completed.\n", subcmd)
+		fmt.Fprintf(os.Stderr, "Audiobook migration mode %s is not implemented.\n", subcmd)
+		os.Exit(1)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown audiobook-migrate subcommand: %s\n", subcmd)
 		os.Exit(2)

@@ -94,7 +94,10 @@ func validPDFProgressLocator(locator map[string]json.RawMessage) bool {
 }
 
 func validAudiobookProgressLocator(locator map[string]json.RawMessage) bool {
-	return len(locator) == 1 && validProgressNumber(locator["trackIndex"], "0", "", true)
+	if len(locator) != 2 || !validProgressNumber(locator["trackIndex"], "0", "", true) {
+		return false
+	}
+	return validProgressNumber(locator["positionMs"], "0", "", true)
 }
 
 func validProgressNumber(raw json.RawMessage, min, max string, integer bool) bool {
