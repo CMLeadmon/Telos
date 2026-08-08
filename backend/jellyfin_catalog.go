@@ -392,28 +392,77 @@ func (c *JellyfinCatalog) Related(ctx context.Context, userID, rawID string, lim
 	if limit <= 0 || limit > 12 {
 		limit = 12
 	}
+	// Related was emitting raw upstream Jellyfin IDs, unfiltered — exactly the
+	// defect the comment above Recent describes and that Recent already fixes.
+	// Every canonical route rejects a provider ID, so each card 404'd on open,
+	// its cover 404'd, sharing it pushed a provider ID into chat, and items from
+	// libraries outside JELLYFIN_LIBRARY_IDS surfaced. Resolve the parent first
+	// rather than falling back to the caller-supplied string.
 	resolution, err := resolveCatalogIdentity(ctx, rawID, SurfaceStream)
-	upstreamID := rawID
-	if err == nil {
-		upstreamID = resolution.UpstreamID
-	}
-	items, err := fetchJellyfinSimilarItems(ctx, upstreamID, limit)
 	if err != nil {
 		return nil, err
 	}
+	items, err := fetchJellyfinSimilarItems(ctx, resolution.UpstreamID, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// Similar items arrive without a library, so membership has to come from the
+	// authorizer. A nil authorizer is the development allow-all mode used
+	// elsewhere in this file; there the parent's library is the best available
+	// answer, and similar items come from the same library in practice.
+	authorized := make(map[string]AuthorizedMediaItem, len(items))
+	if jellyfinAuthorizer == nil {
+		for _, raw := range items {
+			authorized[raw.ID] = AuthorizedMediaItem{
+				ID: raw.ID, LibraryID: resolution.LibraryID,
+				MediaType: raw.Type, IsFolder: raw.IsFolder,
+			}
+		}
+	} else {
+		ids := make([]string, 0, len(items))
+		seen := map[string]bool{}
+		for _, raw := range items {
+			if raw.ID == "" || seen[raw.ID] {
+				continue
+			}
+			seen[raw.ID] = true
+			ids = append(ids, raw.ID)
+		}
+		authorized, err = jellyfinAuthorizer.AuthorizeItems(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	resItems := make([]MediaItem, 0, len(items))
+	emitted := map[string]bool{}
 	for _, raw := range items {
-		kind := mediaKindFromJellyfin(raw.Type, raw.IsFolder)
-		durMs := raw.RunTimeTicks / 10_000
+		if emitted[raw.ID] {
+			continue
+		}
+		authorizedItem, ok := authorized[raw.ID]
+		if !ok || !jellyfinLibraryAllowed(authorizedItem.LibraryID) {
+			continue
+		}
+		emitted[raw.ID] = true
+		// observeJellyfinCatalogItem re-checks the allowlist and yields the
+		// canonical ID the rest of the API expects.
+		itemResolution, err := observeJellyfinCatalogItem(
+			ctx, raw.ID, authorizedItem.LibraryID, raw.Type, raw.IsFolder,
+		)
+		if err != nil {
+			continue
+		}
 		resItems = append(resItems, MediaItem{
-			ID:           raw.ID,
+			ID:           itemResolution.ID,
 			Title:        raw.Name,
-			Kind:         kind,
+			Kind:         mediaKindFromJellyfin(raw.Type, raw.IsFolder),
 			JellyfinType: raw.Type,
 			IsFolder:     raw.IsFolder,
 			ChildCount:   raw.ChildCount,
-			DurationMS:   durMs,
-			CoverURL:     "/api/v1/media/items/" + raw.ID + "/cover",
+			DurationMS:   raw.RunTimeTicks / 10_000,
+			CoverURL:     "/api/v1/media/items/" + itemResolution.ID + "/cover",
 		})
 	}
 	return resItems, nil

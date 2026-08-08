@@ -37,11 +37,22 @@ type PlaybackOptions struct {
 }
 
 func getPlaybackOptions(ctx context.Context, userID, rawID string, audioIndex, subtitleIndex *int) (PlaybackOptions, error) {
+	// This error used to be discarded: err was reassigned by the next call, so a
+	// failed resolution left resolution zero-valued and upstreamID falling back
+	// to the caller-supplied string. The handler then answered 200 with
+	// ItemID "", StreamURL "/api/v1/stream/video/", and subtitle links carrying
+	// a doubled slash — and it probed Jellyfin with an unvalidated ID, making
+	// this the one stream path that could reach a library excluded by
+	// JELLYFIN_LIBRARY_IDS. Fail closed instead.
 	resolution, err := resolveCatalogIdentity(ctx, rawID, SurfaceStream)
-	upstreamID := rawID
-	if err == nil {
-		upstreamID = resolution.UpstreamID
+	if err != nil {
+		return PlaybackOptions{}, err
 	}
+	if !jellyfinLibraryAllowed(resolution.LibraryID) {
+		return PlaybackOptions{}, errItemNotAuthorized
+	}
+	upstreamID := resolution.UpstreamID
+
 	tok, _, err := getJellyfinAuthToken(ctx)
 	if err != nil {
 		return PlaybackOptions{}, err

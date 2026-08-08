@@ -28,7 +28,7 @@ func TestMediaKindFromJellyfin(t *testing.T) {
 }
 
 func TestJellyfinCatalogDetailAndRelated(t *testing.T) {
-	const canonicalID = "00000000-0000-4000-8000-000000000301"
+	installCatalogIdentityTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -57,15 +57,6 @@ func TestJellyfinCatalogDetailAndRelated(t *testing.T) {
 	}))
 	defer server.Close()
 
-	oldResolve := resolveCatalogIdentity
-	resolveCatalogIdentity = func(_ context.Context, _ string, _ CatalogSurface) (CatalogResolution, error) {
-		return CatalogResolution{
-			ID: canonicalID, Surface: SurfaceStream, Kind: "video", Provider: ProviderJellyfin,
-			UpstreamID: "301", Active: true, Available: true,
-		}, nil
-	}
-	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
-
 	oldGetAuth := getJellyfinAuthToken
 	getJellyfinAuthToken = func(_ context.Context) (string, string, error) {
 		return "test-token", "shared-user", nil
@@ -76,24 +67,41 @@ func TestJellyfinCatalogDetailAndRelated(t *testing.T) {
 	getJellyfinBaseURL = func() string { return server.URL }
 	t.Cleanup(func() { getJellyfinBaseURL = oldGetURL })
 
+	// Seed the parent so its canonical id maps to upstream 301. The previous
+	// fixture stubbed resolveCatalogIdentity to answer UpstreamID "301" for every
+	// input, which is not how resolution behaves: the similar item then also
+	// resolved to 301 and failed the consistency check inside observe.
+	parent, err := observeJellyfinCatalogItem(t.Context(), "301", "lib-allowed", "Movie", false)
+	if err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+
 	cat := &JellyfinCatalog{}
-	detail, res, err := cat.Detail(t.Context(), "user-1", canonicalID)
+	detail, res, err := cat.Detail(t.Context(), "user-1", parent.ID)
 	if err != nil {
 		t.Fatalf("Detail error: %v", err)
 	}
-	if res.ID != canonicalID || detail.ID != canonicalID || detail.Title != "Synthwave Movie" || detail.ProductionYear != 2026 {
+	if res.ID != parent.ID || detail.ID != parent.ID || detail.Title != "Synthwave Movie" || detail.ProductionYear != 2026 {
 		t.Fatalf("detail=%+v res=%+v", detail, res)
 	}
 	if len(detail.Chapters) != 1 || detail.Chapters[0].Title != "Intro" {
 		t.Fatalf("chapters=%+v", detail.Chapters)
 	}
 
-	related, err := cat.Related(t.Context(), "user-1", canonicalID, 5)
+	related, err := cat.Related(t.Context(), "user-1", parent.ID, 5)
 	if err != nil {
 		t.Fatalf("Related error: %v", err)
 	}
 	if len(related) != 1 || related[0].Title != "Synthwave Sequel" {
 		t.Fatalf("related=%+v", related)
+	}
+	// Related used to emit the upstream Jellyfin id verbatim, so the card 404'd
+	// on open and its cover 404'd with it.
+	if related[0].ID == "302" || !looksLikeUUID(related[0].ID) {
+		t.Errorf("related id=%q, want a canonical UUID rather than the upstream id", related[0].ID)
+	}
+	if related[0].CoverURL != "/api/v1/media/items/"+related[0].ID+"/cover" {
+		t.Errorf("coverUrl=%q must address the canonical id", related[0].CoverURL)
 	}
 }
 
@@ -192,4 +200,67 @@ func (r stubJellyfinResolver) ResolveItems(_ context.Context, itemIDs []string) 
 		}
 	}
 	return out, nil
+}
+
+// Related had the same defect Recent was already fixed for: it emitted upstream
+// Jellyfin ids with no allowlist filter, so cards 404'd on open, covers 404'd,
+// a share link carried a provider id into chat, and items from libraries outside
+// JELLYFIN_LIBRARY_IDS surfaced.
+func TestJellyfinCatalogRelatedCanonicalizesAndFiltersByAllowlist(t *testing.T) {
+	installCatalogIdentityTest(t)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/Items/301/Similar" {
+			_, _ = fmt.Fprint(w, `{"Items":[
+				{"Id":"allowed-2","Name":"Allowed Sequel","Type":"Movie","RunTimeTicks":54000000000},
+				{"Id":"denied-2","Name":"Out Of Scope","Type":"Movie","RunTimeTicks":54000000000}
+			]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	oldGetAuth := getJellyfinAuthToken
+	getJellyfinAuthToken = func(_ context.Context) (string, string, error) {
+		return "test-token", "shared-user", nil
+	}
+	t.Cleanup(func() { getJellyfinAuthToken = oldGetAuth })
+
+	oldGetURL := getJellyfinBaseURL
+	getJellyfinBaseURL = func() string { return server.URL }
+	t.Cleanup(func() { getJellyfinBaseURL = oldGetURL })
+
+	oldAuthorizer := jellyfinAuthorizer
+	jellyfinAuthorizer, _ = NewJellyfinAuthorizer(
+		stubJellyfinResolver{
+			"301":       {MediaType: "Movie", AncestorIDs: []string{"lib-allowed"}},
+			"allowed-2": {MediaType: "Movie", AncestorIDs: []string{"lib-allowed"}},
+			"denied-2":  {MediaType: "Movie", AncestorIDs: []string{"lib-denied"}},
+		},
+		[]string{"lib-allowed"},
+	)
+	t.Cleanup(func() { jellyfinAuthorizer = oldAuthorizer })
+
+	parent, err := observeJellyfinCatalogItem(t.Context(), "301", "lib-allowed", "Movie", false)
+	if err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+
+	related, err := (&JellyfinCatalog{}).Related(t.Context(), "user-1", parent.ID, 10)
+	if err != nil {
+		t.Fatalf("Related: %v", err)
+	}
+	if len(related) != 1 {
+		t.Fatalf("related=%+v, want only the allowlisted library's item", related)
+	}
+	if related[0].Title != "Allowed Sequel" {
+		t.Fatalf("title=%q, want Allowed Sequel", related[0].Title)
+	}
+	if related[0].ID == "allowed-2" || !looksLikeUUID(related[0].ID) {
+		t.Errorf("id=%q, want a canonical UUID rather than the upstream Jellyfin id", related[0].ID)
+	}
+	if related[0].CoverURL != "/api/v1/media/items/"+related[0].ID+"/cover" {
+		t.Errorf("coverUrl=%q must address the canonical id", related[0].CoverURL)
+	}
 }
