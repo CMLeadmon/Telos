@@ -37,3 +37,58 @@ jobs:
           npm run test:unit
           npm run build
           npm run check:bundle
+
+  # backend/out/ is gitignored, so a fresh checkout has never contained it.
+  # Before the embedfrontend build tag, compiling from a clean tree failed with
+  # "pattern all:out: no matching files found" -- which means backend-gates,
+  # which compiles the package via go test, could not have been passing.
+  check-headless-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Build and test with no frontend present
+        run: |
+          rm -rf frontend
+          cd backend
+          go test ./...
+          go build -o /tmp/telos-core-headless .
+
+  # Fails when the committed contract has fallen behind the route table. The
+  # generator derives routes by walking main.go with go/ast; a hand-maintained
+  # list would make this check compare itself against the JSON and always pass.
+  check-api-contract-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Verify openapi.json is current
+        run: |
+          cd backend
+          go run ./cmd/genopenapi --check
+
+  # The operator CLI ships for Windows, so a Linux-only regression in it must
+  # fail here rather than at install time on someone's machine.
+  check-cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - name: Build the operator CLI for ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd backend
+          go build -o /dev/null ./cmd/telos
