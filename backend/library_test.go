@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -555,7 +556,7 @@ func TestBookProgressDualWritesOnlyEPUBAndPDF(t *testing.T) {
 	}{
 		{"8", "epub", `{"locator":{"cfi":"x","fraction":0.5},"percent":0.5}`, 1},
 		{"9", "pdf", `{"locator":{"page":2,"zoom":1},"percent":0.2}`, 1},
-		{"10", "audiobook", `{"locator":{"trackIndex":1},"positionMs":1000,"durationMs":5000,"percent":0.2}`, 0},
+		{"10", "audiobook", `{"locator":{"trackIndex":1,"positionMs":1000},"positionMs":1000,"durationMs":5000,"percent":0.2}`, 0},
 	}
 	for _, tc := range cases {
 		item, err := catalogRepo.Observe(t.Context(), CatalogObservation{
@@ -1137,5 +1138,34 @@ func TestHandleMediaReturnsCanonicalLibraryIDs(t *testing.T) {
 		if !looksLikeUUID(library.ID) {
 			t.Fatalf("public id = %q, want canonical UUID", library.ID)
 		}
+	}
+}
+
+func TestGrimmoryEnumerationAbsentLibraryIDIsCountedSeparatelyAndLogged(t *testing.T) {
+	var logs bytes.Buffer
+	oldLogOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(oldLogOutput) })
+
+	installCatalogIdentityTest(t)
+	installGrimmoryEnumerationFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = fmt.Fprint(w, `[
+			{
+				"id":101,
+				"metadata":{"title":"Book Without Library ID"},
+				"primaryFile":{"bookType":"EPUB"}
+			}
+		]`)
+	})
+
+	books, err := fetchGrimmoryBooks(t.Context())
+	if err != nil {
+		t.Fatalf("fetchGrimmoryBooks failed: %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books count = %d, want 0 (absent libraryId must be rejected)", len(books))
+	}
+	if !strings.Contains(logs.String(), "catalog normalization provider=grimmory missing_library_id=1") {
+		t.Fatalf("logs = %q, want 'catalog normalization provider=grimmory missing_library_id=1'", logs.String())
 	}
 }

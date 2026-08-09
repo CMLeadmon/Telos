@@ -42,9 +42,10 @@ type CatalogResolution struct {
 }
 
 type CatalogScanReport struct {
-	Seen     int
-	Restored int64
-	Missing  int64
+	Seen         int
+	Restored     int64
+	Missing      int64
+	SkippedSweep bool
 }
 
 var (
@@ -257,15 +258,19 @@ func (r *CatalogRepository) CompleteScan(ctx context.Context, provider CatalogPr
 		return CatalogScanReport{}, err
 	}
 
-	missing, err := tx.Exec(ctx, `
-		UPDATE catalog_sources
-		SET available = false, missing_since = now()
-		WHERE provider = $1 AND upstream_library_id = $2 AND available
-		  AND NOT (upstream_id = ANY($3::text[]))`, string(provider), libraryID, seen)
-	if err != nil {
-		return CatalogScanReport{}, err
+	if len(seen) == 0 {
+		report.SkippedSweep = true
+	} else {
+		missing, err := tx.Exec(ctx, `
+			UPDATE catalog_sources
+			SET available = false, missing_since = now()
+			WHERE provider = $1 AND upstream_library_id = $2 AND available
+			  AND NOT (upstream_id = ANY($3::text[]))`, string(provider), libraryID, seen)
+		if err != nil {
+			return CatalogScanReport{}, err
+		}
+		report.Missing = missing.RowsAffected()
 	}
-	report.Missing = missing.RowsAffected()
 	if err = tx.Commit(ctx); err != nil {
 		return CatalogScanReport{}, err
 	}

@@ -325,6 +325,7 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	books := make([]LibraryBook, 0, len(raw))
 	observations := make([]CatalogObservation, 0, len(raw))
 	unsupported := 0
+	missingLibrary := 0
 	librarySet := map[string]struct{}{}
 	if grimmoryAuthorizer != nil {
 		for libraryID := range grimmoryAuthorizer.allowed {
@@ -337,6 +338,16 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 		libraryID, allowed := allowedGrimmoryLibraryID(mapped.LibraryID)
 		if !supported {
 			unsupported++
+			continue
+		}
+		// Counted separately rather than folded into unsupported, which means an
+		// unsupported *format*. A book arriving with no library is a different
+		// failure — it points at the provider, not the file — and conflating the
+		// two would make the log actively misleading. Before this, the drop was
+		// silent: if Grimmory stopped sending libraryId the shelf rendered empty
+		// with nothing in the logs to explain it.
+		if mapped.LibraryID == "" {
+			missingLibrary++
 			continue
 		}
 		if !allowed {
@@ -359,6 +370,9 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 	}
 	if unsupported > 0 {
 		log.Printf("catalog normalization provider=grimmory unsupported=%d", unsupported)
+	}
+	if missingLibrary > 0 {
+		log.Printf("catalog normalization provider=grimmory missing_library_id=%d", missingLibrary)
 	}
 	libraries := make([]string, 0, len(librarySet))
 	for libraryID := range librarySet {

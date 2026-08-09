@@ -276,3 +276,35 @@ func assertCatalogAvailability(t *testing.T, repo *CatalogRepository, id string,
 		t.Fatalf("catalog item %s available = %v, want %v", id, got.Available, want)
 	}
 }
+
+func TestCatalogCompleteScanWithEmptySeenSetSkipsSweep(t *testing.T) {
+	repo, _ := catalogFixture(t)
+	seenItem := observeCatalog(t, repo, ProviderGrimmory, "book-1", "books", SurfaceLibrary, "epub")
+	unseenItem := observeCatalog(t, repo, ProviderGrimmory, "book-2", "books", SurfaceLibrary, "pdf")
+
+	reportEmpty, err := repo.CompleteScan(t.Context(), ProviderGrimmory, "books", []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reportEmpty.SkippedSweep {
+		t.Fatalf("report.SkippedSweep = false, want true for empty seen set")
+	}
+	if reportEmpty.Seen != 0 || reportEmpty.Missing != 0 {
+		t.Fatalf("reportEmpty = %+v, want Seen:0 Missing:0", reportEmpty)
+	}
+	assertCatalogAvailability(t, repo, seenItem.ID, true)
+	assertCatalogAvailability(t, repo, unseenItem.ID, true)
+
+	reportNonEmpty, err := repo.CompleteScan(t.Context(), ProviderGrimmory, "books", []string{"book-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reportNonEmpty.SkippedSweep {
+		t.Fatalf("report.SkippedSweep = true, want false for non-empty seen set")
+	}
+	if reportNonEmpty.Seen != 1 || reportNonEmpty.Missing != 1 {
+		t.Fatalf("reportNonEmpty = %+v, want Seen:1 Missing:1", reportNonEmpty)
+	}
+	assertCatalogAvailability(t, repo, seenItem.ID, true)
+	assertCatalogAvailability(t, repo, unseenItem.ID, false)
+}

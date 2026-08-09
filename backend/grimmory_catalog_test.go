@@ -255,7 +255,7 @@ func TestLibraryBookDetailRouteReturnsNormalizedMemberItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	progress, err := ValidateProgress("audiobook", ProgressInput{
-		Locator: json.RawMessage(`{"trackIndex":2}`), PositionMS: 125_000,
+		Locator: json.RawMessage(`{"trackIndex":2,"positionMs":125000}`), PositionMS: 125_000,
 		DurationMS: 3_600_000, Percent: 0.034,
 	})
 	if err != nil {
