@@ -62,7 +62,7 @@ func TestDispatchUnknownCommand(t *testing.T) {
 }
 
 func TestDispatchStubCommands(t *testing.T) {
-	commands := []string{"doctor", "init", "start", "status", "stop"}
+	commands := []string{"init", "start", "stop"}
 	for _, cmd := range commands {
 		var stdout, stderr bytes.Buffer
 		code := dispatch([]string{cmd}, &stdout, &stderr)
@@ -72,6 +72,21 @@ func TestDispatchStubCommands(t *testing.T) {
 		errStr := stderr.String()
 		if !strings.Contains(errStr, "not yet implemented") {
 			t.Errorf("dispatch(%s) stderr missing 'not yet implemented': %s", cmd, errStr)
+		}
+	}
+}
+
+func TestDispatchDoctorAndStatusHelp(t *testing.T) {
+	commands := []string{"doctor", "status"}
+	for _, cmd := range commands {
+		var stdout, stderr bytes.Buffer
+		code := dispatch([]string{cmd, "--help"}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("dispatch(%s --help) returned exit code %d, expected 0", cmd, code)
+		}
+		outStr := stdout.String()
+		if !strings.Contains(outStr, "telos "+cmd) {
+			t.Errorf("dispatch(%s --help) stdout missing header: %s", cmd, outStr)
 		}
 	}
 }

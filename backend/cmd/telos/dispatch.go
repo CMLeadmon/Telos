@@ -73,7 +73,11 @@ func dispatch(args []string, stdout, stderr io.Writer) int {
 	case "-h", "--help", "help":
 		printUsage(stdout)
 		return 0
-	case "doctor", "init", "start", "status", "stop":
+	case "doctor":
+		return runDoctor(filteredArgs[1:], stdout, stderr)
+	case "status":
+		return runStatus(filteredArgs[1:], stdout, stderr)
+	case "init", "start", "stop":
 		fmt.Fprintf(stderr, "telos: command '%s' not yet implemented\n", cmd)
 		return 1
 	default:
