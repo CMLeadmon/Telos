@@ -24,6 +24,9 @@ export class ReconnectingSocket {
   private isIntentionallyClosed = false;
   private isConnected = false;
 
+  private onlineHandler?: () => void;
+  private visibilityHandler?: () => void;
+
   private onOpen?: () => void;
   private onMessage?: (data: string) => void;
   private onClose?: (code: number, reason: string) => void;
@@ -39,6 +42,7 @@ export class ReconnectingSocket {
     this.onClose = options.onClose;
     this.onError = options.onError;
 
+    this.installLifecycleListeners();
     this.connect();
   }
 
@@ -87,6 +91,7 @@ export class ReconnectingSocket {
 
   public close(): void {
     this.isIntentionallyClosed = true;
+    this.removeLifecycleListeners();
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
@@ -95,6 +100,44 @@ export class ReconnectingSocket {
       this.ws.close();
       this.ws = null;
     }
+  }
+
+  private installLifecycleListeners(): void {
+    if (typeof window === "undefined") return;
+    this.onlineHandler = () => this.reviveNow();
+    this.visibilityHandler = () => {
+      if (document.visibilityState === "visible") this.reviveNow();
+    };
+    window.addEventListener("online", this.onlineHandler);
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+  }
+
+  private removeLifecycleListeners(): void {
+    if (typeof window === "undefined") return;
+    if (this.onlineHandler) {
+      window.removeEventListener("online", this.onlineHandler);
+      this.onlineHandler = undefined;
+    }
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+      this.visibilityHandler = undefined;
+    }
+  }
+
+  /**
+   * A regained network or a foregrounded tab is positive evidence the transport
+   * may work again, which makes any accumulated backoff stale. Drop the pending
+   * timer, reset to the floor, and retry now rather than serving out a delay
+   * that was earned while the device was offline.
+   */
+  private reviveNow(): void {
+    if (this.isIntentionallyClosed || this.isConnected) return;
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.currentDelay = this.minDelay;
+    this.connect();
   }
 
   private scheduleReconnect(): void {

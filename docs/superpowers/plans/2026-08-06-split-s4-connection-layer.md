@@ -470,6 +470,33 @@ Repoint navigation buttons to use `launchHref`.
 
 ### Task 4: Implement TOFU Certificate Pinning
 
+> **CORRECTED ON IMPLEMENTATION (2026-08-10). The code below was NOT built — do
+> not restore it.** As written, `verifyCertificateFingerprint` never inspects a
+> certificate: it returns `SHA-256("telos-cert:" + host)`, a pure function of the
+> hostname. Every certificate presented for a given host therefore produces the
+> same fingerprint, so the check reports `valid: true` for an attacker's
+> certificate — the exact interception §3.3 of the design spec says pinning
+> prevents — while the connect screen tells the member their connection is
+> pinned. The three tests below cannot detect this, because a function that is
+> deterministic in the host satisfies all of them.
+>
+> Pinning is impossible in a browser: no web API exposes the peer certificate to
+> a page. It is only achievable where a native layer performs the TLS handshake.
+> What was built instead, in `frontend/src/lib/certPinning.ts`:
+>
+> - `verifyCertificate(serverUrl, pinnedFingerprint)` returns a four-state
+>   `status`: `unsupported` | `first-use` | `trusted` | `mismatch`, and a
+>   `fingerprint` that is **null whenever no certificate was actually read**.
+> - It reads the leaf certificate from a `window.__TELOS_NATIVE_TLS__` bridge
+>   (`NativeTlsBridge`). Absent that bridge — i.e. in any browser — it reports
+>   `unsupported` and synthesizes nothing.
+> - Fingerprints are normalized before comparison, so `AA:BB` and `aabb` do not
+>   read as an attack.
+>
+> **This blocks the design spec's §3.3 guarantee on S5.** Until the Tauri shell
+> implements `NativeTlsBridge`, no client can pin, and the `/connect` UI must not
+> claim it does. S5's plan currently says nothing about TLS at all.
+
 **Files:**
 - Create: `frontend/src/lib/certPinning.ts`
 - Create: `frontend/src/lib/certPinning.test.ts`
