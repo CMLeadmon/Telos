@@ -88,6 +88,17 @@ var (
 		}
 		return catalogRepo.ResolveFor(ctx, rawID, surface)
 	}
+	// resolveCatalogIdentityOn resolves on a caller-supplied handle. A caller
+	// already inside a transaction must pass it: resolving on the pool instead
+	// checks out a second connection while the first is still held, and with
+	// MaxConns such callers in flight every one waits for a connection that
+	// none of them can release until it finishes waiting.
+	resolveCatalogIdentityOn = func(ctx context.Context, db DBTX, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		if db == nil {
+			return resolveCatalogIdentity(ctx, rawID, surface)
+		}
+		return NewCatalogRepository(db).ResolveFor(ctx, rawID, surface)
+	}
 	// resolveCatalogIdentitiesFor is the batched peer of resolveCatalogIdentity.
 	// It drops items whose active source sits on another surface rather than
 	// reporting errCatalogWrongSurface per item, because every caller already

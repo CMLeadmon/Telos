@@ -35,7 +35,11 @@ realtime) run_filter="-run Test(Channel|Realtime|Socket|Revocation|Subscription)
 security) run_filter="-run Test(Server|Shutdown|Slow|HTTPAdmission|Security)"; shift ;;
 db) run_filter="-run Test(Migration|Migrations|Migrator|Database|ForeignKey|QueryStatistics|MessageManagement|Cursor|ListPolicy|Search|Outbox|AccountDeletion|RetentionMatrix|AssetDeletion|SchemaOwner|RuntimeRole|LoadAuthenticatedUser|HistoryQueryCount|BuildListQuery|SessionTouchWorker|DatabaseTimeouts|DatabaseConstraints|FailedMigration|ConcurrentMigrators|DiscoverMigrations|PlanMigrations|ChecksumSet)"; shift ;;
 storage) run_filter="-run Test(FileStore|FilePurpose|FileAudit|LogicalFolder|IngestionLease|BookHandoff|Upload|Quota|Capacity|Storage|Confine|EPUB|ContentValidation|ClamAV|Reconcil|Jellyfin|Grimmory|Range|Readiness|Health|Egress)"; shift ;;
-product) run_filter="-run Test(UserEvent|UserEventCatchUp|DeleteAccountUserEvent|RecordUserEvent|Thread|Annotation|ChannelOverride)"; shift ;;
+# Keywords match anywhere in the test name, not only straight after "Test".
+# Anchored, this selected 3 of the 12 annotation tests: TestModerateAnnotation…,
+# TestAuthorizeAnnotationTarget… and the rest were silently skipped, so a
+# selector run could report a green product suite having never exercised them.
+product) run_filter="-run (UserEvent|Thread|Annotation|Commentary|ChannelOverride)"; shift ;;
 all) shift || true ;;
 -*) : ;; # first arg is already a go-test flag
 *) shift || true ;;

@@ -145,6 +145,13 @@ type Annotation struct {
 var annotationTargetTypes = map[string]bool{"book": true, "media": true, "file": true}
 
 func canonicalAnnotationTarget(ctx context.Context, targetType, rawID string) (CatalogResolution, error) {
+	return canonicalAnnotationTargetOn(ctx, nil, targetType, rawID)
+}
+
+// canonicalAnnotationTargetOn resolves the target on the supplied handle. A
+// caller holding a transaction must pass it rather than let the resolve reach
+// for the pool on its own; see resolveCatalogIdentityOn.
+func canonicalAnnotationTargetOn(ctx context.Context, db DBTX, targetType, rawID string) (CatalogResolution, error) {
 	if rawID == "" {
 		return CatalogResolution{}, errAnnotationLocator
 	}
@@ -159,7 +166,7 @@ func canonicalAnnotationTarget(ctx context.Context, targetType, rawID string) (C
 	default:
 		return CatalogResolution{}, errAnnotationLocator
 	}
-	resolution, err := resolveCatalogIdentity(ctx, rawID, surface)
+	resolution, err := resolveCatalogIdentityOn(ctx, db, rawID, surface)
 	if err != nil {
 		return CatalogResolution{}, err
 	}
@@ -218,7 +225,12 @@ func canonicalizeAnnotationRow(ctx context.Context, annotationID string) (string
 		FOR UPDATE`, annotationID).Scan(&targetType, &rawID); err != nil {
 		return "", CatalogResolution{}, err
 	}
-	resolution, err := canonicalAnnotationTarget(ctx, targetType, rawID)
+	// Resolve on tx, not the pool. This held the annotation's FOR UPDATE lock on
+	// one connection and then reached for a second to resolve the target; with
+	// MaxConns concurrent edits every request owned a locked row and waited for
+	// a connection none of them could release, so the route deadlocked rather
+	// than merely slowed down.
+	resolution, err := canonicalAnnotationTargetOn(ctx, tx, targetType, rawID)
 	if err != nil {
 		return "", CatalogResolution{}, err
 	}

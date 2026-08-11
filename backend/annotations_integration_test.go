@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -263,10 +265,15 @@ func TestAuthorizeAnnotationTargetCanonicalizesLegacyRow(t *testing.T) {
 		RETURNING id::text`, owner).Scan(&annotationID); err != nil {
 		t.Fatalf("seed legacy annotation: %v", err)
 	}
-	oldResolve := resolveCatalogIdentity
-	resolveCatalogIdentity = func(_ context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+	oldResolve := resolveCatalogIdentityOn
+	resolveCatalogIdentityOn = func(_ context.Context, db DBTX, rawID string, surface CatalogSurface) (CatalogResolution, error) {
 		if rawID != "88" || surface != SurfaceLibrary {
 			t.Fatalf("resolve target = %q/%q, want 88/library", rawID, surface)
+		}
+		// The caller holds the annotation's FOR UPDATE lock, so it must hand
+		// its own transaction down rather than let this reach for the pool.
+		if db == nil {
+			t.Fatal("canonicalization resolved on the pool while holding a row lock")
 		}
 		return CatalogResolution{
 			ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub",
@@ -274,7 +281,7 @@ func TestAuthorizeAnnotationTargetCanonicalizesLegacyRow(t *testing.T) {
 			Active: true, Available: true,
 		}, nil
 	}
-	t.Cleanup(func() { resolveCatalogIdentity = oldResolve })
+	t.Cleanup(func() { resolveCatalogIdentityOn = oldResolve })
 
 	req := httptest.NewRequest(http.MethodPatch, "/api/v1/library/annotations/"+annotationID, nil)
 	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: owner, Roles: []string{"Owner"}}))
@@ -293,6 +300,59 @@ func TestAuthorizeAnnotationTargetCanonicalizesLegacyRow(t *testing.T) {
 	}
 	if storedTarget != canonicalID || visibility != "community" || note != "keep this note" {
 		t.Fatalf("stored annotation = target:%q visibility:%q note:%q", storedTarget, visibility, note)
+	}
+}
+
+// canonicalizeAnnotationRow holds a FOR UPDATE lock on one connection while it
+// resolves the target. If that resolve reaches for the pool it needs a second
+// connection, and MaxConns concurrent edits then all wait on connections none
+// of them can release. A one-connection pool reproduces that deterministically
+// and without concurrency: the second acquire has nothing to wait for.
+func TestCanonicalizeAnnotationRowResolvesOnItsOwnTransaction(t *testing.T) {
+	db, owner, _ := annotationFixture(t)
+	var annotationID string
+	if err := db.QueryRow(t.Context(), `
+		INSERT INTO annotations (target_type, target_id, user_id, visibility, note)
+		VALUES ('book', '42', $1::uuid, 'community', 'single connection')
+		RETURNING id::text`, owner).Scan(&annotationID); err != nil {
+		t.Fatalf("seed legacy annotation: %v", err)
+	}
+
+	config, err := pgxpool.ParseConfig(os.Getenv("TELOS_TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatalf("parse fixture database url: %v", err)
+	}
+	config.MaxConns = 1
+	single, err := pgxpool.NewWithConfig(t.Context(), config)
+	if err != nil {
+		t.Fatalf("open single-connection pool: %v", err)
+	}
+	defer single.Close()
+
+	oldDB, oldCatalog := dbPool, catalogRepo
+	dbPool, catalogRepo = single, NewCatalogRepository(single)
+	t.Cleanup(func() { dbPool, catalogRepo = oldDB, oldCatalog })
+
+	// Bounded so a regression fails the test instead of hanging the suite.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	targetType, resolution, err := canonicalizeAnnotationRow(ctx, annotationID)
+	if err != nil {
+		t.Fatalf("canonicalize on a one-connection pool: %v", err)
+	}
+	if targetType != "book" || !looksLikeUUID(resolution.ID) {
+		t.Fatalf("canonicalized = %q/%q, want book and a canonical id", targetType, resolution.ID)
+	}
+
+	// The rewrite must still have been committed, so this is not passing by
+	// skipping the work it is meant to do on one connection.
+	var storedTarget string
+	if err := db.QueryRow(t.Context(), `
+		SELECT target_id FROM annotations WHERE id = $1::uuid`, annotationID).Scan(&storedTarget); err != nil {
+		t.Fatalf("read canonicalized annotation: %v", err)
+	}
+	if storedTarget != resolution.ID {
+		t.Fatalf("stored target = %q, want %q", storedTarget, resolution.ID)
 	}
 }
 
