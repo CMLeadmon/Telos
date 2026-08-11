@@ -4,6 +4,7 @@
 // hash + ClamAV pass before it responds).
 
 import { apiBase } from "@/lib/api";
+import { getServerConfig } from "@/lib/serverConfig";
 
 export type UploadPhase = "uploading" | "scanning";
 
@@ -30,9 +31,16 @@ export function uploadFile(
   extra?: Record<string, string>,
 ): Promise<UploadOutcome> {
   return new Promise((resolve, reject) => {
+    const cfg = getServerConfig();
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${apiBase()}${path}`);
-    xhr.withCredentials = true;
+    if (cfg.mode === "token") {
+      if (cfg.accessToken) {
+        xhr.setRequestHeader("Authorization", `Bearer ${cfg.accessToken}`);
+      }
+    } else {
+      xhr.withCredentials = true;
+    }
     xhr.upload.onprogress = (e) => {
       if (!e.lengthComputable) return;
       const percent = Math.round((e.loaded / e.total) * 100);

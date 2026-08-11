@@ -95,6 +95,21 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
 
+  const contentType = res.headers.get("Content-Type") || "";
+  if (
+    contentType.includes("application/epub+zip") ||
+    contentType.includes("application/pdf") ||
+    contentType.includes("application/octet-stream") ||
+    contentType.includes("application/x-mobipocket-ebook") ||
+    path.endsWith("/content")
+  ) {
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, text.trim() || res.statusText);
+    }
+    return (await res.arrayBuffer()) as unknown as T;
+  }
+
   const text = await res.text().catch(() => "");
   if (!res.ok) {
     throw new ApiError(res.status, text.trim() || res.statusText);

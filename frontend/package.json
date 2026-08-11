@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node dev-server.mjs",
     "build": "next build",
-    "lint": "eslint .",
+    "lint": "eslint . && npm run check:origin-leak",
+    "check:origin-leak": "node scripts/check-origin-leaks.js",
     "generate:client": "openapi-typescript ../backend/api/openapi.json -o src/lib/generated/api-client.ts",
     "test:unit": "vitest run && node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/*.test.mjs",
     "check:a11y-evidence": "node scripts/check-accessibility-evidence.mjs",

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { Book, Rendition } from "epubjs";
-import { api, libraryContentUrl } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { epubProgressPayload, parseStoredLocator } from "@/lib/reader";
 import type { AnnotationLocator } from "@/stores/useAnnotationStore";
@@ -66,10 +66,12 @@ export function EpubReader({
 
     Promise.all([
       import("epubjs"),
-      fetch(libraryContentUrl(book.id), { credentials: "include", cache: "no-store" }).then((r) => {
-        if (!r.ok) throw new Error(`content fetch failed (${r.status})`);
-        return r.arrayBuffer();
-      }),
+      // no-store was on the raw fetch this replaced. A replaced book file keeps
+      // its URL, so a cached copy would open the previous edition.
+      api<ArrayBuffer>(
+        `/api/v1/library/books/${encodeURIComponent(book.id)}/content`,
+        { cache: "no-store" },
+      ),
       api<Progress>(
         `/api/v1/library/books/${encodeURIComponent(book.id)}/progress`,
       ),

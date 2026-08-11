@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { api, apiBase, avatarUrl, ApiError } from "@/lib/api";
+import { api, avatarUrl, ApiError } from "@/lib/api";
+import { uploadFile } from "@/lib/upload";
 import { useAuthStore } from "@/stores/useAuthStore";
 
 export function ProfileSection() {
@@ -36,22 +37,14 @@ export function ProfileSection() {
     setBusy(true);
     setMsg(null);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      // Multipart request — the browser sets the Content-Type boundary itself.
-      const res = await fetch(`${apiBase()}/api/v1/users/me/avatar`, {
-        method: "POST",
-        credentials: "include",
-        body: form,
-      });
-      if (!res.ok) throw new ApiError(res.status, (await res.text()).trim());
+      await uploadFile("/api/v1/users/me/avatar", file, () => {});
       await fetchMe();
       setCacheBust((n) => n + 1);
       setMsg({ ok: true, text: "Avatar updated (scanned clean)." });
     } catch (err) {
       setMsg({
         ok: false,
-        text: err instanceof ApiError ? err.message : "Upload failed.",
+        text: err instanceof Error ? err.message : "Upload failed.",
       });
     } finally {
       setBusy(false);

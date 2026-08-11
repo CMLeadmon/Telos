@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { PictureInPicture2 } from "lucide-react";
 import type Hls from "hls.js";
-import { apiBase } from "@/lib/api";
+import { getServerConfig } from "@/lib/serverConfig";
 
 const RATES = [1, 1.25, 1.5, 2] as const;
 
@@ -41,6 +41,13 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
     if (!video) return;
     setError(null);
 
+    // Token mode does not reach this path. A media element fetches its own
+    // source and there is no hook to attach an Authorization header, so audio
+    // and native HLS (Safari) can only authenticate by cookie or by a
+    // credential carried in the URL itself. The xhrSetup below covers hls.js
+    // because that goes through XHR; this branch does not. Remote playback
+    // needs a signed locator — the gateway already signs HLS locators — and
+    // that belongs to S4, not here.
     if (audio || video.canPlayType("application/vnd.apple.mpegurl")) {
       video.src = src;
       return () => {
@@ -57,10 +64,16 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
         setError("hls playback is not supported in this browser");
         return;
       }
+      const cfg = getServerConfig();
       hls = new HlsCtor({
-        // Include the session cookie on manifest and segment requests.
         xhrSetup: (xhr) => {
-          xhr.withCredentials = true;
+          if (cfg.mode === "token") {
+            if (cfg.accessToken) {
+              xhr.setRequestHeader("Authorization", `Bearer ${cfg.accessToken}`);
+            }
+          } else {
+            xhr.withCredentials = true;
+          }
         },
       });
       hls.on(HlsCtor.Events.ERROR, (_event, data) => {
@@ -90,7 +103,13 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
             controls
             autoPlay
             playsInline
-            crossOrigin={apiBase() ? "use-credentials" : undefined}
+            crossOrigin={
+              getServerConfig().baseUrl
+                ? getServerConfig().mode === "token"
+                  ? "anonymous"
+                  : "use-credentials"
+                : undefined
+            }
             data-testid="stream-video"
           />
           <div className="player-extras">

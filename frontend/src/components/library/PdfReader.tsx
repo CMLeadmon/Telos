@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, ZoomIn, ZoomOut } from "lucide-react";
 import { api, libraryContentUrl } from "@/lib/api";
+import { getServerConfig } from "@/lib/serverConfig";
 import type { LibraryBook } from "@/stores/useLibraryStore";
 import { clampPage, clampZoom, pdfProgressPayload, parseStoredLocator } from "@/lib/reader";
 import { normalizeRects, selectionText } from "@/lib/pdfSelection";
@@ -97,10 +98,19 @@ export function PdfReader({
         const progress = await api<Progress>(
           `/api/v1/library/books/${encodeURIComponent(book.id)}/progress`,
         );
-        // withCredentials lets PDF.js issue authenticated range requests.
+        // PDF.js issues its own range requests, so it has to be handed the same
+        // credential the fetch helper would have attached. Hardcoding
+        // withCredentials sent cookies in token mode, where they do not apply,
+        // and no Authorization header at all.
+        const cfg = getServerConfig();
+        const usesToken = cfg.mode === "token";
         const doc = (await pdfjs.getDocument({
           url: libraryContentUrl(book.id),
-          withCredentials: true,
+          withCredentials: !usesToken,
+          httpHeaders:
+            usesToken && cfg.accessToken
+              ? { Authorization: `Bearer ${cfg.accessToken}` }
+              : undefined,
         }).promise) as unknown as PdfDoc;
         if (disposed) {
           void doc.destroy();
