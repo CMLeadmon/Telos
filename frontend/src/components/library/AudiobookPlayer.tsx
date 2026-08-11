@@ -143,10 +143,23 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
     [itemId, currentTrackIndex],
   );
 
+  // The <audio> element reports position within the current track, but the
+  // saved percent is against the whole book. Without this offset the bar reset
+  // to zero at every track boundary and a finished book read as one track's
+  // worth of progress. cumulativeStartMs was already on every track and simply
+  // unused.
+  const currentTrackStartMs =
+    info?.tracks?.[currentTrackIndex]?.cumulativeStartMs ?? 0;
+  const toAbsolutePositionMs = useCallback(
+    (positionMs: number) => currentTrackStartMs + positionMs,
+    [currentTrackStartMs],
+  );
+
   const { handleTimeUpdate, handlePause, handleEnded } = useMediaProgress({
     itemId,
     durationMs: info?.durationMs || durationSec * 1000,
     onSaveProgress: saveProgressToApi,
+    toAbsolutePositionMs,
   });
 
   const togglePlay = () => {

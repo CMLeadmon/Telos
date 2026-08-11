@@ -56,6 +56,41 @@ describe("useMediaProgress", () => {
     expect(onSaveProgress).toHaveBeenCalledTimes(2);
   });
 
+  // A two-hour book in two one-hour tracks. Position is reported per track, so
+  // without the offset the percent collapsed to zero at each boundary and a
+  // finished book saved as 0.5.
+  it("scores a multi-track item against the whole timeline, not the current track", async () => {
+    const onSaveProgress = vi.fn().mockResolvedValue(undefined);
+    const trackStartMs = 3_600_000;
+    const { result } = renderHook(() =>
+      useMediaProgress({
+        itemId: "book-1",
+        durationMs: 7_200_000,
+        onSaveProgress,
+        toAbsolutePositionMs: (positionMs) => trackStartMs + positionMs,
+      }),
+    );
+
+    // The very start of track two is halfway through the book, not zero.
+    await act(async () => {
+      await result.current.saveCurrentProgress(0, { trackIndex: 1 });
+    });
+    expect(onSaveProgress.mock.calls[0][1]).toBeCloseTo(0.5, 5);
+
+    // The end of the final track is the end of the book.
+    await act(async () => {
+      await result.current.saveCurrentProgress(3_600_000, { trackIndex: 1 });
+    });
+    expect(onSaveProgress.mock.calls[1][1]).toBeCloseTo(1.0, 5);
+
+    // The locator still reports the position within the track, which is the
+    // shape the gateway validates.
+    expect(onSaveProgress.mock.calls[1][0]).toEqual({
+      positionMs: 3_600_000,
+      trackIndex: 1,
+    });
+  });
+
   it("carries the caller's locator fields through", async () => {
     const { result, onSaveProgress } = setup(60000);
 

@@ -5,12 +5,22 @@ export interface MediaProgressOptions {
   durationMs?: number;
   onSaveProgress: (locator: Record<string, unknown>, percent: number, completed: boolean) => Promise<void>;
   intervalMs?: number;
+  /**
+   * Maps a reported position onto the whole item's timeline. A multi-track
+   * audiobook reports position within the current track while `durationMs` is
+   * the whole book, so the two are only comparable after this mapping. The
+   * locator still carries the raw per-track position, which is what the
+   * gateway's audiobook locator contract expects. Defaults to identity for
+   * single-timeline media.
+   */
+  toAbsolutePositionMs?: (positionMs: number) => number;
 }
 
 export function useMediaProgress({
   durationMs = 0,
   onSaveProgress,
   intervalMs = 15000,
+  toAbsolutePositionMs,
 }: MediaProgressOptions) {
   const lastSavedRef = useRef<{ positionMs: number; percent: number; time: number }>({
     positionMs: 0,
@@ -20,8 +30,11 @@ export function useMediaProgress({
 
   const saveCurrentProgress = useCallback(
     async (positionMs: number, locatorExtra: Record<string, unknown> = {}, isCompleted = false) => {
-      const total = durationMs > 0 ? durationMs : positionMs;
-      const percent = total > 0 ? Math.min(1.0, positionMs / total) : 0;
+      const absolutePositionMs = toAbsolutePositionMs
+        ? toAbsolutePositionMs(positionMs)
+        : positionMs;
+      const total = durationMs > 0 ? durationMs : absolutePositionMs;
+      const percent = total > 0 ? Math.min(1.0, absolutePositionMs / total) : 0;
       // Only an `ended` event or an explicit completion action completes an
       // item. Percentage alone must not — a member who scrubs near the end and
       // stops has not finished, and a silently completed item drops out of
@@ -45,7 +58,7 @@ export function useMediaProgress({
         console.error("Failed to save media progress:", err);
       }
     },
-    [durationMs, onSaveProgress]
+    [durationMs, onSaveProgress, toAbsolutePositionMs]
   );
 
   const handleTimeUpdate = useCallback(
