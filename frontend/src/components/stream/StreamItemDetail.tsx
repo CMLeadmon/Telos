@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Play, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, assetUrl } from "@/lib/api";
 import {
   type MediaDetail,
   type MediaItem,
@@ -132,7 +132,7 @@ export function StreamItemDetail({ itemId, onClose, onPlay }: StreamItemDetailPr
           {detail.coverUrl && (
             <div className="idetail-cover">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={detail.coverUrl} alt="" aria-hidden="true" />
+              <img src={assetUrl(detail.coverUrl)} alt="" aria-hidden="true" />
             </div>
           )}
 

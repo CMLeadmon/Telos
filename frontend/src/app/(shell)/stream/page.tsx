@@ -10,7 +10,7 @@ import {
   Share2,
   X,
 } from "lucide-react";
-import { api, ApiError, apiBase } from "@/lib/api";
+import { api, ApiError, apiBase, assetUrl } from "@/lib/api";
 import {
   useMediaStore,
   type MediaItem,
@@ -73,7 +73,7 @@ function PosterGrid({
             >
               {item.coverUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img className="pcover" src={item.coverUrl} alt="" aria-hidden="true" />
+                <img className="pcover" src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
               ) : (
                 <div className="motif" />
               )}

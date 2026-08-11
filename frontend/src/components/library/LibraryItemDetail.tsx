@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import type { LibraryItem } from "@/stores/useLibraryStore";
+import { assetUrl } from "@/lib/api";
 
 interface LibraryItemDetailProps {
   item: LibraryItem | null;
@@ -68,7 +69,7 @@ export function LibraryItemDetail({ item, onClose, onOpenItem }: LibraryItemDeta
           <div className="idetail-cover">
             {item.coverUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img src={item.coverUrl} alt="" aria-hidden="true" />
+              <img src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
             ) : (
               <span className="nocover">no cover</span>
             )}

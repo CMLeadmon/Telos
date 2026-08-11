@@ -1,5 +1,6 @@
 import { Share2 } from "lucide-react";
 import type { MediaItem } from "@/stores/useMediaStore";
+import { assetUrl } from "@/lib/api";
 import { DARK_TEXT, posterClass, posterMeta } from "./poster";
 
 interface MediaShelfProps {
@@ -35,7 +36,7 @@ export function MediaShelf({ title, items, onSelectItem }: MediaShelfProps) {
               >
                 {item.coverUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img className="pcover" src={item.coverUrl} alt="" aria-hidden="true" />
+                  <img className="pcover" src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
                 ) : (
                   <div className="motif" />
                 )}

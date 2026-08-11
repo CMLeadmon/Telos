@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ImageOff, Info, Music, Settings, Share2 } from "lucide-react";
-import { api, apiBase, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { api, apiBase, assetUrl, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
   type LibraryBook,
@@ -173,7 +173,7 @@ function BookCard({
           <ImageOff size={28} />
         ) : (
           <img
-            src={libraryCoverUrl(book.id)}
+            src={assetUrl(libraryCoverUrl(book.id))}
             alt=""
             loading="lazy"
             onError={() => setCoverBroken(true)}

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ImageOff, X } from "lucide-react";
-import { api, libraryCoverUrl } from "@/lib/api";
+import { api, assetUrl, libraryCoverUrl } from "@/lib/api";
 import {
   asList,
   type LibraryBook,
@@ -466,7 +466,7 @@ export function BookManageModal({
                   <ImageOff size={28} />
                 ) : (
                   <img
-                    src={`${libraryCoverUrl(book.id)}?v=${coverRevision}`}
+                    src={assetUrl(`${libraryCoverUrl(book.id)}?v=${coverRevision}`)}
                     alt={`Cover of ${freshBook.title}`}
                     onError={() => setCoverBroken(true)}
                   />
