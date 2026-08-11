@@ -69,8 +69,26 @@ func themedFrontend(next http.Handler) http.Handler {
 			return
 		}
 
+		// A 304 carries no body to stamp, and net/http strips Content-Type from
+		// it, so the theme rewrite and the Vary below would both be skipped: a
+		// client that cached the document before choosing a theme would keep
+		// revalidating into the default-theme copy — exactly the flash this
+		// middleware exists to remove. Documents are small and there are a
+		// handful of them; assets, which are the ones worth revalidating, never
+		// reach this middleware. Today the embedded FS reports a zero modtime
+		// so net/http emits no validator and never answers 304 on its own, but
+		// that is a property of embed.FS, not of this handler — serving the
+		// same export from a real directory restores both.
+		conditional := r
+		if r.Header.Get("If-None-Match") != "" || r.Header.Get("If-Modified-Since") != "" || r.Header.Get("If-Range") != "" {
+			conditional = r.Clone(r.Context())
+			conditional.Header.Del("If-None-Match")
+			conditional.Header.Del("If-Modified-Since")
+			conditional.Header.Del("If-Range")
+		}
+
 		cap := &themeCapture{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(cap, r)
+		next.ServeHTTP(cap, conditional)
 
 		body := cap.buf.Bytes()
 		isHTML := strings.HasPrefix(cap.Header().Get("Content-Type"), "text/html")
