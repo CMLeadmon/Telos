@@ -60,6 +60,13 @@ func TestReconcileCompleteCatalogEnumerationObservesThenScansThenBackfills(t *te
 	if report.Observed != 2 || report.Scans["library-a"].Seen != 1 || report.Backfill.Updated != 1 {
 		t.Fatalf("report = %+v", report)
 	}
+	// Enumeration callers read the canonical identity from here. Dropping it
+	// would send them back to observing every record a second time.
+	if len(report.Resolutions) != 2 ||
+		report.Resolutions["book-1"].ID != "book-1" ||
+		report.Resolutions["book-2"].ID != "book-2" {
+		t.Fatalf("resolutions = %+v, want the identity Observe returned for each record", report.Resolutions)
+	}
 }
 
 func TestReconcileCompleteCatalogEnumerationDoesNotScanOrBackfillAfterObservationFailure(t *testing.T) {

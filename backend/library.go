@@ -259,31 +259,20 @@ func allowedGrimmoryLibraryID(libraryID string) (string, bool) {
 	return libraryID, ok
 }
 
-var errUnsupportedGrimmoryFormat = errors.New("unsupported Grimmory book format")
-
-func canonicalizeGrimmoryBook(ctx context.Context, book LibraryBook) (LibraryBook, error) {
-	kind, ok := grimmoryCatalogKind(book.Format)
-	if !ok {
-		return LibraryBook{}, errUnsupportedGrimmoryFormat
-	}
-	libraryID, ok := allowedGrimmoryLibraryID(book.LibraryID)
-	if !ok {
-		return LibraryBook{}, errBookNotAuthorized
-	}
-	resolution, err := observeCatalogIdentity(ctx, CatalogObservation{
-		Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(book.UpstreamID, 10),
-		LibraryID: libraryID, Surface: SurfaceLibrary, Kind: kind,
-	})
-	if err != nil {
-		return LibraryBook{}, err
-	}
-	current, err := resolveCatalogIdentity(ctx, resolution.ID, SurfaceLibrary)
-	if err != nil || current.Provider != ProviderGrimmory || current.UpstreamID != strconv.FormatInt(book.UpstreamID, 10) ||
+// authorizeCanonicalGrimmoryBook is the post-observation authorization gate: a
+// book is publishable only if the catalog item's *active* source is still this
+// very Grimmory record, and still available. current is the item's active-source
+// resolution; found reports whether the item has an active source at all. A
+// missing one is a denial — it stands in for the resolve error the previous
+// per-book path folded into errBookNotAuthorized, so an item whose active source
+// moved to Stream stays suppressed here exactly as it did there.
+func authorizeCanonicalGrimmoryBook(book LibraryBook, current CatalogResolution, found bool) (LibraryBook, error) {
+	if !found || current.Provider != ProviderGrimmory ||
+		current.UpstreamID != strconv.FormatInt(book.UpstreamID, 10) ||
 		!current.Active || !current.Available {
 		return LibraryBook{}, errBookNotAuthorized
 	}
 	book.ID = current.ID
-	book.LibraryID = libraryID
 	return book, nil
 }
 
@@ -322,8 +311,14 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 		return providerFailure(errors.New("Grimmory catalog enumeration exceeded the safe record limit"))
 	}
 	_ = observeCatalogReconcileDuration(ProviderGrimmory, CatalogOperationEnumerate, CatalogResultSuccess, catalogMetricSince(started))
-	books := make([]LibraryBook, 0, len(raw))
 	observations := make([]CatalogObservation, 0, len(raw))
+	// candidates runs index-parallel to observations so the second pass can pair
+	// each record with the identity the reconciliation returned for it. Nothing
+	// here touches the database: every book used to cost an Observe plus a
+	// canonical re-resolve inside this loop, and the reconciliation below then
+	// observed the whole set a second time — three sequential round trips per
+	// record, on four member-facing routes, with no cache in front of them.
+	candidates := make([]LibraryBook, 0, len(raw))
 	unsupported := 0
 	missingLibrary := 0
 	librarySet := map[string]struct{}{}
@@ -354,19 +349,12 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 			continue
 		}
 		librarySet[libraryID] = struct{}{}
+		mapped.LibraryID = libraryID
 		observations = append(observations, CatalogObservation{
 			Provider: ProviderGrimmory, UpstreamID: strconv.FormatInt(mapped.UpstreamID, 10),
 			LibraryID: libraryID, Surface: SurfaceLibrary, Kind: kind,
 		})
-
-		book, err := canonicalizeGrimmoryBook(ctx, mapped)
-		if errors.Is(err, errBookNotAuthorized) || errors.Is(err, errUnsupportedGrimmoryFormat) {
-			continue
-		}
-		if err != nil {
-			return nil, libraryCatalogError(err)
-		}
-		books = append(books, book)
+		candidates = append(candidates, mapped)
 	}
 	if unsupported > 0 {
 		log.Printf("catalog normalization provider=grimmory unsupported=%d", unsupported)
@@ -385,6 +373,39 @@ func fetchGrimmoryBooks(ctx context.Context) ([]LibraryBook, error) {
 		return nil, libraryCatalogError(err)
 	}
 	log.Printf("catalog reconciliation provider=grimmory observed=%d scans=%d backfill_updated=%d", report.Observed, len(report.Scans), report.Backfill.Updated)
+
+	// One batched read now stands in for the per-book canonical re-resolve.
+	// Every book still passes the same active-source check; it just costs a
+	// single round trip for the whole catalog instead of one per record. The
+	// check also runs against post-sweep state rather than pre-sweep state,
+	// which is strictly more current.
+	itemIDs := make([]string, 0, len(candidates))
+	for i := range candidates {
+		if resolution, observed := report.Resolutions[observations[i].UpstreamID]; observed {
+			itemIDs = append(itemIDs, resolution.ID)
+		}
+	}
+	active, err := resolveCatalogIdentitiesFor(ctx, itemIDs, SurfaceLibrary)
+	if err != nil {
+		return nil, libraryCatalogError(err)
+	}
+
+	books := make([]LibraryBook, 0, len(candidates))
+	for i, mapped := range candidates {
+		resolution, observed := report.Resolutions[observations[i].UpstreamID]
+		if !observed {
+			continue
+		}
+		current, found := active[resolution.ID]
+		book, err := authorizeCanonicalGrimmoryBook(mapped, current, found)
+		if errors.Is(err, errBookNotAuthorized) {
+			continue
+		}
+		if err != nil {
+			return nil, libraryCatalogError(err)
+		}
+		books = append(books, book)
+	}
 	return books, nil
 }
 

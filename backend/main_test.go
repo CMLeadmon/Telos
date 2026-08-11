@@ -27,6 +27,7 @@ func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
 	t.Helper()
 	state := &catalogIdentityTestState{items: map[string]CatalogResolution{}}
 	oldObserve, oldResolve, oldReconcile := observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration
+	oldResolveMany := resolveCatalogIdentitiesFor
 	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
 		key := string(in.Provider) + "\x00" + in.UpstreamID
 		if existing, ok := state.items[key]; ok {
@@ -56,11 +57,39 @@ func installCatalogIdentityTest(t *testing.T) *catalogIdentityTestState {
 		}
 		return observeCatalogIdentity(context.Background(), observation)
 	}
-	reconcileCatalogEnumeration = func(_ context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
-		return CatalogReconciliationReport{Observed: len(enumeration.Observations), Scans: map[string]CatalogScanReport{}}, nil
+	// Mirror ReconcileCompleteCatalogEnumeration: the real pass observes every
+	// record and hands the identity it assigned back in Resolutions. A double
+	// that returned an empty report would let enumeration callers look healthy
+	// while publishing nothing.
+	reconcileCatalogEnumeration = func(ctx context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
+		report := CatalogReconciliationReport{
+			Observed:    len(enumeration.Observations),
+			Scans:       map[string]CatalogScanReport{},
+			Resolutions: map[string]CatalogResolution{},
+		}
+		for _, observation := range enumeration.Observations {
+			resolution, err := observeCatalogIdentity(ctx, observation)
+			if err != nil {
+				return report, err
+			}
+			report.Resolutions[observation.UpstreamID] = resolution
+		}
+		return report, nil
+	}
+	resolveCatalogIdentitiesFor = func(_ context.Context, ids []string, surface CatalogSurface) (map[string]CatalogResolution, error) {
+		out := make(map[string]CatalogResolution, len(ids))
+		for _, id := range ids {
+			for _, item := range state.items {
+				if item.ID == id && item.Surface == surface {
+					out[id] = item
+				}
+			}
+		}
+		return out, nil
 	}
 	t.Cleanup(func() {
 		observeCatalogIdentity, resolveCatalogIdentity, reconcileCatalogEnumeration = oldObserve, oldResolve, oldReconcile
+		resolveCatalogIdentitiesFor = oldResolveMany
 	})
 	return state
 }

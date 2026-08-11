@@ -88,6 +88,28 @@ var (
 		}
 		return catalogRepo.ResolveFor(ctx, rawID, surface)
 	}
+	// resolveCatalogIdentitiesFor is the batched peer of resolveCatalogIdentity.
+	// It drops items whose active source sits on another surface rather than
+	// reporting errCatalogWrongSurface per item, because every caller already
+	// folds that error into a denial.
+	resolveCatalogIdentitiesFor = func(ctx context.Context, ids []string, surface CatalogSurface) (map[string]CatalogResolution, error) {
+		if catalogRepo == nil {
+			return nil, errors.New("catalog repository is not initialized")
+		}
+		if !validCatalogSurface(surface) {
+			return nil, fmt.Errorf("%w: surface", errCatalogInvalid)
+		}
+		resolved, err := catalogRepo.ResolveManyCanonical(ctx, ids)
+		if err != nil {
+			return nil, err
+		}
+		for id, resolution := range resolved {
+			if resolution.Surface != surface {
+				delete(resolved, id)
+			}
+		}
+		return resolved, nil
+	}
 	getMemberContinuity = func(ctx context.Context, userID, itemID string) (MemberProgress, error) {
 		if continuityRepo == nil {
 			return MemberProgress{}, errors.New("continuity repository is not initialized")

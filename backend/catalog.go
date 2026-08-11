@@ -360,6 +360,59 @@ func (r *CatalogRepository) resolveCanonical(ctx context.Context, id string) (Ca
 	return out, err
 }
 
+// ResolveManyCanonical is the batched form of resolveCanonical: it returns the
+// active source for each canonical item ID in one round trip. An item with no
+// active source is simply absent from the result, which callers must treat
+// exactly as resolveCanonical's errCatalogNotFound — absence is a denial, never
+// a pass. Surface is returned rather than filtered so callers apply the same
+// check ResolveFor does.
+func (r *CatalogRepository) ResolveManyCanonical(ctx context.Context, ids []string) (map[string]CatalogResolution, error) {
+	if len(ids) > 100000 {
+		return nil, fmt.Errorf("%w: identifier batch", errCatalogInvalid)
+	}
+	out := make(map[string]CatalogResolution, len(ids))
+	unique := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if !looksLikeUUID(id) {
+			return nil, fmt.Errorf("%w: identifier", errCatalogInvalid)
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT item.id::text, item.surface, item.kind, source.provider,
+			source.upstream_id, source.upstream_library_id, source.active,
+			source.available, item.revision
+		FROM catalog_items AS item
+		JOIN catalog_sources AS source ON source.catalog_item_id = item.id
+		WHERE item.id = ANY($1::uuid[]) AND source.active`, unique)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var resolution CatalogResolution
+		if err := rows.Scan(
+			&resolution.ID, &resolution.Surface, &resolution.Kind, &resolution.Provider,
+			&resolution.UpstreamID, &resolution.LibraryID, &resolution.Active,
+			&resolution.Available, &resolution.Revision); err != nil {
+			return nil, err
+		}
+		out[resolution.ID] = resolution
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *CatalogRepository) ResolveFor(ctx context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
 	if !validCatalogSurface(surface) {
 		return CatalogResolution{}, fmt.Errorf("%w: surface", errCatalogInvalid)

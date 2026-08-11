@@ -26,6 +26,12 @@ type CatalogReconciliationReport struct {
 	Observed int
 	Scans    map[string]CatalogScanReport
 	Backfill CatalogBackfillReport
+	// Resolutions is the canonical identity Observe already returned for each
+	// observation, keyed by upstream ID — unique per provider by
+	// uq_catalog_provider_upstream. Enumeration callers that need the canonical
+	// ID read it from here instead of observing every record a second time to
+	// recover what this pass had already computed.
+	Resolutions map[string]CatalogResolution
 }
 
 type catalogEnumerationRepository interface {
@@ -182,7 +188,10 @@ func ReconcileCompleteCatalogEnumeration(
 	enumeration CatalogEnumeration,
 	backfill catalogBackfillFunc,
 ) (CatalogReconciliationReport, error) {
-	report := CatalogReconciliationReport{Scans: make(map[string]CatalogScanReport)}
+	report := CatalogReconciliationReport{
+		Scans:       make(map[string]CatalogScanReport),
+		Resolutions: make(map[string]CatalogResolution, len(enumeration.Observations)),
+	}
 	if repo == nil || backfill == nil || !validCatalogProvider(enumeration.Provider) {
 		return report, fmt.Errorf("%w: catalog enumeration", errCatalogInvalid)
 	}
@@ -192,9 +201,11 @@ func ReconcileCompleteCatalogEnumeration(
 		if observation.Provider != enumeration.Provider {
 			return report, fmt.Errorf("%w: mixed providers", errCatalogInvalid)
 		}
-		if _, err := repo.Observe(ctx, observation); err != nil {
+		resolution, err := repo.Observe(ctx, observation)
+		if err != nil {
 			return report, err
 		}
+		report.Resolutions[observation.UpstreamID] = resolution
 		report.Observed++
 		seenByLibrary[observation.LibraryID] = append(seenByLibrary[observation.LibraryID], observation.UpstreamID)
 	}

@@ -420,50 +420,125 @@ func TestGrimmoryCatalogKindDoesNotMislabelUnknownFormats(t *testing.T) {
 	}
 }
 
-func TestCanonicalizeGrimmoryBookSuppressesInactiveAliasAfterStreamCutover(t *testing.T) {
-	const canonicalID = "00000000-0000-4000-8000-000000000211"
-	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer
+// serveGrimmoryEnumeration installs a Grimmory whose /api/v1/books returns the
+// given document, and disables the library allowlist so these tests exercise
+// only the canonical-identity gate.
+func serveGrimmoryEnumeration(t *testing.T, document string) {
+	t.Helper()
+	cleanup := setupManagementGrimmory(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/v1/books" {
+			io.WriteString(w, document)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	oldAuthorizer := grimmoryAuthorizer
 	grimmoryAuthorizer = nil
-	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
-		return CatalogResolution{
-			ID: canonicalID, Surface: SurfaceLibrary, Kind: in.Kind,
-			Provider: ProviderGrimmory, UpstreamID: in.UpstreamID, LibraryID: in.LibraryID,
-			Active: false, Available: true,
+	t.Cleanup(func() {
+		grimmoryAuthorizer = oldAuthorizer
+		cleanup()
+	})
+}
+
+func TestGrimmoryEnumerationSuppressesInactiveAliasAfterStreamCutover(t *testing.T) {
+	const canonicalID = "00000000-0000-4000-8000-000000000211"
+	serveGrimmoryEnumeration(t, `[{"id":211,"libraryId":1,"metadata":{"title":"Cut over"},"primaryFile":{"bookType":"EPUB"}}]`)
+	reconcileCatalogEnumeration = func(_ context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{
+			Observed: len(enumeration.Observations),
+			Scans:    map[string]CatalogScanReport{},
+			// Deliberately flagged active and available: the reconciliation only
+			// reports the source it just observed, so this is what a healthy
+			// observation of a cut-over book looks like. Suppression must come
+			// from the active-source lookup below and nowhere else, or the test
+			// would pass without exercising the gate at all.
+			Resolutions: map[string]CatalogResolution{"211": {
+				ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub",
+				Provider: ProviderGrimmory, UpstreamID: "211", LibraryID: "1",
+				Active: true, Available: true,
+			}},
 		}, nil
 	}
-	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
-		return CatalogResolution{}, errCatalogWrongSurface
+	// The item's active source moved to Stream, so a Library-surface resolve
+	// finds no active library source for it — absence must read as a denial.
+	resolveCatalogIdentitiesFor = func(context.Context, []string, CatalogSurface) (map[string]CatalogResolution, error) {
+		return map[string]CatalogResolution{}, nil
 	}
-	t.Cleanup(func() {
-		observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer = oldObserve, oldResolve, oldAuthorizer
-	})
 
-	book := LibraryBook{UpstreamID: 211, LibraryID: "books", Title: "Cut over", Format: "EPUB"}
-	if _, err := canonicalizeGrimmoryBook(t.Context(), book); err == nil {
-		t.Fatal("inactive Grimmory alias remained visible after active source moved to Stream")
+	books, err := fetchGrimmoryBooks(t.Context())
+	if err != nil {
+		t.Fatalf("fetch enumeration: %v", err)
+	}
+	if len(books) != 0 {
+		t.Fatalf("books = %+v, want the cut-over alias suppressed", books)
 	}
 }
 
-func TestCanonicalizeGrimmoryBookPublishesAliasAfterLibraryRollback(t *testing.T) {
+func TestGrimmoryEnumerationPublishesAliasAfterLibraryRollback(t *testing.T) {
 	const canonicalID = "00000000-0000-4000-8000-000000000212"
-	oldObserve, oldResolve, oldAuthorizer := observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer
-	grimmoryAuthorizer = nil
-	observeCatalogIdentity = func(_ context.Context, in CatalogObservation) (CatalogResolution, error) {
-		return CatalogResolution{ID: canonicalID, Provider: in.Provider, UpstreamID: in.UpstreamID, LibraryID: in.LibraryID, Surface: in.Surface, Kind: in.Kind}, nil
-	}
-	resolveCatalogIdentity = func(context.Context, string, CatalogSurface) (CatalogResolution, error) {
-		return CatalogResolution{
-			ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub", Provider: ProviderGrimmory,
-			UpstreamID: "212", LibraryID: "books", Active: true, Available: true,
+	serveGrimmoryEnumeration(t, `[{"id":212,"libraryId":1,"metadata":{"title":"Rolled back"},"primaryFile":{"bookType":"EPUB"}}]`)
+	reconcileCatalogEnumeration = func(_ context.Context, enumeration CatalogEnumeration) (CatalogReconciliationReport, error) {
+		return CatalogReconciliationReport{
+			Observed: len(enumeration.Observations),
+			Scans:    map[string]CatalogScanReport{},
+			Resolutions: map[string]CatalogResolution{"212": {
+				ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub",
+				Provider: ProviderGrimmory, UpstreamID: "212", LibraryID: "1",
+				Active: true, Available: true,
+			}},
 		}, nil
 	}
-	t.Cleanup(func() {
-		observeCatalogIdentity, resolveCatalogIdentity, grimmoryAuthorizer = oldObserve, oldResolve, oldAuthorizer
-	})
+	resolveCatalogIdentitiesFor = func(context.Context, []string, CatalogSurface) (map[string]CatalogResolution, error) {
+		return map[string]CatalogResolution{canonicalID: {
+			ID: canonicalID, Surface: SurfaceLibrary, Kind: "epub", Provider: ProviderGrimmory,
+			UpstreamID: "212", LibraryID: "1", Active: true, Available: true,
+		}}, nil
+	}
 
-	book, err := canonicalizeGrimmoryBook(t.Context(), LibraryBook{UpstreamID: 212, LibraryID: "books", Title: "Rolled back", Format: "EPUB"})
-	if err != nil || book.ID != canonicalID {
-		t.Fatalf("rollback book = %+v, err=%v", book, err)
+	books, err := fetchGrimmoryBooks(t.Context())
+	if err != nil {
+		t.Fatalf("fetch enumeration: %v", err)
+	}
+	if len(books) != 1 || books[0].ID != canonicalID {
+		t.Fatalf("rollback books = %+v, want one book at %s", books, canonicalID)
+	}
+}
+
+// The enumeration used to cost three sequential round trips per record — an
+// Observe and a canonical re-resolve per book, then a second Observe of the
+// whole set inside the reconciliation — on four uncached member routes. Assert
+// the per-book resolve is gone and the batch runs once, while still requiring
+// every book to come back so the test cannot pass by publishing nothing.
+func TestGrimmoryEnumerationResolvesEveryBookInOneBatchWithNoPerBookLookup(t *testing.T) {
+	serveGrimmoryEnumeration(t, `[
+		{"id":213,"libraryId":1,"metadata":{"title":"One"},"primaryFile":{"bookType":"EPUB"}},
+		{"id":214,"libraryId":1,"metadata":{"title":"Two"},"primaryFile":{"bookType":"PDF"}},
+		{"id":215,"libraryId":1,"metadata":{"title":"Three"},"primaryFile":{"bookType":"EPUB"}}
+	]`)
+	perBookResolves, batchResolves := 0, 0
+	perBook := resolveCatalogIdentity
+	resolveCatalogIdentity = func(ctx context.Context, rawID string, surface CatalogSurface) (CatalogResolution, error) {
+		perBookResolves++
+		return perBook(ctx, rawID, surface)
+	}
+	batch := resolveCatalogIdentitiesFor
+	resolveCatalogIdentitiesFor = func(ctx context.Context, ids []string, surface CatalogSurface) (map[string]CatalogResolution, error) {
+		batchResolves++
+		return batch(ctx, ids, surface)
+	}
+
+	books, err := fetchGrimmoryBooks(t.Context())
+	if err != nil {
+		t.Fatalf("fetch enumeration: %v", err)
+	}
+	if len(books) != 3 {
+		t.Fatalf("books = %d, want all three published", len(books))
+	}
+	if perBookResolves != 0 {
+		t.Fatalf("per-book canonical resolves = %d, want the enumeration to make none", perBookResolves)
+	}
+	if batchResolves != 1 {
+		t.Fatalf("batched resolves = %d, want exactly one for the whole catalog", batchResolves)
 	}
 }
 
