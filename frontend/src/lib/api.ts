@@ -2,7 +2,7 @@
 // the Go gateway. The development server proxies these same paths to the local
 // gateway, so browsers never need direct access to an additional port.
 
-import { getServerConfig } from "@/lib/serverConfig";
+import { getServerConfig, normalizeBaseUrl } from "@/lib/serverConfig";
 
 export function apiBase(): string {
   return getServerConfig().baseUrl;
@@ -55,6 +55,60 @@ export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
   }
+}
+
+export interface NodeProbe {
+  version: string | null;
+  minClientVersion: string | null;
+}
+
+/**
+ * Probes a candidate node before it becomes the configured one.
+ *
+ * api() resolves its origin from getServerConfig(), which is precisely what the
+ * connect screen is still trying to decide, so this takes the base explicitly.
+ * It sends no credentials: the host is unverified at this point and has no
+ * business receiving any. It lives in this module because this is where network
+ * calls are allowed to originate — check-origin-leaks.js fails a raw fetch
+ * anywhere else.
+ */
+export async function probeNode(
+  baseUrl: string,
+  timeoutMs = 5000,
+): Promise<NodeProbe> {
+  const base = normalizeBaseUrl(baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/v1/health`, { signal: controller.signal });
+  } catch {
+    throw new ApiError(
+      0,
+      "Cannot reach this Telos node. Check the server address and try again.",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // A health report is served on both 200 and 503 — a degraded node is still a
+  // Telos node, and refusing to connect to one would leave the member with no
+  // way in precisely when something is wrong.
+  const body = (await res.json().catch(() => null)) as {
+    status?: string;
+    version?: string;
+    minClientVersion?: string;
+  } | null;
+  if (!body || typeof body.status !== "string") {
+    throw new ApiError(
+      res.status,
+      "That address answered, but not like a Telos node.",
+    );
+  }
+  return {
+    version: body.version ?? null,
+    minClientVersion: body.minClientVersion ?? null,
+  };
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {

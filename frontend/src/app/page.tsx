@@ -11,11 +11,21 @@ import {
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useThemeStore } from "@/stores/useThemeStore";
+import { useConnectionStore } from "@/stores/useConnectionStore";
+import { requiresServerSelection } from "@/lib/serverConfig";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 export default function LandingPage() {
   // The ink mockups set the wordmark in title case, the synthwave ones in caps.
   const wordmark = useThemeStore((s) => (s.theme === "ink" ? "Telos" : "TELOS"));
+  // A native shell has to be told which node to talk to before it can show a
+  // login form. A web build is already being served by its node, so sending it
+  // to /connect would ask which server it is currently talking to.
+  const connectionState = useConnectionStore((s) => s.state);
+  const launchHref =
+    connectionState === "configured" || !requiresServerSelection()
+      ? "/login/"
+      : "/connect/";
   return (
     <div className="page">
       <nav className="lnav">
@@ -31,7 +41,7 @@ export default function LandingPage() {
           </a>
         </div>
         <div className="right">
-          <Link className="btn rose btn-sm" href="/login/">
+          <Link className="btn rose btn-sm" href={launchHref}>
             Launch app
           </Link>
         </div>
@@ -52,7 +62,7 @@ export default function LandingPage() {
             one but you.
           </p>
           <div className="cta">
-            <Link className="btn rose btn-lg" href="/login/">
+            <Link className="btn rose btn-lg" href={launchHref}>
               <Rocket size={17} /> Launch your node
             </Link>
             <a
@@ -174,7 +184,7 @@ export default function LandingPage() {
             matters.
           </p>
           <div className="cta">
-            <Link className="btn rose btn-lg" href="/login/">
+            <Link className="btn rose btn-lg" href={launchHref}>
               <Rocket size={17} /> Launch your node
             </Link>
           </div>

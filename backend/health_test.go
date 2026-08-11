@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -207,3 +209,32 @@ func mountCheckWith(t *testing.T, present, readOnly bool) HealthCheck {
 type nopCloser struct{}
 
 func (nopCloser) Close() error { return nil }
+
+// A remote client reads the node's version from the connect screen before it
+// holds any credential, so these have to be present on the unauthenticated
+// health response — and on every branch of it, including the ones a client
+// hitting a half-started node will actually see.
+func TestHealthResponseAdvertisesVersionOnEveryBranch(t *testing.T) {
+	for _, report := range []HealthReport{
+		{Status: HealthOK},
+		{Status: HealthWarn, Checks: []HealthCheck{{Name: "redis", Status: HealthWarn}}},
+		{Status: HealthFail, Checks: []HealthCheck{{Name: "readiness", Status: HealthFail, Detail: "uninitialized"}}},
+	} {
+		rec := httptest.NewRecorder()
+		writeHealth(rec, report)
+
+		var body struct {
+			Version          string `json:"version"`
+			MinClientVersion string `json:"minClientVersion"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode health body: %v", err)
+		}
+		if body.Version != telosVersion || body.Version == "" {
+			t.Fatalf("status %q: version = %q, want %q", report.Status, body.Version, telosVersion)
+		}
+		if body.MinClientVersion != minClientVersion || body.MinClientVersion == "" {
+			t.Fatalf("status %q: minClientVersion = %q, want %q", report.Status, body.MinClientVersion, minClientVersion)
+		}
+	}
+}

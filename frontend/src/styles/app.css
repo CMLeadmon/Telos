@@ -134,3 +134,16 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--f-sans)}
 /* A preference that failed to persist. Colour-only per the flat-design law —
    feedback by colour, never a shadow. */
 .iconbtn.save-failed{color:var(--rose)}
+
+/* Connect screen (native shells choose their node before they can log in) */
+.connect-form{display:flex;flex-direction:column;gap:14px}
+.connect-title{font-family:var(--f-display);font-weight:700;font-size:22px;letter-spacing:-.01em;margin:0}
+.connect-hint{font-family:var(--f-mono);font-size:11.5px;letter-spacing:.04em;line-height:1.6;color:var(--muted);margin:0}
+.connect-cert{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;margin:0;
+  background:var(--input);border:1px solid var(--line);border-radius:var(--r);padding:14px}
+.connect-cert dt{font-family:var(--f-mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.connect-cert dd{margin:0;font-size:12.5px;word-break:break-word}
+/* A fingerprint is compared character by character against one the operator
+   read out, so it stays monospaced and wraps rather than truncating. */
+.connect-fingerprint{font-family:var(--f-mono);font-size:12px;letter-spacing:.06em;line-height:1.7}
+.connect-actions{display:flex;flex-direction:column;gap:10px}

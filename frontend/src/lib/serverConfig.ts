@@ -41,3 +41,17 @@ export function normalizeBaseUrl(raw: string): string {
 export function setServerConfig(next: ServerConfig): void {
   activeConfig = { ...next, baseUrl: normalizeBaseUrl(next.baseUrl) };
 }
+
+/**
+ * Whether this build has to ask which node to talk to.
+ *
+ * A build served over the web is served *by* a Telos node, so its own origin is
+ * the answer and asking would be nonsense. Only a native shell, which loads its
+ * assets from disk, starts out not knowing. Detected by the bridge the shell
+ * injects rather than by URL scheme, because Tauri v2 serves over
+ * http://tauri.localhost on Windows and a scheme check would misread it.
+ */
+export function requiresServerSelection(): boolean {
+  if (typeof window === "undefined") return false;
+  return "__TAURI_INTERNALS__" in window || "__TELOS_NATIVE_TLS__" in window;
+}

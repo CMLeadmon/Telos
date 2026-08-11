@@ -43,12 +43,26 @@ type HealthCheck struct {
 	Metric int64        `json:"metric,omitempty"`
 }
 
+// telosVersion is stamped at build time with
+// -ldflags "-X main.telosVersion=<tag>"; "dev" in an unstamped build.
+var telosVersion = "dev"
+
+// minClientVersion is the oldest client this gateway will serve. A client below
+// it must refuse to connect rather than fail later in ways nobody can diagnose.
+const minClientVersion = "0.1.0"
+
 // HealthReport is an immutable snapshot returned to callers.
 type HealthReport struct {
 	Status HealthStatus  `json:"status"`
 	Checks []HealthCheck `json:"checks"`
 	// AgeMillis is how stale this snapshot is when served (0 for a fresh probe).
 	AgeMillis int64 `json:"ageMillis"`
+	// Version and MinClientVersion let a client decide whether it can talk to
+	// this node at all. A remote client reads them from the connect screen
+	// before it has any credential, so they ride on this unauthenticated
+	// response — the tradeoff being that the node's version is public.
+	Version          string `json:"version"`
+	MinClientVersion string `json:"minClientVersion"`
 
 	generatedAt time.Time
 }
@@ -329,6 +343,10 @@ func mountChecker(name, path string) HealthChecker {
 var healthService *HealthService
 
 func writeHealth(w http.ResponseWriter, report HealthReport) {
+	// Stamped centrally so every health response carries them, including the
+	// uninitialized and degraded paths a connecting client is most likely to hit.
+	report.Version = telosVersion
+	report.MinClientVersion = minClientVersion
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	if report.Status == HealthFail {
