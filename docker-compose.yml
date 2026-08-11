@@ -91,14 +91,25 @@ services:
     environment:
       - DATABASE_URL=postgres://telos_runtime:${TELOS_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
       - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-      - STORAGE_PATH=${STORAGE_PATH:-/data/shared}
+      # No STORAGE_PATH here, matching telos-core, which does the same physical
+      # I/O beneath /data/shared and sets no such variable: the binary never
+      # reads it, and podman-compose feeds a service's own environment block
+      # back into its interpolation, so defining it silently rewrote the host
+      # side of the bind mount below.
       - JELLYFIN_ADMIN_TOKEN=${JELLYFIN_ADMIN_TOKEN}
       - JELLYFIN_LIBRARY_IDS=${JELLYFIN_LIBRARY_IDS}
-      - GRIMMORY_URL=http://grimmory:8080
-      - GRIMMORY_USERNAME=${GRIMMORY_USERNAME:-admin}
-      - GRIMMORY_PASSWORD=${GRIMMORY_PASSWORD:-admin}
+      # These are the names telos-core actually reads. The block previously
+      # passed GRIMMORY_URL/USERNAME/PASSWORD, which nothing looks up — and a
+      # port that is not Grimmory's — so the migration would have authenticated
+      # with nothing the moment it grew a real implementation.
+      - GRIMMORY_LIBRARY_IDS=${GRIMMORY_LIBRARY_IDS:-}
+      - GRIMMORY_ADMIN_USER=${GRIMMORY_ADMIN_USER}
+      - GRIMMORY_ADMIN_PASSWORD=${GRIMMORY_ADMIN_PASSWORD}
     volumes:
-      - ${STORAGE_PATH:-/data/shared}:/data/shared:z
+      # Same host default as every other service. This defaulted to
+      # /data/shared, so with STORAGE_PATH unset this one service bound a
+      # different host directory than the gateway it is migrating data for.
+      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
 
   telos-core:
     build:
