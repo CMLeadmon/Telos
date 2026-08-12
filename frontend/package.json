@@ -12,7 +12,10 @@
     "check:a11y-evidence": "node scripts/check-accessibility-evidence.mjs",
     "clean:build": "node scripts/clean-build.mjs",
     "check:bundle": "node scripts/check-bundle-budget.mjs",
-    "check:browsers": "node scripts/check-installed-browsers.mjs"
+    "check:browsers": "node scripts/check-installed-browsers.mjs",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build"
   },
   "dependencies": {
     "epubjs": "0.4.2",
@@ -29,6 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
+    "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
