@@ -316,9 +316,21 @@ func TestLibraryBookDetailRouteReturnsNormalizedMemberItem(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
 	}
-	for _, providerField := range []string{"upstreamId", "libraryId", "library", "publisher", "isbn10", "isbn13", "fileSizeKb"} {
+	// Provider-internal identifiers and storage accounting only. Publisher and
+	// the ISBNs were once on this list and do not belong on it: they are
+	// bibliographic, they are what the member-facing manage modal prefills its
+	// form from, and that form is PUT back whole under Grimmory's
+	// REPLACE_WHEN_PROVIDED — so withholding them here does not hide anything,
+	// it erases them upstream on the next metadata save.
+	for _, providerField := range []string{"upstreamId", "libraryId", "library", "fileSizeKb"} {
 		if _, leaked := payload[providerField]; leaked {
 			t.Errorf("provider/management field %q leaked: %s", providerField, rec.Body.String())
+		}
+	}
+	for _, bibliographic := range []string{"publisher", "isbn10", "isbn13"} {
+		if _, present := payload[bibliographic]; !present {
+			t.Errorf("bibliographic field %q is missing; the manage modal prefills from it and would blank it upstream: %s",
+				bibliographic, rec.Body.String())
 		}
 	}
 }

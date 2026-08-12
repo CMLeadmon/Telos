@@ -1015,11 +1015,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 
 	// A malformed username can never match; still reserve so probing a bad
 	// username costs the same and is rate-limited identically.
-	canonUser, unameErr := canonicalUsername(body.Username)
-	limiterUser := canonUser
-	if unameErr != nil {
-		limiterUser = strings.ToLower(strings.TrimSpace(body.Username))
-	}
+	limiterUser := limiterSubject(body.Username)
 
 	// Reserve an atomic login slot before any password work.
 	attempt, err := loginLimiter.Reserve(ctx, limiterUser, clientAddr)
@@ -1040,37 +1036,15 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusUnauthorized, "invalid_credentials", "Invalid username or password.")
 	}
 
-	var userID string
-	var hash string
-	var active bool
-
-	if unameErr != nil {
-		// Unknown-shaped username: run one dummy verification to equalize
-		// timing, then fail.
-		_, _ = verifyPassword(body.Password, dummyPasswordHash)
+	userID, credErr := verifyCredentials(ctx, body.Username, body.Password)
+	if credErr != nil {
+		if errors.Is(credErr, errAccountDisabled) {
+			// Correct password but disabled: do not count as a failed attempt.
+			_ = attempt.Complete(ctx, LoginSuccess)
+			writeAPIError(w, r, http.StatusUnauthorized, "account_disabled", "This account is disabled.")
+			return
+		}
 		failLogin()
-		return
-	}
-
-	err = dbPool.QueryRow(ctx, `
-		SELECT id, password_hash, active FROM users WHERE username = $1
-	`, canonUser).Scan(&userID, &hash, &active)
-	if err != nil {
-		_, _ = verifyPassword(body.Password, dummyPasswordHash)
-		failLogin()
-		return
-	}
-
-	ok, err := verifyPassword(body.Password, hash)
-	if err != nil || !ok {
-		failLogin()
-		return
-	}
-
-	if !active {
-		// Correct password but disabled: do not count as a failed attempt.
-		_ = attempt.Complete(ctx, LoginSuccess)
-		writeAPIError(w, r, http.StatusUnauthorized, "account_disabled", "This account is disabled.")
 		return
 	}
 

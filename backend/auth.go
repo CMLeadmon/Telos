@@ -170,6 +170,13 @@ var (
 	errAuthThrottleUnavailable = errors.New("auth throttle unavailable")
 )
 
+// noopLoginAttempt stands in when no limiter is configured, so a handler can
+// hold one reservation variable and complete it unconditionally instead of
+// duplicating its credential path once with throttling and once without.
+type noopLoginAttempt struct{}
+
+func (noopLoginAttempt) Complete(context.Context, LoginOutcome) error { return nil }
+
 // Redis-mode limits (per 15 minutes).
 const (
 	limitPair = 5
@@ -409,6 +416,60 @@ func (a *degradedAttempt) complete(outcome LoginOutcome) error {
 var loginLimiter LoginLimiter
 
 // ---------------------------------------------------------------------------
+// Password credential verification
+// ---------------------------------------------------------------------------
+
+var (
+	errCredentialsRejected = errors.New("invalid username or password")
+	errAccountDisabled     = errors.New("account is disabled")
+)
+
+// verifyCredentials resolves a username/password pair to a user ID with the
+// timing every rejection has to share: a malformed username, an unknown user and
+// a wrong password all pay for exactly one password verification, so none of
+// them is distinguishable by how long the answer took.
+//
+// The caller owns the rate-limit reservation rather than this function, because
+// what a rejection costs differs by kind — a wrong password counts as a failed
+// attempt, a correct password on a disabled account must not.
+func verifyCredentials(ctx context.Context, username, password string) (string, error) {
+	canonUser, unameErr := canonicalUsername(username)
+	if unameErr != nil {
+		_, _ = verifyPassword(password, dummyPasswordHash)
+		return "", errCredentialsRejected
+	}
+
+	var userID, hash string
+	var active bool
+	if err := dbPool.QueryRow(ctx, `
+		SELECT id, password_hash, active FROM users WHERE username = $1
+	`, canonUser).Scan(&userID, &hash, &active); err != nil {
+		_, _ = verifyPassword(password, dummyPasswordHash)
+		return "", errCredentialsRejected
+	}
+
+	ok, err := verifyPassword(password, hash)
+	if err != nil || !ok {
+		return "", errCredentialsRejected
+	}
+	if !active {
+		return "", errAccountDisabled
+	}
+	return userID, nil
+}
+
+// limiterSubject is the username a rate-limit reservation is charged to. A
+// username that cannot be canonicalized can never match an account, but probing
+// with one still has to cost the same as probing with a real one, so it is
+// folded to a stable lowercase form rather than dropped.
+func limiterSubject(username string) string {
+	if canon, err := canonicalUsername(username); err == nil {
+		return canon
+	}
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+// ---------------------------------------------------------------------------
 // Device authentication and management HTTP handlers
 // ---------------------------------------------------------------------------
 
@@ -418,20 +479,49 @@ func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uc, err := getAuthenticatedUser(r)
-	if err != nil {
-		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required to register device")
-		return
-	}
-
 	clientAddr, ipErr := clientIP(r, securityConfig.TrustedProxyRanges)
 	if ipErr != nil {
 		writeAPIError(w, r, http.StatusBadRequest, "bad_client_address", "The client address could not be determined.")
 		return
 	}
 
+	var req struct {
+		DeviceName    string `json:"deviceName"`
+		Platform      string `json:"platform"`
+		ClientVersion string `json:"clientVersion"`
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+	}
+	if err := decodeJSON(w, r, &req, securityConfig.AuthJSONBytes); err != nil {
+		return
+	}
+
+	if req.DeviceName == "" || req.Platform == "" || req.ClientVersion == "" {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_parameters", "deviceName, platform, and clientVersion are required")
+		return
+	}
+
+	// Two ways in, and a native client only ever has the second. The browser
+	// presents its session cookie. A downloadable client holds no cookie it could
+	// present — the session cookie is HttpOnly and SameSite=Strict, so a client
+	// loaded from disk can neither read one nor have one attached to a request it
+	// sends to the node — which leaves registration itself as the exchange that
+	// turns a password into a device credential.
+	var userID, limiterUser string
+	byPassword := false
+	if uc, err := getAuthenticatedUser(r); err == nil {
+		userID, limiterUser = uc.ID, uc.Username
+	} else if req.Username != "" && req.Password != "" {
+		byPassword = true
+		limiterUser = limiterSubject(req.Username)
+	} else {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Authentication required to register device")
+		return
+	}
+
+	attempt := LoginAttempt(noopLoginAttempt{})
 	if loginLimiter != nil {
-		attempt, err := loginLimiter.Reserve(r.Context(), uc.Username, clientAddr)
+		reserved, err := loginLimiter.Reserve(r.Context(), limiterUser, clientAddr)
 		if err != nil {
 			switch {
 			case errors.Is(err, errLoginThrottled):
@@ -443,31 +533,33 @@ func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 			}
 			return
 		}
-		defer attempt.Complete(r.Context(), LoginSuccess)
+		attempt = reserved
+	}
+	// A wrong password here has to cost a failed attempt, or this route becomes
+	// an unthrottled oracle for exactly the guess /auth/login rate-limits.
+	outcome := LoginSuccess
+	defer func() { _ = attempt.Complete(r.Context(), outcome) }()
+
+	if byPassword {
+		id, credErr := verifyCredentials(r.Context(), req.Username, req.Password)
+		if credErr != nil {
+			if !errors.Is(credErr, errAccountDisabled) {
+				outcome = LoginFailure
+			}
+			writeAPIError(w, r, http.StatusUnauthorized, "invalid_credentials", "Invalid username or password.")
+			return
+		}
+		userID = id
 	}
 
-	var req struct {
-		DeviceName    string `json:"deviceName"`
-		Platform      string `json:"platform"`
-		ClientVersion string `json:"clientVersion"`
-	}
-	if err := decodeJSON(w, r, &req, securityConfig.AuthJSONBytes); err != nil {
-		return
-	}
-
-	if req.DeviceName == "" || req.Platform == "" || req.ClientVersion == "" {
-		writeAPIError(w, r, http.StatusBadRequest, "invalid_parameters", "deviceName, platform, and clientVersion are required")
-		return
-	}
-
-	deviceID, refreshToken, accessToken, err := registerDevice(r.Context(), uc.ID, req.DeviceName, req.Platform, req.ClientVersion)
+	deviceID, refreshToken, accessToken, err := registerDevice(r.Context(), userID, req.DeviceName, req.Platform, req.ClientVersion)
 	if err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "registration_failed", "Failed to register device")
 		return
 	}
 
 	log.Printf("[AUDIT] Device registered: user_id=%s device_id=%s device_name=%s platform=%s client_version=%s ip=%s",
-		uc.ID, deviceID, req.DeviceName, req.Platform, req.ClientVersion, clientAddr.String())
+		userID, deviceID, req.DeviceName, req.Platform, req.ClientVersion, clientAddr.String())
 
 	writeJSON(w, map[string]interface{}{
 		"deviceId":        deviceID,
@@ -578,7 +670,12 @@ func handleWSTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ticket, err := issueWSTicket(r.Context(), uc.ID, "")
+	// Carry the device through. getAuthenticatedUser already resolved it from the
+	// bearer session, and dropping it here cost two guarantees at once: the socket
+	// then registers under no device, so revoking one from Settings cannot close
+	// its live connection, and assertTicketSubjectUsable skips the revoked-device
+	// check entirely for a ticket that names no device.
+	ticket, err := issueWSTicket(r.Context(), uc.ID, uc.DeviceID)
 	if err != nil {
 		writeAPIError(w, r, http.StatusInternalServerError, "ticket_error", "Failed to issue WS ticket")
 		return

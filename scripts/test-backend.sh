@@ -30,7 +30,12 @@ fi
 suite="${1:-all}"
 run_filter=""
 case "$suite" in
-auth) run_filter="-run Test(Bootstrap|InviteAcceptance|LastOwner|LoginLimiter|CanonicalUsername|SessionMutation|SecurityEvent)"; shift ;;
+# De-anchored for the same reason the product selector was: keywords have to
+# match anywhere in the name. Anchored, this selector ran none of the ~20 device,
+# token and WS-ticket tests — every one of them is named TestRegisterDevice…,
+# TestWSTicket… or TestGetAuthenticatedUserBearerBranch, so `test-backend.sh auth`
+# reported green over the entire device-authentication surface without touching it.
+auth) run_filter="-run (Bootstrap|InviteAcceptance|LastOwner|LoginLimiter|CanonicalUsername|SessionMutation|SecurityEvent|Device|WSTicket|SecureToken|BearerBranch|SessionTokenFromRequest|CurrentTokenHash)"; shift ;;
 realtime) run_filter="-run Test(Channel|Realtime|Socket|Revocation|Subscription)"; shift ;;
 security) run_filter="-run Test(Server|Shutdown|Slow|HTTPAdmission|Security)"; shift ;;
 db) run_filter="-run Test(Migration|Migrations|Migrator|Database|ForeignKey|QueryStatistics|MessageManagement|Cursor|ListPolicy|Search|Outbox|AccountDeletion|RetentionMatrix|AssetDeletion|SchemaOwner|RuntimeRole|LoadAuthenticatedUser|HistoryQueryCount|BuildListQuery|SessionTouchWorker|DatabaseTimeouts|DatabaseConstraints|FailedMigration|ConcurrentMigrators|DiscoverMigrations|PlanMigrations|ChecksumSet)"; shift ;;

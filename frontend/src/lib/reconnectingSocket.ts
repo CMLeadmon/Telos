@@ -12,6 +12,13 @@ export interface ReconnectingSocketOptions {
   onError?: (error: Event) => void;
   minDelayMs?: number;
   maxDelayMs?: number;
+  /**
+   * Subprotocols for the handshake, resolved per attempt. A token-mode client
+   * authenticates its upgrade with a single-use ticket, which cannot be captured
+   * once at construction: it expires in 30 seconds and is spent by the first
+   * handshake, so every reconnect has to fetch its own.
+   */
+  protocols?: () => Promise<string[]>;
 }
 
 export class ReconnectingSocket {
@@ -23,6 +30,7 @@ export class ReconnectingSocket {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private isIntentionallyClosed = false;
   private isConnected = false;
+  private isConnecting = false;
 
   private onlineHandler?: () => void;
   private visibilityHandler?: () => void;
@@ -31,6 +39,7 @@ export class ReconnectingSocket {
   private onMessage?: (data: string) => void;
   private onClose?: (code: number, reason: string) => void;
   private onError?: (error: Event) => void;
+  private protocols?: () => Promise<string[]>;
 
   constructor(options: ReconnectingSocketOptions) {
     this.url = options.url;
@@ -41,19 +50,36 @@ export class ReconnectingSocket {
     this.onMessage = options.onMessage;
     this.onClose = options.onClose;
     this.onError = options.onError;
+    this.protocols = options.protocols;
 
     this.installLifecycleListeners();
-    this.connect();
+    void this.connect();
   }
 
-  public connect(): void {
+  public async connect(): Promise<void> {
     if (this.isIntentionallyClosed || this.ws) return;
+    // Claim the attempt before awaiting. The supplier makes a network round
+    // trip, and without a marker a revive or a fired backoff timer landing in
+    // that window would start a second attempt against the same null `ws`,
+    // leaving one socket orphaned with no onclose wired to reconnect it.
+    if (this.isConnecting) return;
+    this.isConnecting = true;
 
     try {
-      this.ws = new WebSocket(this.url);
+      const protocols = this.protocols ? await this.protocols() : [];
+      // The supplier awaited a round trip; the socket may have been closed, or
+      // already reconnected, while it was in flight.
+      if (this.isIntentionallyClosed || this.ws) return;
+      this.ws = protocols.length
+        ? new WebSocket(this.url, protocols)
+        : new WebSocket(this.url);
     } catch {
+      // A ticket the node refused to issue is a failed connection attempt, not
+      // a crash: back off and try again like any other transport failure.
       this.scheduleReconnect();
       return;
+    } finally {
+      this.isConnecting = false;
     }
 
     this.ws.onopen = () => {
@@ -137,7 +163,7 @@ export class ReconnectingSocket {
       this.timer = null;
     }
     this.currentDelay = this.minDelay;
-    this.connect();
+    void this.connect();
   }
 
   private scheduleReconnect(): void {
@@ -152,7 +178,7 @@ export class ReconnectingSocket {
 
     this.timer = setTimeout(() => {
       this.timer = null;
-      this.connect();
+      void this.connect();
     }, delay);
   }
 }

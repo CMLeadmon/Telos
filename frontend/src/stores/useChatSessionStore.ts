@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api, ApiError, wsBase } from "@/lib/api";
+import { socketProtocols } from "@/lib/deviceAuth";
 import { useAuthStore } from "./useAuthStore";
 
 // mergeReplies upserts replies by id (idempotent with socket delivery) and
@@ -130,6 +131,14 @@ function newMutationId(): string {
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempts = 0;
+
+// A token-mode handshake needs a single-use ticket, which is a network round trip
+// that has to complete before the socket can even be constructed. Each attempt
+// takes a generation and abandons itself if a later connect() or disconnect()
+// has happened since — otherwise a ticket resolving after the member switched
+// channels would install a socket for the channel they just left, and the
+// identity guards on the handlers (socket === ws) would accept it as current.
+let connectGeneration = 0;
 
 // Bounded exponential backoff with jitter for WebSocket reconnection.
 const RECONNECT_BASE_MS = 500;
@@ -266,116 +275,141 @@ export const useChatSessionStore = create<ChatSessionState>()((set, get) => ({
         console.error("Failed to fetch channel pins:", err);
       });
 
-    const ws = new WebSocket(
-      `${wsBase()}/api/v1/chat/ws?channel=${encodeURIComponent(channelId)}`,
-    );
-    socket = ws;
+    const generation = ++connectGeneration;
+    const url = `${wsBase()}/api/v1/chat/ws?channel=${encodeURIComponent(channelId)}`;
 
-    ws.onopen = () => {
-      if (socket === ws) {
-        reconnectAttempts = 0;
-        set({ connection: "open" });
-      }
-    };
-    ws.onmessage = (event) => {
-      if (socket !== ws) return;
-      let notification: WSNotification;
-      try {
-        notification = JSON.parse(event.data);
-      } catch {
-        return;
-      }
-      if (notification.type === "history" && notification.messages) {
-        set({ messages: notification.messages });
-      } else if (notification.type === "message" && notification.message) {
-        set((s) => ({ messages: [...s.messages, notification.message!] }));
-      } else if (notification.type === "message.update" && notification.message) {
-        set((s) => ({
-          messages: s.messages.map((m) => (m.id === notification.message!.id ? notification.message! : m)),
-        }));
-      } else if (notification.type === "message.delete" && notification.messageId) {
-        set((s) => ({
-          messages: s.messages.map((m) =>
-            m.id === notification.messageId
-              ? { ...m, deleted: true, content: "", embed: undefined, reactions: [] }
-              : m,
-          ),
-        }));
-      } else if (notification.type === "reaction" && notification.reaction) {
-        const { messageId, emoji, userId, op, count } = notification.reaction;
-        set((s) => ({
-          messages: s.messages.map((m) => {
-            if (m.id !== messageId) return m;
-            const reactions = [...(m.reactions ?? [])];
-            const i = reactions.findIndex((x) => x.emoji === emoji);
-            if (op === "add") {
-              if (i === -1) {
-                reactions.push({ emoji, count, users: [userId] });
-              } else {
-                reactions[i] = {
-                  ...reactions[i],
-                  count,
-                  users: [...reactions[i].users.filter((u) => u !== userId), userId],
-                };
-              }
-            } else if (i !== -1) {
-              const users = reactions[i].users.filter((u) => u !== userId);
-              if (count <= 0) {
-                reactions.splice(i, 1);
-              } else {
-                reactions[i] = { ...reactions[i], count, users };
-              }
-            }
-            return { ...m, reactions };
-          }),
-        }));
-      } else if (notification.type === "presence" && notification.presence) {
-        set({ online: notification.presence.online, onlineCount: notification.presence.count });
-      } else if (notification.type === "pin" && notification.pin) {
-        const { messageId, op } = notification.pin;
-        const activeId = get().activeChannelId;
-        set((s) => ({
-          messages: s.messages.map((m) =>
-            m.id === messageId ? { ...m, pinned: op === "add" } : m,
-          ),
-        }));
-        if (activeId) {
-          api<{ pins: ChatMessage[] }>(`/api/v1/channels/${activeId}/pins`)
-            .then((res) => {
-              set({ pins: res.pins });
-            })
-            .catch((err) => {
-              console.error("Failed to refresh pins:", err);
-            });
+    const attach = (ws: WebSocket) => {
+      socket = ws;
+
+      ws.onopen = () => {
+        if (socket === ws) {
+          reconnectAttempts = 0;
+          set({ connection: "open" });
         }
-      }
-    };
-    ws.onclose = (event) => {
-      if (socket !== ws) return;
-      socket = null;
-      set({ connection: "closed" });
-      // A policy-violation close (1008) means the server revoked access
-      // (session invalidated, account disabled, permission removed). Do not
-      // reconnect; surface it to the auth layer to re-authenticate.
-      if (event.code === 1008) {
-        void useAuthStore.getState().fetchMe();
-        return;
-      }
-      // Otherwise reconnect with bounded exponential backoff + jitter, then
-      // reconcile durable state via the REST history/members/pins fetch that
-      // connect() performs.
-      const active = get().activeChannelId;
-      if (active === channelId) {
-        reconnectTimer = setTimeout(() => {
-          if (get().activeChannelId === channelId) {
-            get().connect(channelId);
+      };
+      ws.onmessage = (event) => {
+        if (socket !== ws) return;
+        let notification: WSNotification;
+        try {
+          notification = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (notification.type === "history" && notification.messages) {
+          set({ messages: notification.messages });
+        } else if (notification.type === "message" && notification.message) {
+          set((s) => ({ messages: [...s.messages, notification.message!] }));
+        } else if (notification.type === "message.update" && notification.message) {
+          set((s) => ({
+            messages: s.messages.map((m) => (m.id === notification.message!.id ? notification.message! : m)),
+          }));
+        } else if (notification.type === "message.delete" && notification.messageId) {
+          set((s) => ({
+            messages: s.messages.map((m) =>
+              m.id === notification.messageId
+                ? { ...m, deleted: true, content: "", embed: undefined, reactions: [] }
+                : m,
+            ),
+          }));
+        } else if (notification.type === "reaction" && notification.reaction) {
+          const { messageId, emoji, userId, op, count } = notification.reaction;
+          set((s) => ({
+            messages: s.messages.map((m) => {
+              if (m.id !== messageId) return m;
+              const reactions = [...(m.reactions ?? [])];
+              const i = reactions.findIndex((x) => x.emoji === emoji);
+              if (op === "add") {
+                if (i === -1) {
+                  reactions.push({ emoji, count, users: [userId] });
+                } else {
+                  reactions[i] = {
+                    ...reactions[i],
+                    count,
+                    users: [...reactions[i].users.filter((u) => u !== userId), userId],
+                  };
+                }
+              } else if (i !== -1) {
+                const users = reactions[i].users.filter((u) => u !== userId);
+                if (count <= 0) {
+                  reactions.splice(i, 1);
+                } else {
+                  reactions[i] = { ...reactions[i], count, users };
+                }
+              }
+              return { ...m, reactions };
+            }),
+          }));
+        } else if (notification.type === "presence" && notification.presence) {
+          set({ online: notification.presence.online, onlineCount: notification.presence.count });
+        } else if (notification.type === "pin" && notification.pin) {
+          const { messageId, op } = notification.pin;
+          const activeId = get().activeChannelId;
+          set((s) => ({
+            messages: s.messages.map((m) =>
+              m.id === messageId ? { ...m, pinned: op === "add" } : m,
+            ),
+          }));
+          if (activeId) {
+            api<{ pins: ChatMessage[] }>(`/api/v1/channels/${activeId}/pins`)
+              .then((res) => {
+                set({ pins: res.pins });
+              })
+              .catch((err) => {
+                console.error("Failed to refresh pins:", err);
+              });
           }
-        }, nextReconnectDelay());
-      }
+        }
+      };
+      ws.onclose = (event) => {
+        if (socket !== ws) return;
+        socket = null;
+        set({ connection: "closed" });
+        // A policy-violation close (1008) means the server revoked access
+        // (session invalidated, account disabled, permission removed). Do not
+        // reconnect; surface it to the auth layer to re-authenticate.
+        if (event.code === 1008) {
+          void useAuthStore.getState().fetchMe();
+          return;
+        }
+        // Otherwise reconnect with bounded exponential backoff + jitter, then
+        // reconcile durable state via the REST history/members/pins fetch that
+        // connect() performs.
+        const active = get().activeChannelId;
+        if (active === channelId) {
+          reconnectTimer = setTimeout(() => {
+            if (get().activeChannelId === channelId) {
+              get().connect(channelId);
+            }
+          }, nextReconnectDelay());
+        }
+      };
     };
+
+    void socketProtocols().then(
+      (protocols) => {
+        if (generation !== connectGeneration) return;
+        attach(protocols.length ? new WebSocket(url, protocols) : new WebSocket(url));
+      },
+      () => {
+        // The node refused a ticket. That is a failed connection attempt like any
+        // other, not a reason to leave the member watching a spinner forever.
+        if (generation !== connectGeneration) return;
+        set({ connection: "closed" });
+        if (get().activeChannelId === channelId) {
+          reconnectTimer = setTimeout(() => {
+            if (get().activeChannelId === channelId) {
+              get().connect(channelId);
+            }
+          }, nextReconnectDelay());
+        }
+      },
+    );
   },
 
   disconnect: () => {
+    // Invalidates any ticket fetch still in flight, so a socket cannot be
+    // installed after the member asked to leave.
+    connectGeneration += 1;
     clearReconnect();
     if (socket) {
       const ws = socket;
