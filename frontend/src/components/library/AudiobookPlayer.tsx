@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
 import { useMediaProgress } from "@/hooks/useMediaProgress";
 import { api, apiBase, assetUrl } from "@/lib/api";
+import { getServerConfig } from "@/lib/serverConfig";
 
 export interface AudiobookTrack {
   index: number;
@@ -118,15 +119,59 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
   // which in the native client resolves against the app bundle rather than the
   // node — the origin-leak gate could not see it, because the bound expression
   // is an identifier and the check only read the expression, never the const.
-  //
-  // The origin is only half of it: a media element fetches its own source and
-  // no header can be attached, so this still needs a credential the URL itself
-  // carries before token mode can play an audiobook at all.
-  const streamUrl = assetUrl(
+  const directUrl = assetUrl(
     hasTracks
       ? `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/tracks/${currentTrackIndex}/stream`
       : `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/stream`,
   );
+
+  // A media element fetches its own source, and nothing can attach an
+  // Authorization header to that fetch. A cookie client is carried by its
+  // cookie; a token client is not carried by anything, so the URL has to hold
+  // its own authority — a ticket the node signs, bound to this session and
+  // revoked with it.
+  // Keyed by what it was minted for, rather than cleared when the key changes.
+  // Clearing would mean a synchronous setState in the effect body; comparing at
+  // render reaches the same place — a stale ticket simply stops matching — with
+  // no extra render and no window where the previous track's URL is still live.
+  const ticketKey = `${itemId}:${hasTracks ? currentTrackIndex : "whole"}`;
+  const [ticket, setTicket] = useState<{ key: string; url: string } | null>(null);
+
+  useEffect(() => {
+    if (getServerConfig().mode !== "token") return;
+    // Not until the info load has said whether this book has tracks. Minting
+    // before that asks for a whole-book ticket, then a second one for the track
+    // once info arrives — two requests whose responses can land in either order,
+    // so the element could settle on the wrong audio.
+    if (!info) return;
+    let active = true;
+    api<{ url: string }>(
+      `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/stream-ticket`,
+      {
+        method: "POST",
+        body: JSON.stringify(hasTracks ? { trackIndex: currentTrackIndex } : {}),
+      },
+    )
+      .then((res) => {
+        if (active && res?.url) setTicket({ key: ticketKey, url: assetUrl(res.url) });
+      })
+      .catch(() => {
+        if (active) setError("This audiobook could not be authorized for playback.");
+      });
+    return () => {
+      active = false;
+    };
+  }, [itemId, currentTrackIndex, hasTracks, info, ticketKey]);
+
+  // In token mode the element is given no source until a ticket for this exact
+  // track exists, rather than a URL that would come back 401 and surface as
+  // silence with nothing to explain it.
+  const tokenMode = getServerConfig().mode === "token";
+  const streamUrl = tokenMode
+    ? ticket?.key === ticketKey
+      ? ticket.url
+      : null
+    : directUrl;
 
   const saveProgressToApi = useCallback(
     async (
@@ -294,7 +339,7 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
 
       <audio
         ref={audioRef}
-        src={streamUrl}
+        src={streamUrl ?? undefined}
         onTimeUpdate={() => {
           if (!audioRef.current) return;
           const sec = audioRef.current.currentTime;

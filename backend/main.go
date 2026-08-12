@@ -539,6 +539,12 @@ func main() {
 	mux.Handle("GET /api/v1/library/audiobooks/{id}/info", withAuth(http.HandlerFunc(handleAudiobookInfo), "view_library"))
 	mux.Handle("GET /api/v1/library/audiobooks/{id}/stream", withAuth(http.HandlerFunc(handleAudiobookStream), "view_library"))
 	mux.Handle("GET /api/v1/library/audiobooks/{id}/tracks/{index}/stream", withAuth(http.HandlerFunc(handleAudiobookTrackStream), "view_library"))
+	// A media element cannot carry an Authorization header, so a token-mode
+	// client mints a ticket and puts the authority in the URL. The GET is
+	// deliberately unwrapped: the ticket is the credential, and it is verified,
+	// session-checked and permission-checked inside the handler.
+	mux.Handle("POST /api/v1/library/audiobooks/{id}/stream-ticket", withAuth(http.HandlerFunc(handleAudiobookStreamTicket), "view_library"))
+	mux.HandleFunc("GET /api/v1/library/audiobook-stream/{ticket}", handleTicketedAudiobookStream)
 	mux.Handle("GET /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handleGetBookProgress), "view_library"))
 	mux.Handle("PUT /api/v1/library/books/{id}/progress", withAuth(http.HandlerFunc(handlePutBookProgress), "view_library"))
 	mux.Handle("PUT /api/v1/library/books/{id}/metadata", withAuth(http.HandlerFunc(handleUpdateLibraryBookMetadata), "manage_library"))

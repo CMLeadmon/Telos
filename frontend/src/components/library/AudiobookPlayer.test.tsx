@@ -9,6 +9,7 @@ vi.mock("@/lib/api", () => ({
 }));
 
 import { api } from "@/lib/api";
+import { setServerConfig } from "@/lib/serverConfig";
 import { AudiobookPlayer } from "./AudiobookPlayer";
 
 const apiMock = api as unknown as ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ describe("AudiobookPlayer", () => {
   beforeEach(() => {
     apiMock.mockReset();
     routeApi();
+    setServerConfig({ baseUrl: "", mode: "cookie", accessToken: null });
   });
 
   // The player reached for api.get/api.put, which do not exist on the client —
@@ -114,5 +116,80 @@ describe("AudiobookPlayer", () => {
         `https://telos.example.com/api/v1/library/audiobooks/${INFO.id}/tracks/1/stream`,
       );
     });
+  });
+});
+
+// An <audio> element fetches its own source and nothing can put a header on
+// that fetch. A cookie client is carried by its cookie; a token client is
+// carried by nothing, so the plain stream URL comes back 401 no matter what the
+// page is authenticated as. The URL has to hold its own authority.
+describe("AudiobookPlayer in token mode", () => {
+  beforeEach(() => {
+    apiMock.mockReset();
+    setServerConfig({
+      baseUrl: "https://telos.example.com",
+      mode: "token",
+      accessToken: "a1",
+    });
+  });
+
+  it("plays through a signed ticket rather than the bare stream URL", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.includes("/info")) return Promise.resolve(INFO);
+      if (path.includes("/stream-ticket")) {
+        return Promise.resolve({ url: "/api/v1/library/audiobook-stream/sealed.mac" });
+      }
+      return Promise.resolve({});
+    });
+
+    const { container } = render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(container.querySelector("audio")?.getAttribute("src")).toBe(
+        "https://telos.example.com/api/v1/library/audiobook-stream/sealed.mac",
+      );
+    });
+
+    const mint = apiMock.mock.calls.find((c) => String(c[0]).includes("/stream-ticket"));
+    expect(mint).toBeDefined();
+    // The ticket is minted for the track being played, not for the book, or a
+    // member resuming mid-book would be handed the wrong audio.
+    expect(JSON.parse((mint![1] as RequestInit).body as string)).toEqual({ trackIndex: 1 });
+  });
+
+  // Better no source at all than one guaranteed to 401: a failed element load
+  // surfaces as silence with nothing to explain it.
+  it("gives the element no source until a ticket exists", async () => {
+    let release: (v: unknown) => void = () => {};
+    apiMock.mockImplementation((path: string) => {
+      if (path.includes("/info")) return Promise.resolve(INFO);
+      if (path.includes("/stream-ticket")) return new Promise((r) => (release = r));
+      return Promise.resolve({});
+    });
+
+    const { container } = render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+    await screen.findByText("Beyond Good and Evil");
+
+    expect(container.querySelector("audio")?.getAttribute("src")).toBeNull();
+
+    release({ url: "/api/v1/library/audiobook-stream/sealed.mac" });
+    await waitFor(() => {
+      expect(container.querySelector("audio")?.getAttribute("src")).toContain(
+        "audiobook-stream",
+      );
+    });
+  });
+
+  it("says so when the node will not authorize playback", async () => {
+    apiMock.mockImplementation((path: string) => {
+      if (path.includes("/info")) return Promise.resolve(INFO);
+      if (path.includes("/stream-ticket")) return Promise.reject(new Error("no"));
+      return Promise.resolve({});
+    });
+
+    render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+    expect(
+      await screen.findByText(/could not be authorized for playback/i),
+    ).toBeInTheDocument();
   });
 });

@@ -606,6 +606,16 @@
         }
       }
     },
+    "/api/v1/library/audiobook-stream/{ticket}": {
+      "get": {
+        "operationId": "get_library_audiobook_stream_ticket",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/library/audiobooks/{id}/info": {
       "get": {
         "operationId": "get_library_audiobooks_id_info",
@@ -619,6 +629,16 @@
     "/api/v1/library/audiobooks/{id}/stream": {
       "get": {
         "operationId": "get_library_audiobooks_id_stream",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/library/audiobooks/{id}/stream-ticket": {
+      "post": {
+        "operationId": "post_library_audiobooks_id_stream_ticket",
         "responses": {
           "200": {
             "description": "Success"

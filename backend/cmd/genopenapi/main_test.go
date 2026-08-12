@@ -43,8 +43,8 @@ func TestParseRoutesCoversEveryRegistrationInMainGo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRoutes: %v", err)
 	}
-	// 114 mux registrations exist; exactly one is the unprefixed catch-all.
-	if len(routes) != 113 {
-		t.Fatalf("want 113 API routes, got %d", len(routes))
+	// 116 mux registrations exist; exactly one is the unprefixed catch-all.
+	if len(routes) != 115 {
+		t.Fatalf("want 115 API routes, got %d", len(routes))
 	}
 }
