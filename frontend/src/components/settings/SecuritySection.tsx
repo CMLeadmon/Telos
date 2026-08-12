@@ -12,12 +12,27 @@ interface SessionInfo {
   current: boolean;
 }
 
+// A registered device is not a session. A session is a browser sign-in that
+// expires in hours; a device holds a 90-day refresh token that survives every
+// sign-out, so it needs its own list — signing out everywhere else does not
+// touch one.
+interface DeviceInfo {
+  id: string;
+  deviceName: string;
+  platform: string;
+  clientVersion: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
 export function SecuritySection() {
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
 
   const loadSessions = useCallback(() => {
     api<SessionInfo[]>("/api/v1/users/me/sessions")
@@ -25,9 +40,27 @@ export function SecuritySection() {
       .catch(() => setSessions([]));
   }, []);
 
+  const loadDevices = useCallback(() => {
+    api<DeviceInfo[]>("/api/v1/users/me/devices")
+      .then((d) => {
+        setDevices(d ?? []);
+        setDeviceError(null);
+      })
+      .catch((err) => {
+        // An empty list and an unreachable node look identical on screen
+        // otherwise, and the difference matters: one means nothing is
+        // registered, the other means a device may still be out there.
+        setDevices([]);
+        setDeviceError(
+          err instanceof ApiError ? err.message : "Could not load your devices.",
+        );
+      });
+  }, []);
+
   useEffect(() => {
     loadSessions();
-  }, [loadSessions]);
+    loadDevices();
+  }, [loadSessions, loadDevices]);
 
   const changePassword = async () => {
     setMsg(null);
@@ -65,6 +98,21 @@ export function SecuritySection() {
   const revokeOthers = async () => {
     await api("/api/v1/users/me/sessions/revoke-others", { method: "POST" });
     void loadSessions();
+  };
+
+  const revokeDevice = async (id: string) => {
+    setDeviceError(null);
+    try {
+      await api(`/api/v1/users/me/devices/${id}`, { method: "DELETE" });
+    } catch (err) {
+      // Reloading on a failed revoke would put the device back on screen with
+      // no explanation, reading as though the click did nothing.
+      setDeviceError(
+        err instanceof ApiError ? err.message : "Could not revoke that device.",
+      );
+      return;
+    }
+    void loadDevices();
   };
 
   return (
@@ -153,6 +201,54 @@ export function SecuritySection() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="setcard">
+        <div className="setrow">
+          <div className="lbl">
+            <b>Registered devices</b>
+            <span>
+              Apps you installed and signed in from. Revoking one signs it out
+              immediately and it will need your password again.
+            </span>
+          </div>
+        </div>
+        {deviceError && <span className="setmsg err">{deviceError}</span>}
+        {!deviceError && devices.length === 0 && (
+          <span className="setmsg">No devices are registered.</span>
+        )}
+        {devices.length > 0 && (
+          <table className="settable">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Platform</th>
+                <th>Last seen</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {devices.map((d) => (
+                <tr key={d.id}>
+                  <td>
+                    {d.deviceName || "Unnamed device"}{" "}
+                    <span className="tag">{d.clientVersion}</span>
+                  </td>
+                  <td>{d.platform || "—"}</td>
+                  <td>{new Date(d.lastSeenAt ?? d.createdAt).toLocaleString()}</td>
+                  <td>
+                    <button
+                      className="btn-ghost btn-sm"
+                      onClick={() => void revokeDevice(d.id)}
+                    >
+                      Revoke
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </>
   );
