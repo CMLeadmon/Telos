@@ -76,17 +76,22 @@ function boundExpressions(content) {
 const ORIGIN_AWARE =
   /\b(?:assetUrl|apiBase|avatarUrl|libraryCoverUrl|libraryContentUrl)\s*\(/;
 
+// The declaration of a bare identifier, so a bound `src={streamUrl}` can be
+// judged on what streamUrl actually holds. Bounded to one level: anything
+// deeper is not worth guessing at from a regex and wants a type-aware rule.
+function declarationOf(expr, content) {
+  const identifier = expr.trim().match(/^[A-Za-z_$][\w$]*$/);
+  if (!identifier) return null;
+  const declaration = content.match(
+    new RegExp(`\\b(?:const|let|var)\\s+${identifier[0]}\\b[\\s\\S]*?;`),
+  );
+  return declaration ? declaration[0] : null;
+}
+
 function originAware(expr, content) {
   if (ORIGIN_AWARE.test(expr)) return true;
-  // One level of indirection, for src={coverSrc} where coverSrc was built with
-  // a helper a few lines above. Anything deeper is not worth guessing at from
-  // a regex, and would be better served by a real type-aware rule.
-  const identifier = expr.trim().match(/^[A-Za-z_$][\w$]*$/);
-  if (!identifier) return false;
-  const declaration = content.match(
-    new RegExp(`\\b(?:const|let|var)\\s+${identifier[0]}\\b[^;]*;`),
-  );
-  return Boolean(declaration && ORIGIN_AWARE.test(declaration[0]));
+  const declaration = declarationOf(expr, content);
+  return Boolean(declaration && ORIGIN_AWARE.test(declaration));
 }
 
 for (const file of allFiles) {
@@ -95,7 +100,15 @@ for (const file of allFiles) {
   const content = fs.readFileSync(file, "utf8");
 
   for (const { expr, index } of boundExpressions(content)) {
-    const reachesGateway = /cover/i.test(expr) || expr.includes("/api/v1/");
+    // Resolve the identifier before deciding whether it reaches the gateway.
+    // Testing the bound expression alone meant a whole shape was invisible:
+    // `src={streamUrl}` names no path, so the check said "does not reach the
+    // gateway" and skipped it — while the const two lines up held
+    // `/api/v1/library/audiobooks/.../stream`. AudiobookPlayer sat that way
+    // through all of S3, feeding a bare relative path to an <audio> element,
+    // which in the native client resolves against the app bundle.
+    const resolved = expr + "\n" + (declarationOf(expr, content) ?? "");
+    const reachesGateway = /cover/i.test(resolved) || resolved.includes("/api/v1/");
     if (!reachesGateway || originAware(expr, content)) continue;
     const line = content.slice(0, index).split("\n").length;
     console.error(

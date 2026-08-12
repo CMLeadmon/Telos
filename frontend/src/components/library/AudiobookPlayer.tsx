@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
 import { useMediaProgress } from "@/hooks/useMediaProgress";
-import { api, apiBase } from "@/lib/api";
+import { api, apiBase, assetUrl } from "@/lib/api";
 
 export interface AudiobookTrack {
   index: number;
@@ -114,9 +114,19 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
   }, [onClose]);
 
   const hasTracks = Boolean(info?.tracks && info.tracks.length > 0);
-  const streamUrl = hasTracks
-    ? `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/tracks/${currentTrackIndex}/stream`
-    : `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/stream`;
+  // Absolutized. This was a bare relative path handed to an <audio> element,
+  // which in the native client resolves against the app bundle rather than the
+  // node — the origin-leak gate could not see it, because the bound expression
+  // is an identifier and the check only read the expression, never the const.
+  //
+  // The origin is only half of it: a media element fetches its own source and
+  // no header can be attached, so this still needs a credential the URL itself
+  // carries before token mode can play an audiobook at all.
+  const streamUrl = assetUrl(
+    hasTracks
+      ? `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/tracks/${currentTrackIndex}/stream`
+      : `/api/v1/library/audiobooks/${encodeURIComponent(itemId)}/stream`,
+  );
 
   const saveProgressToApi = useCallback(
     async (

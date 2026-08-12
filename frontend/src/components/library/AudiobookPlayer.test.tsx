@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
   api: vi.fn(),
-  apiBase: () => "",
+  apiBase: () => "https://telos.example.com",
+  // Stands in for the real one, which prepends apiBase to a relative path.
+  assetUrl: (p: string) => (p?.startsWith("http") ? p : `https://telos.example.com${p}`),
 }));
 
 import { api } from "@/lib/api";
@@ -96,5 +98,21 @@ describe("AudiobookPlayer", () => {
     render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
 
     expect(await screen.findByText("Grimmory unavailable")).toBeInTheDocument();
+  });
+
+  // An <audio> element fetches its own source, so a relative src resolves
+  // against whatever document loaded it — in the native client, the app bundle,
+  // where there is no audiobook. This shipped that way through all of S3.
+  // Track 1, because the fixture resumes there.
+  it("points the audio element at the node, not at the document", async () => {
+    apiMock.mockImplementation(() => Promise.resolve(INFO));
+    const { container } = render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+
+    await waitFor(() => {
+      const audio = container.querySelector("audio");
+      expect(audio?.getAttribute("src")).toBe(
+        `https://telos.example.com/api/v1/library/audiobooks/${INFO.id}/tracks/1/stream`,
+      );
+    });
   });
 });
