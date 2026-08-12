@@ -1,3 +1,5 @@
+import { isNativeApp } from "./nativeEnv";
+
 export type AuthMode = "cookie" | "token";
 
 export interface ServerConfig {
@@ -47,11 +49,13 @@ export function setServerConfig(next: ServerConfig): void {
  *
  * A build served over the web is served *by* a Telos node, so its own origin is
  * the answer and asking would be nonsense. Only a native shell, which loads its
- * assets from disk, starts out not knowing. Detected by the bridge the shell
- * injects rather than by URL scheme, because Tauri v2 serves over
- * http://tauri.localhost on Windows and a scheme check would misread it.
+ * assets from disk, starts out not knowing.
+ *
+ * This is exactly "is this the native client", which platform.ts also has to
+ * answer — and two copies of that test would drift the moment the shell gained
+ * or renamed a bridge, leaving one caller treating the same build as native and
+ * the other as web. Imported rather than repeated.
  */
 export function requiresServerSelection(): boolean {
-  if (typeof window === "undefined") return false;
-  return "__TAURI_INTERNALS__" in window || "__TELOS_NATIVE_TLS__" in window;
+  return isNativeApp();
 }

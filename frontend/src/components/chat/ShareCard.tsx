@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { BookOpen, Film, Download } from "lucide-react";
 import { apiBase } from "@/lib/api";
+import { openNodeResource } from "@/lib/platform";
 import { useRouter } from "next/navigation";
 
 interface EmbedSnapshot {
@@ -34,9 +35,9 @@ export function ShareCard({ embed }: ShareCardProps) {
     } else if (embed.kind === "stream_film") {
       router.push(`/stream/?play=${encodeURIComponent(embed.ref)}`);
     } else if (embed.kind === "file") {
-      window.open(
-        `${apiBase()}/api/v1/files/${encodeURIComponent(embed.ref)}/download`,
-        "_blank",
+      void openNodeResource(
+        `/api/v1/files/${encodeURIComponent(embed.ref)}/download`,
+        snap.title ?? "download",
       );
     }
   };

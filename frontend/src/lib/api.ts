@@ -111,6 +111,42 @@ export async function probeNode(
   };
 }
 
+/**
+ * Fetches a node resource as bytes, with whatever credential this client holds.
+ *
+ * Downloads used to be a `window.open` on the resource URL, which works only
+ * because a browser attaches the session cookie to the navigation it starts. A
+ * token-mode client has no cookie and cannot put a header on a navigation, so
+ * that same open lands on a bare 401 — and, opened in a native webview, on a
+ * 401 page with no way back. Pulling the bytes through the authenticated client
+ * is the only form that works in both modes.
+ */
+export async function apiBlob(path: string): Promise<Blob> {
+  const cfg = getServerConfig();
+  const headers = new Headers();
+  const requestInit: RequestInit = { headers };
+  if (cfg.mode === "token") {
+    if (cfg.accessToken) headers.set("Authorization", `Bearer ${cfg.accessToken}`);
+  } else {
+    requestInit.credentials = "include";
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${apiBase()}${path}`, requestInit);
+  } catch {
+    throw new ApiError(
+      0,
+      "Cannot reach this Telos node. Check the server address and try again.",
+    );
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text.trim() || res.statusText);
+  }
+  return await res.blob();
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   const cfg = getServerConfig();

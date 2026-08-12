@@ -12,6 +12,7 @@ import {
 import { useMediaStore, type MediaItem } from "@/stores/useMediaStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
+import { openNodeResource } from "@/lib/platform";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
 import { AudiobookPlayer } from "@/components/library/AudiobookPlayer";
@@ -150,7 +151,13 @@ function BookCard({
     book.format === "EPUB" || book.format === "PDF" || book.kind === "audiobook";
   const open = () => {
     if (readable) onRead();
-    else window.open(libraryContentUrl(book.id), "_blank", "noopener");
+    // libraryContentUrl absolutizes the origin, but a navigation still carries
+    // no bearer token, so in token mode this opened a 401 instead of the book.
+    else
+      void openNodeResource(
+        `/api/v1/library/books/${encodeURIComponent(book.id)}/content`,
+        book.title,
+      );
   };
   return (
     <article

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
+import { writeClipboard } from "@/lib/platform";
 
 interface Invite {
   id: string;
@@ -22,6 +23,15 @@ export function AdminInvitesSection() {
   const [roleId, setRoleId] = useState("Member");
   const [newToken, setNewToken] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+
+  // navigator.clipboard is unavailable outside a secure context, and this used
+  // to swallow that — the button said nothing either way, so an admin could walk
+  // away believing they held an invite token they had not copied. The token is
+  // in the field beside it, so failing loudly costs nothing.
+  const copyToken = async (token: string) => {
+    setCopyState((await writeClipboard(token)) ? "copied" : "failed");
+  };
 
   const load = useCallback(() => {
     Promise.all([
@@ -100,11 +110,19 @@ export function AdminInvitesSection() {
             />
             <button
               className="btn-ghost btn-sm"
-              onClick={() => void navigator.clipboard.writeText(newToken)}
+              onClick={() => void copyToken(newToken)}
             >
               Copy
             </button>
           </div>
+        )}
+        {copyState === "copied" && (
+          <span className="setmsg ok">Invite token copied.</span>
+        )}
+        {copyState === "failed" && (
+          <span className="setmsg err">
+            Could not copy. Select the token above and copy it manually.
+          </span>
         )}
         {msg && <span className="setmsg err">{msg}</span>}
       </div>

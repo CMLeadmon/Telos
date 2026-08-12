@@ -20,6 +20,7 @@ import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore"
 import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
 import { api, avatarUrl } from "@/lib/api";
+import { openNodeResource } from "@/lib/platform";
 import { hasCapability } from "@/lib/capabilities";
 import { BrandLogo } from "@/components/BrandLogo";
 import { ChatAside } from "@/components/chat/ChatAside";
@@ -195,9 +196,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     } else if (item.$type === "media") {
       router.push(`/stream?play=${encodeURIComponent(item.id)}`);
     } else if (item.$type === "file") {
-      window.open(
+      // Was a bare relative path opened in a new tab, which is wrong twice over
+      // in the native client: it resolves against the app bundle instead of the
+      // node, and a navigation carries no bearer token even when it does not.
+      void openNodeResource(
         `/api/v1/files/${encodeURIComponent(item.id)}/download`,
-        "_blank",
+        item.filename,
       );
     }
   };

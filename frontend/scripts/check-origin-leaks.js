@@ -105,6 +105,47 @@ for (const file of allFiles) {
   }
 }
 
+// Rule 3: no window.open() may point at the gateway.
+//
+// Rule 2 only inspects src=/poster= JSX attributes, and a live leak sat outside
+// it for the whole of S3: AppShell opened `/api/v1/files/${id}/download` in a
+// new tab. Relative, so in the native client it resolves against the app bundle
+// instead of the node — and even absolutized it is wrong in token mode, because
+// a navigation carries no Authorization header and lands on a bare 401. Node
+// resources go through openNodeResource(), which holds both halves of that.
+const NODE_PATH = /\/api\/v1\/|libraryContentUrl\s*\(|libraryCoverUrl\s*\(|avatarUrl\s*\(/;
+
+for (const file of allFiles) {
+  const relPath = path.relative(srcDir, file);
+  if (
+    relPath === "lib/platform.ts" ||
+    file.endsWith(".test.ts") ||
+    file.endsWith(".test.tsx")
+  ) {
+    continue;
+  }
+  const content = fs.readFileSync(file, "utf8");
+  const marker = /window\.open\s*\(/g;
+  let match;
+  while ((match = marker.exec(content)) !== null) {
+    // The argument list, brace/paren balanced, so a multi-line call is seen whole.
+    let depth = 1;
+    let i = match.index + match[0].length;
+    while (i < content.length && depth > 0) {
+      if (content[i] === "(") depth++;
+      else if (content[i] === ")") depth--;
+      i++;
+    }
+    const args = content.slice(match.index + match[0].length, i - 1);
+    if (!NODE_PATH.test(args)) continue;
+    const line = content.slice(0, match.index).split("\n").length;
+    console.error(
+      `Violation in ${relPath}:${line}: window.open() on a node URL; use openNodeResource(): ${args.trim().replace(/\s+/g, " ")}`,
+    );
+    violations++;
+  }
+}
+
 if (violations > 0) {
   console.error(`Found ${violations} origin leak violation(s). Build aborted.`);
   process.exit(1);

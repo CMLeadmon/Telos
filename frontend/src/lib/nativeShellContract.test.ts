@@ -36,6 +36,7 @@ describe("native shell bridge contract", () => {
     for (const [module, global] of [
       ["src/lib/certPinning.ts", "__TELOS_NATIVE_TLS__"],
       ["src/lib/secureStorage.ts", "__TELOS_NATIVE_STORE__"],
+      ["src/lib/platform.ts", "__TELOS_NATIVE_SHELL__"],
     ] as const) {
       expect(read(module)).toContain(global);
       expect(shell).toContain(`window.${global}`);
@@ -44,8 +45,14 @@ describe("native shell bridge contract", () => {
 
   it("implements every method the frontend calls on those bridges", () => {
     const shell = shellSource();
-    // NativeTlsBridge.leafCertificate and NativeSecretStore.get/set/delete.
-    for (const method of ["leafCertificate", "get:", "set:", "delete:"]) {
+    for (const method of [
+      "leafCertificate", // NativeTlsBridge
+      "openExternal", // NativeShellBridge
+      "writeClipboard",
+      "get:", // NativeSecretStore
+      "set:",
+      "delete:",
+    ]) {
       expect(shell).toContain(method);
     }
   });

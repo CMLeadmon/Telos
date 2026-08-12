@@ -15,6 +15,47 @@ async fn telos_leaf_certificate(server_url: String) -> Result<tls::LeafCertifica
         .map_err(|e| format!("certificate probe did not run: {e}"))?
 }
 
+/// Opens a URL in the operating system's browser.
+///
+/// A webview has one window and no back button, so letting a link navigate it
+/// strands the member on someone else's page with no way back to Telos.
+///
+/// Only http(s) is forwarded. `open_url` hands the string to the platform's URL
+/// handler, which will happily act on `file:`, `smb:` or any other registered
+/// scheme — and this command is reachable from page script, so anything the
+/// frontend can be induced to pass would otherwise reach the OS.
+fn is_web_url(url: &str) -> bool {
+    url.starts_with("https://") || url.starts_with("http://")
+}
+
+#[tauri::command]
+async fn telos_open_external<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    url: String,
+) -> Result<(), String> {
+    if !is_web_url(&url) {
+        return Err("only http and https URLs can be opened".into());
+    }
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Writes to the system clipboard.
+///
+/// navigator.clipboard is available only in a secure context, and a
+/// custom-scheme webview is not reliably one, so the web API cannot be relied on
+/// here.
+#[tauri::command]
+fn telos_write_clipboard<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    text: String,
+) -> Result<(), String> {
+    tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app)
+        .write_text(text)
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn telos_secret_get<R: Runtime>(app: tauri::AppHandle<R>, key: String) -> Result<Option<String>, String> {
     let store = app.store(SECRET_STORE).map_err(|e| e.to_string())?;
@@ -45,12 +86,13 @@ fn telos_secret_delete<R: Runtime>(app: tauri::AppHandle<R>, key: String) -> Res
     store.save().map_err(|e| e.to_string())
 }
 
-/// Installs the two bridges the frontend looks for on `window`.
+/// Installs the bridges the frontend looks for on `window`.
 ///
 /// The frontend is one static export shared by the web build, which must not
 /// import Tauri modules at all — so the shell publishes plain objects and the
 /// frontend feature-detects them. The names are the contracts documented in
-/// `frontend/src/lib/certPinning.ts` and `frontend/src/lib/secureStorage.ts`;
+/// `frontend/src/lib/certPinning.ts`, `frontend/src/lib/secureStorage.ts` and
+/// `frontend/src/lib/platform.ts`;
 /// changing one here without changing it there silently disables the feature,
 /// because both fall back rather than fail.
 fn bridge_script() -> String {
@@ -67,6 +109,15 @@ fn bridge_script() -> String {
         // rather than inventing a trusted state.
         return null;
       });
+    },
+  };
+
+  window.__TELOS_NATIVE_SHELL__ = {
+    openExternal: function (url) {
+      return invoke("telos_open_external", { url: url });
+    },
+    writeClipboard: function (text) {
+      return invoke("telos_write_clipboard", { text: text });
     },
   };
 
@@ -102,12 +153,14 @@ fn telos_bridge_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(telos_bridge_plugin())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             telos_leaf_certificate,
+            telos_open_external,
+            telos_write_clipboard,
             telos_secret_get,
             telos_secret_set,
             telos_secret_delete
@@ -141,6 +194,7 @@ mod tests {
         let script = initialization_script();
         assert!(script.contains("window.__TELOS_NATIVE_TLS__"));
         assert!(script.contains("window.__TELOS_NATIVE_STORE__"));
+        assert!(script.contains("window.__TELOS_NATIVE_SHELL__"));
         assert!(script.contains("leafCertificate"));
     }
 
@@ -151,11 +205,31 @@ mod tests {
         let script = initialization_script();
         for command in [
             "telos_leaf_certificate",
+            "telos_open_external",
+            "telos_write_clipboard",
             "telos_secret_get",
             "telos_secret_set",
             "telos_secret_delete",
         ] {
             assert!(script.contains(command), "script never invokes {command}");
+        }
+    }
+
+    // telos_open_external hands its argument to the platform's URL handler,
+    // which acts on file:, smb: and every other registered scheme — and the
+    // command is reachable from page script, so the filter is the boundary.
+    #[test]
+    fn only_web_urls_are_forwarded_to_the_os() {
+        assert!(is_web_url("https://github.com/CMLeadmon/Telos"));
+        assert!(is_web_url("http://192.168.1.10:8080"));
+        for hostile in [
+            "file:///etc/passwd",
+            "smb://attacker/share",
+            "javascript:alert(1)",
+            "vscode://x",
+            "  https://evasion.example.com",
+        ] {
+            assert!(!is_web_url(hostile), "{hostile} should not reach the OS");
         }
     }
 }

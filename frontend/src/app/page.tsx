@@ -10,6 +10,7 @@ import {
   Tv,
 } from "lucide-react";
 import { BrandLogo } from "@/components/BrandLogo";
+import { ExternalLink } from "@/components/ExternalLink";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useConnectionStore } from "@/stores/useConnectionStore";
 import { requiresServerSelection } from "@/lib/serverConfig";
@@ -36,9 +37,9 @@ export default function LandingPage() {
         <div className="navlinks">
           <a href="#product">Product</a>
           <a href="#sovereign">Self-host</a>
-          <a href="https://github.com/CMLeadmon/Telos" rel="noreferrer">
+          <ExternalLink href="https://github.com/CMLeadmon/Telos">
             Docs
-          </a>
+          </ExternalLink>
         </div>
         <div className="right">
           <Link className="btn rose btn-sm" href={launchHref}>
@@ -65,13 +66,12 @@ export default function LandingPage() {
             <Link className="btn rose btn-lg" href={launchHref}>
               <Rocket size={17} /> Launch your node
             </Link>
-            <a
+            <ExternalLink
               className="btn-ghost btn-lg"
               href="https://github.com/CMLeadmon/Telos"
-              rel="noreferrer"
             >
               <Github size={17} /> Star on GitHub
-            </a>
+            </ExternalLink>
           </div>
           <div className="slog">be on the net, but not of the net</div>
         </div>
@@ -145,13 +145,12 @@ export default function LandingPage() {
               encrypted off-node backups — happen only when you enable them.
             </p>
             <div className="cta">
-              <a
+              <ExternalLink
                 className="btn cyan"
                 href="https://github.com/CMLeadmon/Telos/blob/main/documentation/architecture/02-deployment.md"
-                rel="noreferrer"
               >
                 <Terminal size={16} /> Read the deploy guide
-              </a>
+              </ExternalLink>
             </div>
           </div>
           <div className="specgrid">

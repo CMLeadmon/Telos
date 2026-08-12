@@ -1,6 +1,9 @@
 "use client";
 
 import { ExternalLink, Scale } from "lucide-react";
+// Aliased: lucide's ExternalLink is the icon drawn inside these links, and the
+// component that opens them is a different thing with the same obvious name.
+import { ExternalLink as ExternalAnchor } from "@/components/ExternalLink";
 
 export type CreditEntry = {
   name: string;
@@ -78,12 +81,12 @@ function CreditRow({ entry }: { entry: CreditEntry }) {
         <span className="creditrole">{entry.role}</span>
       </div>
       <div className="creditlinks">
-        <a href={entry.sourceUrl} target="_blank" rel="noreferrer">
+        <ExternalAnchor href={entry.sourceUrl}>
           <ExternalLink size={13} aria-hidden /> Source
-        </a>
-        <a href={entry.licenseUrl} target="_blank" rel="noreferrer">
+        </ExternalAnchor>
+        <ExternalAnchor href={entry.licenseUrl}>
           <Scale size={13} aria-hidden /> {entry.licenseName} license
-        </a>
+        </ExternalAnchor>
       </div>
     </li>
   );
@@ -95,13 +98,9 @@ export function CreditsSection() {
       <h2>Credits</h2>
       <p className="creditintro">
         The Telos gateway and client are licensed under the{" "}
-        <a
-          href="https://www.apache.org/licenses/LICENSE-2.0"
-          target="_blank"
-          rel="noreferrer"
-        >
+        <ExternalAnchor href="https://www.apache.org/licenses/LICENSE-2.0">
           Apache License 2.0
-        </a>
+        </ExternalAnchor>
         . Telos exists because of the independent projects below; each isolated
         service runs as a separate process behind a container boundary under
         its own license.
