@@ -45,6 +45,10 @@ interface AudiobookPlayerProps {
 
 const RATES = [0.75, 1.0, 1.25, 1.5, 2.0];
 
+// The skip step, shared by the on-screen buttons and by the OS transport, which
+// asks for a seek without naming an offset of its own.
+const SKIP_SECONDS = 15;
+
 function formatTime(seconds: number): string {
   if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
   const h = Math.floor(seconds / 3600);
@@ -231,6 +235,78 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
     if (!el) return;
     el.currentTime = Math.max(0, Math.min(el.duration || 0, el.currentTime + seconds));
   };
+
+  // The OS transport — lock screen, headset button, car head unit — reaches a
+  // web player through navigator.mediaSession and through nothing else. In a
+  // native shell that is most of how an audiobook is listened to: screen off,
+  // app backgrounded. Without this the only way to pause is to reopen the app.
+  useEffect(() => {
+    const session =
+      typeof navigator === "undefined" ? undefined : navigator.mediaSession;
+    if (!session || !info) return;
+
+    // Absent on Safari before 15 and in any non-browser environment. Reaching
+    // for the constructor unguarded throws out of the effect and takes the
+    // player down with it.
+    if (typeof MediaMetadata === "function") {
+      const track = info.tracks?.[currentTrackIndex];
+      session.metadata = new MediaMetadata({
+        // The track is what is playing; the book is the album it belongs to.
+        title: track?.title || info.title,
+        artist: info.author || "Unknown author",
+        album: info.title,
+        // AudiobookInfo carries no cover of its own — the cover is a node route
+        // keyed by the item, the same one this dialog renders. Absolutized
+        // because the OS fetches artwork itself, outside the document, where a
+        // relative path resolves against the native bundle rather than the node.
+        artwork: [
+          {
+            src: assetUrl(
+              `/api/v1/library/books/${encodeURIComponent(itemId)}/cover`,
+            ),
+            sizes: "512x512",
+            type: "image/jpeg",
+          },
+        ],
+      });
+    }
+
+    const seekBy = (seconds: number) => {
+      const el = audioRef.current;
+      if (!el) return;
+      el.currentTime = Math.max(
+        0,
+        Math.min(el.duration || 0, el.currentTime + seconds),
+      );
+    };
+
+    // These only move the element. The element's own onPlay/onPause already
+    // drive isPlaying, and setting it here too would report "playing" for a
+    // play() that went on to reject.
+    const actions: [MediaSessionAction, MediaSessionActionHandler][] = [
+      ["play", () => void audioRef.current?.play().catch(() => {})],
+      ["pause", () => audioRef.current?.pause()],
+      ["seekbackward", (d) => seekBy(-(d.seekOffset ?? SKIP_SECONDS))],
+      ["seekforward", (d) => seekBy(d.seekOffset ?? SKIP_SECONDS)],
+    ];
+    for (const [action, handler] of actions) {
+      session.setActionHandler(action, handler);
+    }
+    return () => {
+      // The session is process-wide: a closed player left registered would keep
+      // answering the lock screen with an element no longer on the page.
+      for (const [action] of actions) session.setActionHandler(action, null);
+    };
+  }, [info, itemId, currentTrackIndex]);
+
+  // Separate from the metadata effect: this changes on every play and pause,
+  // and rebuilding the metadata and handlers at that rate is pure churn.
+  useEffect(() => {
+    const session =
+      typeof navigator === "undefined" ? undefined : navigator.mediaSession;
+    if (!session) return;
+    session.playbackState = isPlaying ? "playing" : "paused";
+  }, [isPlaying]);
 
   const changeRate = (rate: number) => {
     setPlaybackRate(rate);
@@ -421,7 +497,7 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
           <div className="abp-transport">
             <button
               className="abp-skip"
-              onClick={() => skipSeconds(-15)}
+              onClick={() => skipSeconds(-SKIP_SECONDS)}
               aria-label="back 15 seconds"
             >
               <RotateCcw size={14} /> 15
@@ -435,7 +511,7 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
             </button>
             <button
               className="abp-skip"
-              onClick={() => skipSeconds(15)}
+              onClick={() => skipSeconds(SKIP_SECONDS)}
               aria-label="forward 15 seconds"
             >
               15 <RotateCw size={14} />

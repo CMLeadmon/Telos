@@ -67,6 +67,7 @@ Telos merges Discord-style chat, Jellyfin-style streaming, Grimmory-style public
 | [`operations/audiobook-migration.md`](./operations/audiobook-migration.md) | Audiobook catalog migration operations. |
 | [`operations/beta-certification.md`](./operations/beta-certification.md) | Beta exit criteria. |
 | [`operations/browser-certification.md`](./operations/browser-certification.md) | Supported browser matrix. |
+| [`operations/building-native-clients.md`](./operations/building-native-clients.md) | Compiling the Tauri desktop and mobile clients. |
 
 *(`operations/release-inputs.pathspec` is machine-read by the release tooling, not prose.)*
 

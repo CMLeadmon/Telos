@@ -25,7 +25,10 @@ export function assetUrl(path: string | undefined): string {
   if (
     path.startsWith("http://") ||
     path.startsWith("https://") ||
-    path.startsWith("blob:")
+    path.startsWith("blob:") ||
+    // Carries its own bytes, like blob:. Prepending a node address to one
+    // produces https://node/data:image/png;base64,… — an address for nothing.
+    path.startsWith("data:")
   ) {
     return path;
   }

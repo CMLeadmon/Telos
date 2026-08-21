@@ -37,9 +37,14 @@ is compared against what they confirmed.
 
 ## Before a real build
 
-- **Icons are generated, not committed.** `tauri.conf.json` lists
-  `icons/*`, which `npm run tauri icon <source.png>` produces. The build fails
-  loudly until they exist, which is preferable to shipping a placeholder.
+Operator-facing build instructions — toolchains per platform, mobile targets,
+where bundles land — are in
+[`documentation/operations/building-native-clients.md`](../../documentation/operations/building-native-clients.md).
+Two things worth knowing here:
+
+- **Icons are committed**, under `icons/`, and `tauri.conf.json` lists them.
+  Regenerate with `npm run tauri icon <source.png>` when the mark changes; the
+  build fails loudly if they are ever removed.
 - **The node must allow this client's origin.** Every state-changing request is
   checked against `TELOS_ALLOWED_ORIGINS` by `requireTrustedOrigin` in
   `backend/security.go`, and a Tauri webview's origin is `tauri://localhost`
