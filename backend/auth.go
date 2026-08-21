@@ -536,7 +536,7 @@ func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		attempt = reserved
 	}
 	// A wrong password here has to cost a failed attempt, or this route becomes
-	// an unthrottled oracle for exactly the guess /auth/login rate-limits.
+	// an unthrottled side channel for exactly the guess /auth/login rate-limits.
 	outcome := LoginSuccess
 	defer func() { _ = attempt.Complete(r.Context(), outcome) }()
 
