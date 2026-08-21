@@ -44,7 +44,7 @@ Everything below was run on this branch, not inferred.
 | `npm run lint` | 0 errors, 6 pre-existing warnings |
 | `check:origin-leak` | clean |
 | `npx tsc --noEmit` | clean |
-| `npm run test:unit` | 43 files, **207 tests** pass |
+| `npm run test:unit` | 43 files, **207 tests** pass, 6 consecutive full runs clean |
 | `npm run build` (static export) | succeeds |
 | `genopenapi --check` (contract drift) | current, 115 routes |
 | `scripts/check-product-truth.sh` | pass |
@@ -63,7 +63,7 @@ production `.env` before release.
 
 ## What this session changed
 
-Five commits, `c9ad7f6..cc4083f`.
+Seven commits, `c9ad7f6..02917a7`.
 
 1. **`c9ad7f6`** — `check-product-truth.sh` had been red since S4 T7 because a
    security comment in `auth.go` used the word "oracle" in its cryptographic
@@ -76,6 +76,12 @@ Five commits, `c9ad7f6..cc4083f`.
 4. **`0bf1656`** — S0 results, and the `@tauri-apps/cli` pin that unblocked the
    inventory gate.
 5. **`cc4083f`** — two defects found reviewing the above.
+6. **`49dba8d`** — this document.
+7. **`02917a7`** — a pre-existing flake in `AudiobookPlayer.test.tsx`, which
+   released a held promise through a resolver the mock had not assigned yet. It
+   failed one full-suite run in four before this branch and three in four after,
+   purely from added load. Measured both ways before concluding it was
+   pre-existing; fixed by waiting on the mint rather than raising the timeout.
 
 The plans' illustrative code was wrong in several places and was not followed
 literally. Each divergence is argued in the relevant commit message; the
