@@ -64,6 +64,12 @@ func removableEntries(candidates []string, exeName, installDir string) []string 
 				found = append(found, candidate)
 			}
 		case info.Mode().IsRegular():
+			// Guarded, because filepath.Clean("") is "." — an unset installDir
+			// would match any bare relative candidate and delete a file called
+			// telos out of the working directory.
+			if installDir == "" {
+				continue
+			}
 			if filepath.Clean(filepath.Dir(candidate)) == filepath.Clean(installDir) {
 				found = append(found, candidate)
 			}

@@ -199,6 +199,35 @@ describe("AudiobookPlayer MediaSession integration", () => {
     expect([...handlers.values()].every((h) => h === null)).toBe(true);
   });
 
+  // Clearing the handlers is not enough on its own: metadata and playbackState
+  // are separate properties, and a closed player that left them set shows the
+  // book on the lock screen, paused, with buttons that now do nothing.
+  it("takes the book off the lock screen when the player closes", async () => {
+    const { unmount } = render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+    await waitFor(() => expect(session.metadata).not.toBeNull());
+
+    unmount();
+
+    expect(session.metadata).toBeNull();
+    expect(session.playbackState).toBe("none");
+  });
+
+  // Only on unmount. Clearing on every metadata change would blank the state
+  // mid-book: the track effect re-registers, but the playbackState effect does
+  // not re-run for a track change, so "none" would stick while audio played.
+  it("keeps the lock screen live across a track change", async () => {
+    const { container } = render(<AudiobookPlayer itemId={INFO.id} onClose={vi.fn()} />);
+    const audio = (await screen.findByText("Beyond Good and Evil"),
+      container.querySelector("audio")) as HTMLMediaElement;
+    fireEvent.play(audio);
+    await waitFor(() => expect(session.playbackState).toBe("playing"));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Part One/ }));
+
+    await waitFor(() => expect(session.metadata?.title).toBe("Part One"));
+    expect(session.playbackState).toBe("playing");
+  });
+
   // Safari before 15 and every non-browser test environment lack it. Reaching
   // for the constructor unguarded throws out of the effect and takes the whole
   // player down with it.

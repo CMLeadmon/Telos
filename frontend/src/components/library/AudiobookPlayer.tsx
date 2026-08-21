@@ -308,6 +308,24 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
     session.playbackState = isPlaying ? "playing" : "paused";
   }, [isPlaying]);
 
+  // Unmount only, and empty deps are what make it so. Clearing the handlers is
+  // not enough on its own: a closed player that left the metadata behind shows
+  // the book on the lock screen, paused, with buttons that now do nothing.
+  //
+  // This cannot live in the metadata effect's cleanup, which also runs on every
+  // track change — blanking there would leave "none" stuck while audio played,
+  // because the playbackState effect does not re-run for a track change to put
+  // it back.
+  useEffect(() => {
+    return () => {
+      const session =
+        typeof navigator === "undefined" ? undefined : navigator.mediaSession;
+      if (!session) return;
+      session.metadata = null;
+      session.playbackState = "none";
+    };
+  }, []);
+
   const changeRate = (rate: number) => {
     setPlaybackRate(rate);
     if (audioRef.current) audioRef.current.playbackRate = rate;

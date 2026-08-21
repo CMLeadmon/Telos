@@ -78,6 +78,20 @@ func TestRemovableEntriesTakesTheRealExecutableInTheInstallDirectory(t *testing.
 	}
 }
 
+// filepath.Clean("") is ".", so an unset installDir would match any bare
+// relative candidate and take a file called telos out of the working directory.
+func TestRemovableEntriesTakesNothingWhenTheInstallDirectoryIsUnset(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile("telos", []byte("someone else's"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := removableEntries([]string{"telos"}, "telos", ""); len(got) != 0 {
+		t.Fatalf("removableEntries = %v, want nothing", got)
+	}
+}
+
 func TestUninstallRemovesTheLinkAndLeavesTheTreeWithoutPurge(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation needs privilege on Windows")
