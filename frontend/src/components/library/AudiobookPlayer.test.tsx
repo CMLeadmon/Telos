@@ -172,6 +172,17 @@ describe("AudiobookPlayer in token mode", () => {
 
     expect(container.querySelector("audio")?.getAttribute("src")).toBeNull();
 
+    // release is only the real resolver once the mint has actually been
+    // requested, and the title paints in an earlier commit than the effect that
+    // requests it. Releasing before then called the no-op it was initialized
+    // with, left the promise pending forever, and timed out — rarely alone,
+    // often under a loaded full-suite run.
+    await waitFor(() =>
+      expect(
+        apiMock.mock.calls.some((c) => String(c[0]).includes("/stream-ticket")),
+      ).toBe(true),
+    );
+
     release({ url: "/api/v1/library/audiobook-stream/sealed.mac" });
     await waitFor(() => {
       expect(container.querySelector("audio")?.getAttribute("src")).toContain(
