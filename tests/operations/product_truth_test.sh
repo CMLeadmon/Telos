@@ -209,6 +209,23 @@ with open(compose_path, "w", encoding="utf-8") as destination:
 with open(routes_path, encoding="utf-8") as source:
     routes = source.read()
 routes = routes.replace("      service: telos-core\n      tls:\n        certResolver: letsencrypt\n\n  middlewares:", "      service: telos-client\n      tls:\n        certResolver: letsencrypt\n\n  middlewares:", 1)
+routes = routes.replace(
+    "    # Default: other JSON API and the static frontend, 64 KiB edge limit.",
+    """    telos-api:
+      rule: 'Host(telos) && PathPrefix(/api/v1)'
+      entryPoints:
+        - websecure
+      priority: 2
+      middlewares:
+        - telos-inflight
+        - telos-json-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Default: other JSON API and the static frontend, 64 KiB edge limit.""",
+    1,
+)
 routes += "\n    telos-client:\n      loadBalancer:\n        servers:\n          - url: http://telos-client:8080\n"
 with open(routes_path, "w", encoding="utf-8") as destination:
     destination.write(routes)
@@ -218,6 +235,12 @@ with open(status_path, "w", encoding="utf-8") as destination:
     destination.write(
         status.replace("Hosted-browser delivery is blocked until Phase 2.\n", "", 1)
         .replace("| Hosted-browser delivery | Blocked until Phase 2 |\n", "", 1)
+        .replace("Hosted-browser delivery remains unavailable until that service and the Traefik\nroute split exist.\n", "", 1)
+        .replace(
+            "| Delivery boundary | Status |\n|---|---|\n",
+            "| Delivery boundary | Status |\n|---|---|\n| Hosted-browser delivery | implemented-awaiting-evidence |\n",
+            1,
+        )
     )
 PY
 }
@@ -256,6 +279,46 @@ with open(path, "w", encoding="utf-8") as destination:
 PY
 assert_rejected "client-core-catchall" "browserService" "$client_core_catchall"
 
+client_missing_api="$fixture_root/client-missing-api"
+copy_fixture "$client_missing_api"
+realize_client "$client_missing_api"
+python3 - "$client_missing_api/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+start = text.index("    telos-api:")
+end = text.index("    # Default", start)
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text[:start] + text[end:])
+PY
+assert_rejected "client-missing-api" "apiService" "$client_missing_api"
+
+client_api_wrong_target="$fixture_root/client-api-wrong-target"
+copy_fixture "$client_api_wrong_target"
+realize_client "$client_api_wrong_target"
+python3 - "$client_api_wrong_target/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+start = text.index("    telos-api:")
+end = text.index("    # Default", start)
+block = text[start:end].replace("      service: telos-core", "      service: telos-client")
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text[:start] + block + text[end:])
+PY
+assert_rejected "client-api-wrong-target" "apiService" "$client_api_wrong_target"
+
+client_api_low_priority="$fixture_root/client-api-low-priority"
+copy_fixture "$client_api_low_priority"
+realize_client "$client_api_low_priority"
+sed -i '/telos-api:/,/telos-core/ s/priority: 2/priority: 1/' \
+  "$client_api_low_priority/config/dynamic/routes.yaml"
+assert_rejected "client-api-low-priority" "apiService" "$client_api_low_priority"
+
 livekit_traefik="$fixture_root/livekit-traefik"
 copy_fixture "$livekit_traefik"
 python3 - "$livekit_traefik/config/dynamic/routes.yaml" <<'PY'
@@ -290,6 +353,13 @@ sed -i 's|http://telos-client:8080|http://telos-core:8080|' \
   "$client_wrong_url/config/dynamic/routes.yaml"
 assert_rejected "client-wrong-url" "browserService" "$client_wrong_url"
 
+client_extra_url="$fixture_root/client-extra-url"
+copy_fixture "$client_extra_url"
+realize_client "$client_extra_url"
+printf '          - url: http://telos-client:8081\n' \
+  >>"$client_extra_url/config/dynamic/routes.yaml"
+assert_rejected "client-extra-url" "browserService" "$client_extra_url"
+
 settings_surface="$fixture_root/settings-surface"
 copy_fixture "$settings_surface"
 sed -i 's|href="/settings"|href="/preferences"|' "$settings_surface/frontend/src/components/AppShell.tsx"
@@ -318,6 +388,12 @@ copy_fixture "$browser_contradiction"
 printf '\nHosted-browser delivery is ready for shipping.\n' \
   >>"$browser_contradiction/documentation/product/beta-feature-status.md"
 assert_rejected "browser-contradiction" "browserService" "$browser_contradiction"
+
+honest_browser_negation="$fixture_root/honest-browser-negation"
+copy_fixture "$honest_browser_negation"
+printf '\nHosted-browser delivery is not ready for shipping.\n' \
+  >>"$honest_browser_negation/documentation/product/beta-feature-status.md"
+assert_accepted "$honest_browser_negation"
 
 backup_contradiction="$fixture_root/backup-contradiction"
 copy_fixture "$backup_contradiction"
@@ -351,4 +427,26 @@ PY
   else
     assert_rejected "$mutation" "modules" "$malformed_contract"
   fi
+done
+
+voicemail_control="$fixture_root/voicemail-control"
+copy_fixture "$voicemail_control"
+printf '\nmux.HandleFunc("GET /api/v1/voicemail", func(http.ResponseWriter, *http.Request) {})\n' \
+  >>"$voicemail_control/backend/main.go"
+assert_accepted "$voicemail_control"
+
+for alias in voice notifications watch-party media-list; do
+  alias_fixture="$fixture_root/traefik-$alias"
+  copy_fixture "$alias_fixture"
+  python3 - "$alias" "$alias_fixture/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+alias, path = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+insertion = f"    {alias}:\n      rule: 'Host({alias})'\n      service: telos-core\n\n"
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text.replace("\n  middlewares:", "\n" + insertion + "  middlewares:", 1))
+PY
+  assert_rejected "traefik-$alias" "removedFeatures" "$alias_fixture"
 done

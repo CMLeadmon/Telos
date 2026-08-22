@@ -189,15 +189,19 @@ if isinstance(package, dict):
             dependencies.update(package[section])
 go_modules = set(re.findall(r"^\s*([A-Za-z0-9._/-]+)\s+v", text("backend/go.mod"), re.M))
 removed_route_families = {
-    "livekit": ("/livekit",),
-    "voice-rooms": ("/api/v1/voice",),
-    "watch-parties": ("/api/v1/watch-party", "/api/v1/watch_party"),
-    "notification-inbox": ("/api/v1/notifications",),
-    "my-list": ("/api/v1/users/me/media-list", "/api/v1/my-list", "/api/v1/media-list"),
+    "livekit": (r"/livekit(?:/|$)",),
+    "voice-rooms": (r"/api/v1/voice(?:/|$)",),
+    "watch-parties": (r"/api/v1/watch-party(?:/|$)", r"/api/v1/watch_party(?:/|$)"),
+    "notification-inbox": (r"/api/v1/notifications(?:/|$)",),
+    "my-list": (
+        r"/api/v1/users/me/media-list(?:/|$)",
+        r"/api/v1/my-list(?:/|$)",
+        r"/api/v1/media-list(?:/|$)",
+    ),
 }
 if contract_valid:
     for feature in contract["removedFeatures"]:
-        if any(any(prefix in route for prefix in removed_route_families[feature]) for route in routes):
+        if any(any(re.search(pattern, route) for pattern in removed_route_families[feature]) for route in routes):
             fail("removedFeatures", f"removed route family {feature} is present")
         token = feature.replace("-", "")
         if any(token in name.lower().replace("-", "") for name in dependencies | go_modules):
@@ -223,30 +227,38 @@ router_blocks = re.findall(
     traefik,
     re.M,
 )
-catch_all = []
-api_router_targets = []
-router_names = []
-for _, block in router_blocks:
-    router_names.append(_)
+router_records = []
+for name, block in router_blocks:
     target = re.search(r"^ {6}service:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$", block, re.M)
-    service_target = None if target is None else target.group(1)
-    if re.search(r"PathPrefix\([^A-Za-z0-9]*/[^A-Za-z0-9]*\)", block):
-        if service_target:
-            catch_all.append(service_target)
-    if "/api/v1" in block:
-        api_router_targets.append(service_target)
+    priority = re.search(r"^ {6}priority:\s*(\d+)\s*$", block, re.M)
+    router_records.append(
+        {
+            "name": name,
+            "rule": block,
+            "target": None if target is None else target.group(1),
+            "priority": None if priority is None else int(priority.group(1)),
+        }
+    )
+catch_all = [
+    record for record in router_records
+    if re.search(r"PathPrefix\([^A-Za-z0-9]*/[^A-Za-z0-9]*\)", record["rule"])
+]
+api_routers = [record for record in router_records if "/api/v1" in record["rule"]]
+generic_api = [
+    record for record in router_records
+    if re.search(r"PathPrefix\([^A-Za-z0-9]*/api/v1[^A-Za-z0-9]*\)", record["rule"])
+]
 traefik_section = re.search(r"^ {2}services:\s*$([\s\S]*)", traefik, re.M)
 traefik_services = set() if traefik_section is None else set(
     re.findall(r"^ {4}([A-Za-z0-9][A-Za-z0-9_-]*):\s*$", traefik_section.group(1), re.M)
 )
 traefik_urls = {} if traefik_section is None else {
-    name: url
+    name: re.findall(r"^ {10}- url:\s*(\S+)\s*$", block, re.M)
     for name, block in re.findall(
         r"^ {4}([A-Za-z0-9][A-Za-z0-9_-]*):\s*$([\s\S]*?)(?=^ {4}[A-Za-z0-9][A-Za-z0-9_-]*:\s*$|\Z)",
         traefik_section.group(1),
         re.M,
     )
-    for url in re.findall(r"^ {10}- url:\s*(\S+)\s*$", block, re.M)
 }
 status = text("documentation/product/beta-feature-status.md")
 status_rows = {
@@ -259,31 +271,56 @@ if contract_valid:
     browser_block = "Hosted-browser delivery is blocked until Phase 2."
     if api not in traefik_services:
         fail("apiService", f"Traefik service {api} is absent")
-    elif traefik_urls.get(api) != f"http://{api}:8080":
+    elif traefik_urls.get(api) != [f"http://{api}:8080"]:
         fail("apiService", f"Traefik service {api} must resolve to http://{api}:8080")
-    if any(target != api for target in api_router_targets):
+    if any(record["target"] != api for record in api_routers):
         fail("apiService", "every API-matching Traefik router must target the API service")
+    removed_traefik_aliases = {
+        "livekit": {"livekit"},
+        "voice-rooms": {"voice", "voice-rooms", "voice_rooms"},
+        "watch-parties": {"watch-party", "watch_party", "watch-parties", "watch_parties"},
+        "notification-inbox": {"notifications", "notification-inbox", "notification_inbox"},
+        "my-list": {"media-list", "media_list", "my-list", "my_list"},
+    }
     for feature in contract["removedFeatures"]:
-        token = feature.replace("-", "")
-        if any(token in name.lower().replace("-", "") for name in set(router_names) | traefik_services):
+        traefik_names = set(router["name"] for router in router_records) | traefik_services
+        if traefik_names & removed_traefik_aliases[feature]:
             fail("removedFeatures", f"removed Traefik router or service {feature} is present")
     if browser in compose_services:
-        if catch_all != [browser] or browser not in traefik_services:
+        if len(catch_all) != 1 or catch_all[0]["target"] != browser or browser not in traefik_services:
             fail("browserService", f"Traefik must route the catch-all to {browser}")
-        elif traefik_urls.get(browser) != f"http://{browser}:8080":
+        elif traefik_urls.get(browser) != [f"http://{browser}:8080"]:
             fail("browserService", f"Traefik service {browser} must resolve to http://{browser}:8080")
-        if browser_block in status or "Hosted-browser delivery" in status_rows:
-            fail("browserService", "browser delivery remains marked blocked after telos-client exists")
+        if (
+            status_rows.get("Hosted-browser delivery") != "implemented-awaiting-evidence"
+            or browser_block in status
+            or re.search(r"hosted-browser delivery.{0,100}\bunavailable\b", status, re.I | re.S)
+        ):
+            fail("browserService", "browser delivery lacks the truthful post-transition state")
+        if (
+            len(generic_api) != 1
+            or generic_api[0]["target"] != api
+            or generic_api[0]["priority"] is None
+            or catch_all[0]["priority"] is None
+            or generic_api[0]["priority"] <= catch_all[0]["priority"]
+        ):
+            fail("apiService", "realized client topology needs a higher-priority generic /api/v1 fallback")
     else:
-        if catch_all != [api]:
+        if len(catch_all) != 1 or catch_all[0]["target"] != api:
             fail("browserService", f"transitional catch-all must route to {api}")
         if (
             browser_block not in status
             or status_rows.get("Hosted-browser delivery") != "Blocked until Phase 2"
-            or re.search(r"hosted.browser delivery[^.\n]*\b(shipping|ready)\b", status, re.I)
         ):
             fail("browserService", "missing truthful blocked hosted-browser delivery marker")
-    if re.search(r"hosted[\s-]browser delivery.{0,100}\b(shipping|ready)\b", status, re.I | re.S):
+    def positive_claim(subject):
+        for line in status.splitlines():
+            if re.search(subject, line, re.I) and re.search(r"\b(shipping|ready)\b", line, re.I):
+                if not re.search(r"\b(not|never|without)\s+(ready|shipping)\b", line, re.I):
+                    return True
+        return False
+
+    if positive_claim(r"hosted[\s-]browser delivery"):
         fail("browserService", "hosted-browser delivery is called ready or shipping")
     for platform in [contract["server"]["os"], contract["server"]["arch"],
                      contract["server"]["podmanMinimum"], *contract["desktop"]]:
@@ -302,7 +339,7 @@ if contract_valid:
     for field, (label, value) in required_status_rows.items():
         if status_rows.get(label) != value:
             fail(field, f"beta status is missing required {label} table value")
-    if backup_block not in status or re.search(r"(?:encrypted.{0,80})?(?:backup|recovery).{0,80}\b(shipping|ready)\b", status, re.I | re.S):
+    if backup_block not in status or positive_claim(r"(?:encrypted )?(backup|recovery)"):
         fail("backupStatus", "blocked backup/recovery is missing or called shipping")
 
 

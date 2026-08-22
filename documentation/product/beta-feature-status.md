@@ -25,7 +25,8 @@ separate account and administration surface.
 The beta target is a standalone client/server deployment: headless
 `telos-core` provides the API and internal services, while a hosted browser is
 served by `telos-client` on the same public origin. Hosted-browser delivery is blocked until Phase 2.
-It remains unavailable until that service and the Traefik route split exist.
+Hosted-browser delivery remains unavailable until that service and the Traefik
+route split exist.
 
 | Delivery boundary | Status |
 |---|---|
