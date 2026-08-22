@@ -14,6 +14,7 @@ import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "lib"))
 import evidence
 
@@ -200,6 +201,26 @@ def current_checkout_commit():
     return commit
 
 
+def checkout_has_source_changes():
+    try:
+        completed = subprocess.run(
+            [
+                "git", "status", "--porcelain=v1", "-z",
+                "--untracked-files=all", "--ignored=no",
+            ],
+            cwd=REPO_ROOT,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError as error:
+        raise GateError(f"cannot inspect current checkout state: {error}") from error
+    if completed.returncode != 0:
+        raise GateError("cannot inspect current checkout state")
+    return bool(completed.stdout)
+
+
 def validate_subject_bindings(gates, source_commit):
     if any(gate["subjectKind"] == "source" for gate in gates):
         checkout_commit = current_checkout_commit()
@@ -207,11 +228,10 @@ def validate_subject_bindings(gates, source_commit):
             raise GateError(
                 "candidate lock sourceCommit does not match the current checkout commit"
             )
-    if any(gate["subjectKind"] == "artifact" for gate in gates):
-        raise GateError(
-            "artifact subject requires a declared path or identity interface; "
-            "catalog schema version 1 does not define one"
-        )
+        if checkout_has_source_changes():
+            raise GateError(
+                "source checkout is dirty relative to the current checkout commit"
+            )
 
 
 def select_gates(catalog, scope, requested_ids, phase):
@@ -351,11 +371,25 @@ def run_command(gate):
         return "failed", "command could not be executed", 126, output
 
 
-def subject_digest(gate, candidate_digest, source_commit):
+def subject_digest(gate, candidate_digest, source_commit, status):
     if gate["subjectKind"] == "source":
         return evidence.digest_bytes(source_commit.encode("ascii"))
     if gate["subjectKind"] == "artifact":
-        raise GateError("artifact subject has no declared identity")
+        if status == "passed":
+            raise GateError("artifact gate cannot pass without a declared subject identity")
+        # Schema version 1 has no artifact identity interface. This digest binds
+        # an unavailable-subject declaration; it is not a digest of an artifact.
+        unavailable_subject = json.dumps(
+            {
+                "availability": "unavailable",
+                "candidateLockDigest": candidate_digest,
+                "gateId": gate["id"],
+                "kind": "artifact",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return evidence.digest_bytes(unavailable_subject)
     declared_subject = json.dumps(
         {
             "candidateLockDigest": candidate_digest,
@@ -388,7 +422,9 @@ def write_envelope(
         subject_json=json.dumps(
             {
                 "kind": gate["subjectKind"],
-                "digest": subject_digest(gate, candidate_digest, source_commit),
+                "digest": subject_digest(
+                    gate, candidate_digest, source_commit, status
+                ),
             },
             separators=(",", ":"),
         ),
@@ -419,6 +455,17 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
             output = f"not_run: {reason}\n".encode("utf-8")
         else:
             status, reason, exit_code, output = run_command(gate)
+        if gate["subjectKind"] == "artifact":
+            if status == "passed":
+                status = "failed"
+                reason = "artifact subject is unavailable despite command exit 0"
+                exit_code = EXIT_FAILED
+                output += (
+                    b"failed: artifact subject is unavailable; "
+                    b"catalog schema version 1 declares no artifact identity\n"
+                )
+            else:
+                reason = f"artifact subject is unavailable; {reason}"
         finished_at = timestamp()
         log_path = output_path(evidence_dir, gate["id"], "log")
         envelope_path = output_path(evidence_dir, gate["id"], "json")

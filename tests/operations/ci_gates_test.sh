@@ -133,7 +133,34 @@ assert_catalog_rejected_before_execution prerequisite-cycle "cycle"
 assert_catalog_rejected_before_execution path-id "id"
 assert_catalog_rejected_before_execution non-string-subject "subjectKind"
 
-current_commit="$(git -C "$repo_root" rev-parse HEAD)"
+source_repo="$fixture_dir/source-repo"
+mkdir -p "$source_repo/scripts/lib"
+cp "$repo_root/scripts/run-gates.py" "$source_repo/scripts/run-gates.py"
+cp "$repo_root/scripts/lib/evidence.py" "$source_repo/scripts/lib/evidence.py"
+printf '__pycache__/\nignored-build/\n' >"$source_repo/.gitignore"
+printf 'tracked fixture\n' >"$source_repo/tracked.txt"
+git -C "$source_repo" init -q
+git -C "$source_repo" config user.name "Gate Fixture"
+git -C "$source_repo" config user.email "gate-fixture@example.invalid"
+git -C "$source_repo" add .
+git -C "$source_repo" commit -qm "source fixture"
+source_runner="$source_repo/scripts/run-gates.py"
+current_commit="$(git -C "$source_repo" rev-parse HEAD)"
+printf '{"schemaVersion":1,"sourceCommit":"%s"}\n' "$current_commit" >"$fixture_dir/matching-candidate.json"
+
+set +e
+python3 "$source_runner" \
+  --catalog "$fixture_dir/float-schema-version.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/bytecode-evidence" >/dev/null 2>&1
+status=$?
+set -e
+[[ $status -eq 2 ]]
+[[ ! -e "$source_repo/scripts/lib/__pycache__" ]] || {
+  echo "runner imported evidence bytecode before catalog validation" >&2
+  exit 1
+}
+
 python3 - "$fixture_dir/source.json" "$fixture_dir/source-ran" <<'PY'
 import json
 import sys
@@ -154,7 +181,7 @@ with open(catalog_path, "w", encoding="utf-8") as output_file:
 PY
 
 set +e
-source_mismatch_output="$(python3 "$repo_root/scripts/run-gates.py" \
+source_mismatch_output="$(python3 "$source_runner" \
   --catalog "$fixture_dir/source.json" --scope local \
   --candidate-lock "$fixture_dir/candidate.json" \
   --evidence-dir "$fixture_dir/source-mismatch-evidence" 2>&1)"
@@ -165,8 +192,7 @@ grep -Fqi "sourceCommit" <<<"$source_mismatch_output"
 [[ ! -e "$fixture_dir/source-ran" ]] || { echo "source gate ran for a mismatched candidate" >&2; exit 1; }
 [[ ! -e "$fixture_dir/source-mismatch-evidence" ]] || { echo "source mismatch wrote evidence" >&2; exit 1; }
 
-printf '{"schemaVersion":1,"sourceCommit":"%s"}\n' "$current_commit" >"$fixture_dir/matching-candidate.json"
-python3 "$repo_root/scripts/run-gates.py" \
+python3 "$source_runner" \
   --catalog "$fixture_dir/source.json" --scope local \
   --candidate-lock "$fixture_dir/matching-candidate.json" \
   --evidence-dir "$fixture_dir/source-evidence"
@@ -189,36 +215,133 @@ assert envelope["subject"] == {
 }, envelope
 assert envelope["candidateLockDigest"] != envelope["subject"]["digest"], envelope
 PY
+unlink "$fixture_dir/source-ran"
 
-python3 - "$fixture_dir/artifact.json" "$fixture_dir/artifact-ran" <<'PY'
+mkdir "$source_repo/ignored-build"
+printf 'ignored build output\n' >"$source_repo/ignored-build/artifact.txt"
+python3 "$source_runner" \
+  --catalog "$fixture_dir/source.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/source-ignored-evidence"
+unlink "$fixture_dir/source-ran"
+
+printf 'dirty tracked change\n' >>"$source_repo/tracked.txt"
+set +e
+tracked_dirty_output="$(python3 "$source_runner" \
+  --catalog "$fixture_dir/source.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/source-tracked-dirty-evidence" 2>&1)"
+status=$?
+set -e
+[[ $status -eq 2 ]] || { echo "dirty tracked source returned $status" >&2; exit 1; }
+grep -Fqi "dirty" <<<"$tracked_dirty_output"
+[[ ! -e "$fixture_dir/source-ran" ]]
+[[ ! -e "$fixture_dir/source-tracked-dirty-evidence" ]]
+git -C "$source_repo" restore --worktree -- tracked.txt
+
+printf 'dirty untracked path\n' >"$source_repo/untracked.txt"
+set +e
+untracked_dirty_output="$(python3 "$source_runner" \
+  --catalog "$fixture_dir/source.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/source-untracked-dirty-evidence" 2>&1)"
+status=$?
+set -e
+[[ $status -eq 2 ]] || { echo "dirty untracked source returned $status" >&2; exit 1; }
+grep -Fqi "dirty" <<<"$untracked_dirty_output"
+[[ ! -e "$fixture_dir/source-ran" ]]
+[[ ! -e "$fixture_dir/source-untracked-dirty-evidence" ]]
+unlink "$source_repo/untracked.txt"
+
+python3 - "$fixture_dir/artifact.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
 import json
 import sys
 
-catalog_path, marker = sys.argv[1:]
-catalog = {"schemaVersion": 1, "gates": [{
-    "id": "artifact-binding", "phase": 1, "scope": "local", "required": True,
-    "timeoutSeconds": 10,
-    "command": [
-        "python3", "-c",
-        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran', encoding='utf-8')",
-        marker,
-    ],
-    "prerequisites": [], "subjectKind": "artifact",
-}]}
+catalog_path, wrapper = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [
+    {
+        "id": "source-prerequisite", "phase": 1, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": ["python3", "-c", "print('source prerequisite ran')"],
+        "prerequisites": [], "subjectKind": "source",
+    },
+    {
+        "id": "artifact-binding", "phase": 2, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": ["bash", wrapper],
+        "prerequisites": ["source-prerequisite"], "subjectKind": "artifact",
+    },
+]}
 with open(catalog_path, "w", encoding="utf-8") as output_file:
     json.dump(catalog, output_file, sort_keys=True)
 PY
 set +e
-artifact_output="$(python3 "$repo_root/scripts/run-gates.py" \
+python3 "$source_runner" \
   --catalog "$fixture_dir/artifact.json" --scope local \
+  --gate artifact-binding \
   --candidate-lock "$fixture_dir/matching-candidate.json" \
-  --evidence-dir "$fixture_dir/artifact-evidence" 2>&1)"
+  --evidence-dir "$fixture_dir/artifact-evidence"
 status=$?
 set -e
-[[ $status -eq 2 ]] || { echo "undeclared artifact subject returned $status" >&2; exit 1; }
-grep -Fqi "artifact subject" <<<"$artifact_output"
-[[ ! -e "$fixture_dir/artifact-ran" ]] || { echo "artifact gate ran without a declared subject" >&2; exit 1; }
-[[ ! -e "$fixture_dir/artifact-evidence" ]] || { echo "artifact binding error wrote evidence" >&2; exit 1; }
+[[ $status -ne 0 ]] || { echo "unavailable artifact subject returned success" >&2; exit 1; }
+python3 - "$fixture_dir/artifact-evidence" "$fixture_dir/matching-candidate.json" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+evidence_dir = pathlib.Path(sys.argv[1])
+candidate_path = pathlib.Path(sys.argv[2])
+source = json.loads((evidence_dir / "source-prerequisite.json").read_text())
+artifact = json.loads((evidence_dir / "artifact-binding.json").read_text())
+assert source["status"] == "passed", source
+assert artifact["status"] == "not_run", artifact
+assert artifact["exitCode"] == 3, artifact
+assert "unavailable" in artifact["reason"], artifact
+candidate_digest = "sha256:" + hashlib.sha256(candidate_path.read_bytes()).hexdigest()
+unavailable_declaration = json.dumps({
+    "availability": "unavailable",
+    "candidateLockDigest": candidate_digest,
+    "gateId": "artifact-binding",
+    "kind": "artifact",
+}, sort_keys=True, separators=(",", ":")).encode()
+assert artifact["subject"]["digest"] == "sha256:" + hashlib.sha256(
+    unavailable_declaration
+).hexdigest(), artifact
+assert (evidence_dir / "source-prerequisite.log").is_file()
+assert (evidence_dir / "artifact-binding.log").is_file()
+PY
+
+python3 - "$fixture_dir/artifact-zero.json" <<'PY'
+import json
+import sys
+
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": "artifact-zero", "phase": 1, "scope": "local", "required": True,
+    "timeoutSeconds": 10, "command": ["python3", "-c", "raise SystemExit(0)"],
+    "prerequisites": [], "subjectKind": "artifact",
+}]}
+with open(sys.argv[1], "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+set +e
+python3 "$source_runner" \
+  --catalog "$fixture_dir/artifact-zero.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/artifact-zero-evidence"
+status=$?
+set -e
+[[ $status -ne 0 ]] || { echo "zero-exit artifact gate returned success" >&2; exit 1; }
+python3 - "$fixture_dir/artifact-zero-evidence/artifact-zero.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as input_file:
+    envelope = json.load(input_file)
+assert envelope["status"] == "failed", envelope
+assert envelope["exitCode"] == 1, envelope
+assert "unavailable" in envelope["reason"], envelope
+PY
 
 injection='$(touch /tmp/gate-injection-sentinel)'
 python3 - "$fixture_dir/injection.json" "$repo_root/tests/fixtures/gates/record_argv.py" \
@@ -431,7 +554,7 @@ assert gate_by_id["api-contract-drift"]["command"][-4:] == [
     "go", "run", "./cmd/genopenapi", "--check",
 ]
 assert gate_by_id["frontend-playwright"]["command"] == [
-    "npx", "--prefix", "frontend", "playwright", "test",
+    "python3", "scripts/run-playwright-gate.py",
 ]
 for platform in ("linux", "windows", "darwin"):
     for architecture in ("amd64", "arm64"):
@@ -451,3 +574,55 @@ PY
 
 python3 "$repo_root/scripts/check-documentation-hygiene.py" citations
 python3 "$repo_root/scripts/check-documentation-hygiene.py" placeholders
+
+python3 "$repo_root/scripts/run-playwright-gate.py" --help >/dev/null
+for arguments in "--unknown" "--ready-timeout-seconds 0" "--shutdown-timeout-seconds 0"; do
+  read -r -a argv <<<"$arguments"
+  set +e
+  python3 "$repo_root/scripts/run-playwright-gate.py" "${argv[@]}" >/dev/null 2>&1
+  status=$?
+  set -e
+  [[ $status -eq 2 ]] || { echo "Playwright wrapper accepted: $arguments" >&2; exit 1; }
+done
+
+python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
+import ast
+import pathlib
+import sys
+
+tree = ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+
+def command_call(attribute, argv):
+    for call in calls:
+        function = call.func
+        if not (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "subprocess"
+            and function.attr == attribute
+        ):
+            continue
+        if not call.args or not isinstance(call.args[0], ast.List):
+            continue
+        values = [element.value for element in call.args[0].elts]
+        if values == argv:
+            return {keyword.arg: keyword.value for keyword in call.keywords}
+    raise AssertionError((attribute, argv))
+
+server = command_call("Popen", ["npm", "run", "dev"])
+assert isinstance(server["cwd"], ast.Name) and server["cwd"].id == "FRONTEND_ROOT"
+assert isinstance(server["shell"], ast.Constant) and server["shell"].value is False
+assert isinstance(server["start_new_session"], ast.Constant)
+assert server["start_new_session"].value is True
+playwright = command_call("run", ["npx", "playwright", "test"])
+assert isinstance(playwright["cwd"], ast.Name) and playwright["cwd"].id == "FRONTEND_ROOT"
+assert isinstance(playwright["shell"], ast.Constant) and playwright["shell"].value is False
+assert any(
+    isinstance(call.func, ast.Attribute)
+    and isinstance(call.func.value, ast.Name)
+    and call.func.value.id == "os"
+    and call.func.attr == "killpg"
+    for call in calls
+)
+PY
