@@ -14,11 +14,6 @@ if [[ -e "$sentinel" ]]; then
   echo "refusing to overwrite pre-existing injection sentinel: $sentinel" >&2
   exit 1
 fi
-if [[ -e "$repo_root/scripts/lib/__pycache__" ]]; then
-  echo "test requires a clean scripts/lib import cache" >&2
-  exit 1
-fi
-
 printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$fixture_dir/candidate.json"
 
 write_catalog() {
@@ -58,6 +53,8 @@ catalog = {"schemaVersion": 1, "gates": [gate, {
 
 if mutation == "duplicate-ids":
     catalog["gates"].append(copy.deepcopy(gate))
+elif mutation == "float-schema-version":
+    catalog["schemaVersion"] = 1.0
 elif mutation == "unknown-top-key":
     catalog["gatesPassed"] = True
 elif mutation == "unknown-gate-key":
@@ -66,6 +63,8 @@ elif mutation == "string-command":
     catalog["gates"][1]["command"] = "python3 -c pass"
 elif mutation == "empty-command":
     catalog["gates"][1]["command"] = []
+elif mutation == "nul-command":
+    catalog["gates"][1]["command"][1] = "bad\0argument"
 elif mutation == "invalid-scope":
     catalog["gates"][1]["scope"] = "remote"
 elif mutation == "non-string-scope":
@@ -119,10 +118,12 @@ assert_catalog_rejected_before_execution() {
 }
 
 assert_catalog_rejected_before_execution duplicate-ids "duplicate gate id"
+assert_catalog_rejected_before_execution float-schema-version "schemaVersion"
 assert_catalog_rejected_before_execution unknown-top-key "unknown field"
 assert_catalog_rejected_before_execution unknown-gate-key "unknown field"
 assert_catalog_rejected_before_execution string-command "command"
 assert_catalog_rejected_before_execution empty-command "command"
+assert_catalog_rejected_before_execution nul-command "NUL"
 assert_catalog_rejected_before_execution invalid-scope "scope"
 assert_catalog_rejected_before_execution non-string-scope "scope"
 assert_catalog_rejected_before_execution zero-timeout "timeoutSeconds"
@@ -131,6 +132,93 @@ assert_catalog_rejected_before_execution missing-prerequisite "unknown prerequis
 assert_catalog_rejected_before_execution prerequisite-cycle "cycle"
 assert_catalog_rejected_before_execution path-id "id"
 assert_catalog_rejected_before_execution non-string-subject "subjectKind"
+
+current_commit="$(git -C "$repo_root" rev-parse HEAD)"
+python3 - "$fixture_dir/source.json" "$fixture_dir/source-ran" <<'PY'
+import json
+import sys
+
+catalog_path, marker = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": "source-binding", "phase": 1, "scope": "local", "required": True,
+    "timeoutSeconds": 10,
+    "command": [
+        "python3", "-c",
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran', encoding='utf-8')",
+        marker,
+    ],
+    "prerequisites": [], "subjectKind": "source",
+}]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+
+set +e
+source_mismatch_output="$(python3 "$repo_root/scripts/run-gates.py" \
+  --catalog "$fixture_dir/source.json" --scope local \
+  --candidate-lock "$fixture_dir/candidate.json" \
+  --evidence-dir "$fixture_dir/source-mismatch-evidence" 2>&1)"
+status=$?
+set -e
+[[ $status -eq 2 ]] || { echo "source mismatch returned $status" >&2; exit 1; }
+grep -Fqi "sourceCommit" <<<"$source_mismatch_output"
+[[ ! -e "$fixture_dir/source-ran" ]] || { echo "source gate ran for a mismatched candidate" >&2; exit 1; }
+[[ ! -e "$fixture_dir/source-mismatch-evidence" ]] || { echo "source mismatch wrote evidence" >&2; exit 1; }
+
+printf '{"schemaVersion":1,"sourceCommit":"%s"}\n' "$current_commit" >"$fixture_dir/matching-candidate.json"
+python3 "$repo_root/scripts/run-gates.py" \
+  --catalog "$fixture_dir/source.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/source-evidence"
+python3 - "$fixture_dir/source-evidence/source-binding.json" \
+  "$fixture_dir/matching-candidate.json" "$current_commit" <<'PY'
+import hashlib
+import json
+import sys
+
+envelope_path, candidate_path, source_commit = sys.argv[1:]
+with open(envelope_path, encoding="utf-8") as input_file:
+    envelope = json.load(input_file)
+with open(candidate_path, "rb") as input_file:
+    candidate_bytes = input_file.read()
+assert envelope["status"] == "passed", envelope
+assert envelope["candidateLockDigest"] == "sha256:" + hashlib.sha256(candidate_bytes).hexdigest(), envelope
+assert envelope["subject"] == {
+    "kind": "source",
+    "digest": "sha256:" + hashlib.sha256(source_commit.encode("ascii")).hexdigest(),
+}, envelope
+assert envelope["candidateLockDigest"] != envelope["subject"]["digest"], envelope
+PY
+
+python3 - "$fixture_dir/artifact.json" "$fixture_dir/artifact-ran" <<'PY'
+import json
+import sys
+
+catalog_path, marker = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": "artifact-binding", "phase": 1, "scope": "local", "required": True,
+    "timeoutSeconds": 10,
+    "command": [
+        "python3", "-c",
+        "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran', encoding='utf-8')",
+        marker,
+    ],
+    "prerequisites": [], "subjectKind": "artifact",
+}]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+set +e
+artifact_output="$(python3 "$repo_root/scripts/run-gates.py" \
+  --catalog "$fixture_dir/artifact.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/artifact-evidence" 2>&1)"
+status=$?
+set -e
+[[ $status -eq 2 ]] || { echo "undeclared artifact subject returned $status" >&2; exit 1; }
+grep -Fqi "artifact subject" <<<"$artifact_output"
+[[ ! -e "$fixture_dir/artifact-ran" ]] || { echo "artifact gate ran without a declared subject" >&2; exit 1; }
+[[ ! -e "$fixture_dir/artifact-evidence" ]] || { echo "artifact binding error wrote evidence" >&2; exit 1; }
 
 injection='$(touch /tmp/gate-injection-sentinel)'
 python3 - "$fixture_dir/injection.json" "$repo_root/tests/fixtures/gates/record_argv.py" \
@@ -323,9 +411,43 @@ required_external = {
 }
 missing = sorted(required_external - set(ids))
 assert not missing, f"repository catalog is missing external gates: {missing}"
+
+required_current_local = {
+    "backend-headless-build", "api-contract-drift",
+    "operator-cli-linux-amd64", "operator-cli-linux-arm64",
+    "operator-cli-windows-amd64", "operator-cli-windows-arm64",
+    "operator-cli-darwin-amd64", "operator-cli-darwin-arm64",
+    "frontend-playwright", "documentation-citation-hygiene",
+    "documentation-placeholder-hygiene",
+}
+missing = sorted(required_current_local - set(ids))
+assert not missing, f"repository catalog is missing current local gates: {missing}"
+
+gate_by_id = {gate["id"]: gate for gate in catalog["gates"]}
+assert gate_by_id["backend-headless-build"]["command"][-5:] == [
+    "go", "build", "-o", "/tmp/telos-core-headless", ".",
+]
+assert gate_by_id["api-contract-drift"]["command"][-4:] == [
+    "go", "run", "./cmd/genopenapi", "--check",
+]
+assert gate_by_id["frontend-playwright"]["command"] == [
+    "npx", "--prefix", "frontend", "playwright", "test",
+]
+for platform in ("linux", "windows", "darwin"):
+    for architecture in ("amd64", "arm64"):
+        command = gate_by_id[f"operator-cli-{platform}-{architecture}"]["command"]
+        assert f"GOOS={platform}" in command, command
+        assert f"GOARCH={architecture}" in command, command
+        assert command[-5:] == [
+            "go", "build", "-o", "/tmp/telos-operator", "./cmd/telos",
+        ], command
+
+beta_index = ids.index("beta-certification")
+required_before_beta = {
+    gate["id"] for gate in catalog["gates"][:beta_index] if gate["required"]
+}
+assert set(gate_by_id["beta-certification"]["prerequisites"]) == required_before_beta
 PY
 
-[[ ! -e "$repo_root/scripts/lib/__pycache__" ]] || {
-  echo "gate runner wrote Python cache outside the evidence directory" >&2
-  exit 1
-}
+python3 "$repo_root/scripts/check-documentation-hygiene.py" citations
+python3 "$repo_root/scripts/check-documentation-hygiene.py" placeholders

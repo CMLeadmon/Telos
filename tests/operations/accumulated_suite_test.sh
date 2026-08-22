@@ -5,7 +5,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 fixture_dir="$(mktemp -d)"
 trap 'rm -rf "$fixture_dir"' EXIT
 
-printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$fixture_dir/candidate.json"
+printf '{"schemaVersion":1,"sourceCommit":"%s"}\n' \
+  "$(git -C "$repo_root" rev-parse HEAD)" >"$fixture_dir/candidate.json"
 
 expect_usage_error() {
   local evidence_dir="$1"

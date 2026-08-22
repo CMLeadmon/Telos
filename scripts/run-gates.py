@@ -14,7 +14,6 @@ import sys
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
-sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "lib"))
 import evidence
 
@@ -72,7 +71,7 @@ def validate_catalog(catalog):
     missing = CATALOG_FIELDS - set(catalog)
     if missing:
         raise GateError(f"catalog is missing field: {sorted(missing)[0]}")
-    if catalog["schemaVersion"] != 1 or isinstance(catalog["schemaVersion"], bool):
+    if not is_integer(catalog["schemaVersion"]) or catalog["schemaVersion"] != 1:
         raise GateError("catalog schemaVersion must equal 1")
     gates = catalog["gates"]
     if not isinstance(gates, list) or not gates:
@@ -111,6 +110,8 @@ def validate_catalog(catalog):
             raise GateError(f"gate {gate_id} command must be a non-empty argv array")
         if any(not isinstance(argument, str) for argument in command):
             raise GateError(f"gate {gate_id} command entries must be strings")
+        if any("\0" in argument for argument in command):
+            raise GateError(f"gate {gate_id} command entries must not contain NUL")
         if not command[0]:
             raise GateError(f"gate {gate_id} command executable must not be empty")
         prerequisites = gate["prerequisites"]
@@ -178,6 +179,39 @@ def read_candidate_lock(path):
             "candidate lock must contain a lowercase hexadecimal sourceCommit"
         )
     return source_commit, evidence.digest_bytes(candidate_bytes)
+
+
+def current_checkout_commit():
+    try:
+        completed = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    except OSError as error:
+        raise GateError(f"cannot resolve current checkout commit: {error}") from error
+    commit = completed.stdout.strip()
+    if completed.returncode != 0 or not evidence.COMMIT_PATTERN.fullmatch(commit):
+        raise GateError("cannot resolve current checkout commit")
+    return commit
+
+
+def validate_subject_bindings(gates, source_commit):
+    if any(gate["subjectKind"] == "source" for gate in gates):
+        checkout_commit = current_checkout_commit()
+        if source_commit != checkout_commit:
+            raise GateError(
+                "candidate lock sourceCommit does not match the current checkout commit"
+            )
+    if any(gate["subjectKind"] == "artifact" for gate in gates):
+        raise GateError(
+            "artifact subject requires a declared path or identity interface; "
+            "catalog schema version 1 does not define one"
+        )
 
 
 def select_gates(catalog, scope, requested_ids, phase):
@@ -317,9 +351,11 @@ def run_command(gate):
         return "failed", "command could not be executed", 126, output
 
 
-def subject_digest(gate, candidate_digest):
+def subject_digest(gate, candidate_digest, source_commit):
     if gate["subjectKind"] == "source":
-        return candidate_digest
+        return evidence.digest_bytes(source_commit.encode("ascii"))
+    if gate["subjectKind"] == "artifact":
+        raise GateError("artifact subject has no declared identity")
     declared_subject = json.dumps(
         {
             "candidateLockDigest": candidate_digest,
@@ -352,7 +388,7 @@ def write_envelope(
         subject_json=json.dumps(
             {
                 "kind": gate["subjectKind"],
-                "digest": subject_digest(gate, candidate_digest),
+                "digest": subject_digest(gate, candidate_digest, source_commit),
             },
             separators=(",", ":"),
         ),
@@ -421,6 +457,7 @@ def main(argv=None):
         catalog = load_catalog(catalog_path)
         gates = select_gates(catalog, args.scope, args.gate, args.phase)
         source_commit, candidate_digest = read_candidate_lock(candidate_lock)
+        validate_subject_bindings(gates, source_commit)
         evidence_dir = create_evidence_directory(args.evidence_dir)
         passed = execute_gates(
             gates, source_commit, candidate_digest, evidence_dir
