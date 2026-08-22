@@ -453,8 +453,21 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
             reason = f"prerequisite did not pass: {details}"
             exit_code = EXIT_NOT_RUN
             output = f"not_run: {reason}\n".encode("utf-8")
+        elif gate["subjectKind"] == "source" and checkout_has_source_changes():
+            status = "failed"
+            reason = "source checkout was dirty before gate execution"
+            exit_code = EXIT_FAILED
+            output = f"failed: {reason}\n".encode("utf-8")
         else:
             status, reason, exit_code, output = run_command(gate)
+            if (
+                gate["subjectKind"] == "source"
+                and checkout_has_source_changes()
+            ):
+                status = "failed"
+                reason = "source gate dirtied the checkout during execution"
+                exit_code = EXIT_FAILED
+                output += f"failed: {reason}\n".encode("utf-8")
         if gate["subjectKind"] == "artifact":
             if status == "passed":
                 status = "failed"

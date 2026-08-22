@@ -5,6 +5,9 @@ repo_root="$(git rev-parse --show-toplevel)"
 fixture_dir="$(mktemp -d)"
 sentinel="/tmp/gate-injection-sentinel"
 cleanup() {
+  if declare -F cleanup_fixture_processes >/dev/null; then
+    cleanup_fixture_processes
+  fi
   rm -rf "$fixture_dir"
   rm -f "$sentinel"
 }
@@ -252,6 +255,68 @@ grep -Fqi "dirty" <<<"$untracked_dirty_output"
 [[ ! -e "$fixture_dir/source-ran" ]]
 [[ ! -e "$fixture_dir/source-untracked-dirty-evidence" ]]
 unlink "$source_repo/untracked.txt"
+
+python3 - \
+  "$fixture_dir/dirty-source.json" \
+  "$source_repo/tracked.txt" \
+  "$fixture_dir/later-source-ran" <<'PY'
+import json
+import sys
+
+catalog_path, tracked_path, marker = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [
+    {
+        "id": "dirties-source", "phase": 1, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": [
+            "python3", "-c",
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('dirty\\n', encoding='utf-8')",
+            tracked_path,
+        ],
+        "prerequisites": [], "subjectKind": "source",
+    },
+    {
+        "id": "later-source", "phase": 1, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": [
+            "python3", "-c",
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran', encoding='utf-8')",
+            marker,
+        ],
+        "prerequisites": [], "subjectKind": "source",
+    },
+]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+set +e
+python3 "$source_runner" \
+  --catalog "$fixture_dir/dirty-source.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/dirty-source-evidence"
+status=$?
+set -e
+git -C "$source_repo" restore --worktree -- tracked.txt
+[[ $status -ne 0 ]] || { echo "source-dirtying gate returned success" >&2; exit 1; }
+[[ ! -e "$fixture_dir/later-source-ran" ]] || {
+  echo "later source gate ran after source became dirty" >&2
+  exit 1
+}
+python3 - "$fixture_dir/dirty-source-evidence" <<'PY'
+import json
+import pathlib
+import sys
+
+evidence_dir = pathlib.Path(sys.argv[1])
+dirtying = json.loads((evidence_dir / "dirties-source.json").read_text())
+later = json.loads((evidence_dir / "later-source.json").read_text())
+assert dirtying["status"] == "failed", dirtying
+assert dirtying["exitCode"] == 1, dirtying
+assert "dirtied" in dirtying["reason"], dirtying
+assert later["status"] == "failed", later
+assert later["exitCode"] == 1, later
+assert "dirty before" in later["reason"], later
+PY
 
 python3 - "$fixture_dir/artifact.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
 import json
@@ -553,9 +618,12 @@ assert gate_by_id["backend-headless-build"]["command"][-5:] == [
 assert gate_by_id["api-contract-drift"]["command"][-4:] == [
     "go", "run", "./cmd/genopenapi", "--check",
 ]
-assert gate_by_id["frontend-playwright"]["command"] == [
+playwright_gate = gate_by_id["frontend-playwright"]
+assert playwright_gate["command"] == [
     "python3", "scripts/run-playwright-gate.py",
+    "--playwright-timeout-seconds", "1650",
 ]
+assert int(playwright_gate["command"][-1]) < playwright_gate["timeoutSeconds"]
 for platform in ("linux", "windows", "darwin"):
     for architecture in ("amd64", "arm64"):
         command = gate_by_id[f"operator-cli-{platform}-{architecture}"]["command"]
@@ -576,7 +644,11 @@ python3 "$repo_root/scripts/check-documentation-hygiene.py" citations
 python3 "$repo_root/scripts/check-documentation-hygiene.py" placeholders
 
 python3 "$repo_root/scripts/run-playwright-gate.py" --help >/dev/null
-for arguments in "--unknown" "--ready-timeout-seconds 0" "--shutdown-timeout-seconds 0"; do
+for arguments in \
+  "--unknown" \
+  "--ready-timeout-seconds 0" \
+  "--playwright-timeout-seconds 0" \
+  "--shutdown-timeout-seconds 0"; do
   read -r -a argv <<<"$arguments"
   set +e
   python3 "$repo_root/scripts/run-playwright-gate.py" "${argv[@]}" >/dev/null 2>&1
@@ -585,44 +657,152 @@ for arguments in "--unknown" "--ready-timeout-seconds 0" "--shutdown-timeout-sec
   [[ $status -eq 2 ]] || { echo "Playwright wrapper accepted: $arguments" >&2; exit 1; }
 done
 
-python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
-import ast
+process_fixture="$repo_root/tests/fixtures/gates/process_tree.py"
+fixture_bin="$fixture_dir/process-bin"
+mkdir "$fixture_bin"
+cp "$process_fixture" "$fixture_bin/npm"
+cp "$process_fixture" "$fixture_bin/npx"
+chmod 700 "$fixture_bin/npm" "$fixture_bin/npx"
+
+cleanup_fixture_processes() {
+  python3 - "$fixture_dir" <<'PY'
+import os
 import pathlib
+import signal
 import sys
 
-tree = ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
-
-def command_call(attribute, argv):
-    for call in calls:
-        function = call.func
-        if not (
-            isinstance(function, ast.Attribute)
-            and isinstance(function.value, ast.Name)
-            and function.value.id == "subprocess"
-            and function.attr == attribute
-        ):
+fixture_root = pathlib.Path(sys.argv[1])
+state_prefix = f"TELOS_GATE_FIXTURE_STATE={fixture_root}".encode()
+for pid_path in fixture_root.glob("process-*/**/*.pid"):
+    try:
+        pid = int(pid_path.read_text(encoding="ascii"))
+        environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        if not any(value.startswith(state_prefix) for value in environment):
             continue
-        if not call.args or not isinstance(call.args[0], ast.List):
-            continue
-        values = [element.value for element in call.args[0].elts]
-        if values == argv:
-            return {keyword.arg: keyword.value for keyword in call.keywords}
-    raise AssertionError((attribute, argv))
-
-server = command_call("Popen", ["npm", "run", "dev"])
-assert isinstance(server["cwd"], ast.Name) and server["cwd"].id == "FRONTEND_ROOT"
-assert isinstance(server["shell"], ast.Constant) and server["shell"].value is False
-assert isinstance(server["start_new_session"], ast.Constant)
-assert server["start_new_session"].value is True
-playwright = command_call("run", ["npx", "playwright", "test"])
-assert isinstance(playwright["cwd"], ast.Name) and playwright["cwd"].id == "FRONTEND_ROOT"
-assert isinstance(playwright["shell"], ast.Constant) and playwright["shell"].value is False
-assert any(
-    isinstance(call.func, ast.Attribute)
-    and isinstance(call.func.value, ast.Name)
-    and call.func.value.id == "os"
-    and call.func.attr == "killpg"
-    for call in calls
-)
+        os.kill(pid, signal.SIGKILL)
+    except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
+        pass
 PY
+}
+
+assert_fixture_processes_dead() {
+  python3 - "$1" <<'PY'
+import pathlib
+import time
+import sys
+
+state_dir = pathlib.Path(sys.argv[1])
+deadline = time.monotonic() + 4
+while time.monotonic() < deadline:
+    live = []
+    for pid_path in state_dir.glob("*.pid"):
+        pid = int(pid_path.read_text(encoding="ascii"))
+        stat_path = pathlib.Path(f"/proc/{pid}/stat")
+        try:
+            fields = stat_path.read_text(encoding="ascii").split()
+        except FileNotFoundError:
+            continue
+        if len(fields) > 2 and fields[2] != "Z":
+            live.append((pid_path.name, pid))
+    if not live:
+        raise SystemExit(0)
+    time.sleep(0.05)
+raise SystemExit(f"fixture processes still alive: {live}")
+PY
+}
+
+run_playwright_fixture() {
+  local state_dir="$1"
+  local npm_mode="$2"
+  local npx_mode="$3"
+  mkdir "$state_dir"
+  env \
+    PATH="$fixture_bin:$PATH" \
+    TELOS_GATE_FIXTURE_STATE="$state_dir" \
+    TELOS_GATE_FIXTURE_NPM_MODE="$npm_mode" \
+    TELOS_GATE_FIXTURE_NPX_MODE="$npx_mode" \
+    python3 "$repo_root/scripts/run-playwright-gate.py" \
+      --ready-timeout-seconds 5 \
+      --playwright-timeout-seconds 1 \
+      --shutdown-timeout-seconds 1
+}
+
+normal_state="$fixture_dir/process-normal"
+run_playwright_fixture "$normal_state" normal normal
+assert_fixture_processes_dead "$normal_state"
+
+timeout_state="$fixture_dir/process-timeout"
+set +e
+run_playwright_fixture "$timeout_state" normal hang
+status=$?
+set -e
+[[ $status -eq 124 ]] || { echo "Playwright internal timeout returned $status" >&2; exit 1; }
+assert_fixture_processes_dead "$timeout_state"
+
+for signal_case in TERM INT; do
+  signal_state="$fixture_dir/process-signal-${signal_case,,}"
+  mkdir "$signal_state"
+  env \
+    PATH="$fixture_bin:$PATH" \
+    TELOS_GATE_FIXTURE_STATE="$signal_state" \
+    TELOS_GATE_FIXTURE_NPM_MODE=normal \
+    TELOS_GATE_FIXTURE_NPX_MODE=hang \
+    python3 "$repo_root/scripts/run-playwright-gate.py" \
+      --ready-timeout-seconds 5 \
+      --playwright-timeout-seconds 20 \
+      --shutdown-timeout-seconds 1 &
+  wrapper_pid=$!
+  for _ in {1..100}; do
+    [[ -e "$signal_state/playwright-leader.pid" ]] && break
+    sleep 0.05
+  done
+  [[ -e "$signal_state/playwright-leader.pid" ]] || {
+    echo "Playwright fixture never started for $signal_case" >&2
+    exit 1
+  }
+  kill -s "$signal_case" "$wrapper_pid"
+  set +e
+  wait "$wrapper_pid"
+  status=$?
+  set -e
+  if [[ "$signal_case" == TERM ]]; then
+    [[ $status -eq 143 ]] || { echo "TERM returned $status" >&2; exit 1; }
+  else
+    [[ $status -eq 130 ]] || { echo "INT returned $status" >&2; exit 1; }
+  fi
+  assert_fixture_processes_dead "$signal_state"
+done
+
+leader_exit_state="$fixture_dir/process-leader-exit"
+set +e
+run_playwright_fixture "$leader_exit_state" leader-exit hang
+status=$?
+set -e
+[[ $status -ne 0 ]] || { echo "early npm leader exit returned success" >&2; exit 1; }
+[[ ! -e "$leader_exit_state/playwright-leader.pid" ]] || {
+  echo "Playwright ran after the npm leader exited" >&2
+  exit 1
+}
+assert_fixture_processes_dead "$leader_exit_state"
+
+occupied_state="$fixture_dir/process-occupied"
+mkdir "$occupied_state"
+TELOS_GATE_FIXTURE_STATE="$occupied_state" \
+  python3 "$process_fixture" port-holder &
+occupied_pid=$!
+for _ in {1..100}; do
+  [[ -e "$occupied_state/occupied.pid" ]] && break
+  sleep 0.05
+done
+[[ -e "$occupied_state/occupied.pid" ]] || { echo "port holder did not start" >&2; exit 1; }
+set +e
+run_playwright_fixture "$fixture_dir/process-occupied-run" normal normal
+status=$?
+set -e
+[[ $status -ne 0 ]] || { echo "occupied port 3000 returned success" >&2; exit 1; }
+[[ ! -e "$fixture_dir/process-occupied-run/server-leader.pid" ]] || {
+  echo "npm started while port 3000 was occupied" >&2
+  exit 1
+}
+kill "$occupied_pid"
+wait "$occupied_pid" || true
