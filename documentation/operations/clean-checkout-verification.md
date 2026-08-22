@@ -29,7 +29,7 @@ tears everything down.
 | Field | Value |
 |---|---|
 | Tool | podman version 5.8.4 |
-| Compose services (validated model) | traefik, telos-core, postgres, redis, clamav, jellyfin, grimmory-db, grimmory, livekit |
+| Compose services (validated model) | traefik, telos-core, postgres, redis, clamav, jellyfin, grimmory-db, grimmory |
 | Builder images | node:24.18.0-alpine, golang:1.26.5-alpine, alpine:3.22.2 |
 | Inventory check | pass (migrations 0001–0007 contiguous; all release inputs tracked; pinned toolchains asserted) |
 | Compose validation | pass |

@@ -3,12 +3,11 @@
 > Normative operations runbook. Run these commands as the same rootless user
 > that owns the Telos Podman containers and volumes.
 >
-> **Status:** these are the current interim recovery mechanics. They are not
-> yet the complete beta contract — encryption before leaving the node,
-> automated 14-daily/8-weekly retention, atomic all-or-nothing backups,
-> release/schema-version gating, session/invite invalidation on restore, and
-> proven RPO ≤ 24 h / RTO ≤ 4 h drills are delivered by the Phase 3 database
-> and data-lifecycle hardening work.
+> **Status:** these are current interim recovery mechanics, not certified beta
+> recovery. Encrypted off-node backup and separate-host recovery remain blocked
+> until Phase 4 evidence proves encrypted snapshots, 14-daily/8-weekly
+> retention, atomic all-or-nothing backups, release/schema-version gating,
+> session/invite invalidation on restore, and RPO ≤ 24 h / RTO ≤ 4 h drills.
 
 Telos backups must preserve the Telos PostgreSQL database, Grimmory's MariaDB
 database, Traefik ACME state, Jellyfin and Grimmory configuration, and the shared storage tree.

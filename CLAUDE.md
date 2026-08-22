@@ -16,7 +16,8 @@ Read `AGENTS.md` for hard constraints and the verification suite, and `documenta
 |---|---|
 | `backend/` | Go gateway — ~50 source files, not one (see Architecture below) |
 | `frontend/` | Next.js 16 static export; see `frontend/AGENTS.md` |
-| `cli/` + `telos` + `install.sh` | The `telos` operator CLI (dispatcher + one file per subcommand) |
+| `cli/` + `telos` + `install.sh` | The authoritative Bash `./telos` operator CLI (dispatcher + one file per subcommand) |
+| `backend/cmd/telos/` | Experimental Go CLI; not an operator entry point |
 | `scripts/` | ~38 operational/verification scripts — the real CI gates live here |
 | `documentation/` | Normative spec: `architecture/` (5), `operations/` (19 runbooks), `product/` |
 | `docs/superpowers/` | Historical design specs + execution plans, one per feature program |
@@ -30,7 +31,11 @@ Read `AGENTS.md` for hard constraints and the verification suite, and `documenta
 
 ### Running the stack — the `telos` CLI
 
-`telos` is the operator entry point: a thin dispatcher (`./telos`) over one file per subcommand in `cli/commands/`. Adding a command means adding a file with a `run()` function and a `# summary:` line — nothing else.
+The Bash dispatcher `./telos` is the authoritative operator entry point: a thin
+dispatcher over one file per subcommand in `cli/commands/`. Adding a command
+means adding a file with a `run()` function and a `# summary:` line — nothing
+else. `backend/cmd/telos/` is experimental and must not be documented as an
+operator path.
 
 ```bash
 bash install.sh --link-only --user --yes   # symlink into ~/.local/bin, run in place from the checkout

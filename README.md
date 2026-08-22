@@ -7,6 +7,10 @@ Telos is a self-hosted, digital-sovereignty platform: a community library for co
 
 Source repository: [https://github.com/CMLeadmon/Telos](https://github.com/CMLeadmon/Telos)
 
+Operate a node with the authoritative Bash dispatcher, `./telos` (start with
+`./telos help`). The Go program in `backend/cmd/telos/` is experimental and is
+not an operator entry point.
+
 ---
 
 ## 1. Project Documentation Index

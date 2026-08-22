@@ -9,8 +9,8 @@ proxy.
 
 ## Topology
 
-- `ClamAV`, `Jellyfin`, `Grimmory`, `postgres`, `redis`, `grimmory-db`, and
-  `livekit` sit on **internal** networks with no route off-node.
+- `ClamAV`, `Jellyfin`, `Grimmory`, `postgres`, `redis`, and `grimmory-db` sit
+  on **internal** networks with no route off-node.
 - `telos-egress-proxy` (Squid, `deploy/egress-proxy/Dockerfile`) is **dual-homed**:
   it is reachable by those services on `telos-backend` and is the only service
   besides Traefik that joins the non-internal `telos-egress` network.

@@ -1,6 +1,9 @@
 # Telos Release Engineering and Verification Guide
 
-This document describes the reproducible build system, OCI image pinning, artifact hashing DAG, detached Cosign bundle signing, and candidate staging workflows for Telos release engineering.
+Release building, staging, signing, and certification are not implemented or
+claimable in the current repository. Their current commands return `not_run`
+(exit 3) until Phase 5 supplies candidate-bound release workflows and evidence.
+The following DAG is the intended release shape, not an available procedure.
 
 ## Non-Circular Hash Directed Acyclic Graph (DAG)
 

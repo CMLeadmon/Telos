@@ -12,8 +12,6 @@ const nextPort = Number.parseInt(
 const nextTarget = `http://127.0.0.1:${nextPort}`;
 const gatewayTarget =
   process.env.TELOS_DEV_GATEWAY_URL ?? "http://127.0.0.1:8080";
-const livekitTarget =
-  process.env.TELOS_DEV_LIVEKIT_URL ?? "http://127.0.0.1:7880";
 
 const proxy = httpProxy.createProxyServer({
   changeOrigin: false,
@@ -26,12 +24,6 @@ const proxy = httpProxy.createProxyServer({
 function routeRequest(req) {
   const pathname = new URL(req.url ?? "/", "http://telos.dev").pathname;
   if (pathname.startsWith("/api/")) return gatewayTarget;
-  if (pathname === "/livekit" || pathname.startsWith("/livekit/")) {
-    const parsed = new URL(req.url ?? "/livekit", "http://telos.dev");
-    parsed.pathname = parsed.pathname.slice("/livekit".length) || "/";
-    req.url = `${parsed.pathname}${parsed.search}`;
-    return livekitTarget;
-  }
   return nextTarget;
 }
 
@@ -92,5 +84,4 @@ nextProcess.once("exit", (code, signal) => {
 server.listen(publicPort, publicHost, () => {
   console.log(`> Telos dev server: http://${publicHost}:${publicPort}`);
   console.log(`> API and WebSocket gateway: ${gatewayTarget}`);
-  console.log(`> LiveKit signaling: ${livekitTarget}`);
 });

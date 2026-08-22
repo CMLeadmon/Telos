@@ -588,3 +588,42 @@ realize_client "$client_blocked_state"
 sed -i 's/implemented-awaiting-evidence/Blocked until Phase 2/' \
   "$client_blocked_state/documentation/product/beta-feature-status.md"
 assert_rejected "client-blocked-state" "browserService" "$client_blocked_state"
+
+# These checks catch a restored removed-feature proxy, a replacement of the
+# operator-facing Bash dispatcher, or a provisioning wrapper that again reports
+# success instead of directing the operator to its Phase 2 command.
+dev_proxy="$repo_root/frontend/dev-server.mjs"
+dev_proxy_residue=0
+for prohibited in "TELOS_DEV_LIVEKIT_URL" "/livekit" "LiveKit signaling"; do
+  if grep -Fn -- "$prohibited" "$dev_proxy"; then
+    echo "dev proxy still contains removed LiveKit residue: $prohibited" >&2
+    dev_proxy_residue=1
+  fi
+done
+if [[ $dev_proxy_residue -ne 0 ]]; then
+  exit 1
+fi
+
+if ! head -n 1 "$repo_root/telos" | grep -Fxq '#!/usr/bin/env bash'; then
+  echo "operator CLI is no longer the Bash ./telos dispatcher" >&2
+  exit 1
+fi
+if ! cli_help="$("$repo_root/telos" help)" || ! grep -Fq 'telos — operate a Telos node' <<<"$cli_help"; then
+  echo "Bash ./telos dispatcher did not produce the authoritative CLI help" >&2
+  exit 1
+fi
+
+for wrapper in provision-jellyfin.sh provision-grimmory.sh; do
+  set +e
+  wrapper_output="$(PYTHONDONTWRITEBYTECODE=1 bash "$repo_root/scripts/$wrapper" 2>&1)"
+  wrapper_status=$?
+  set -e
+  if [[ $wrapper_status -ne 3 ]]; then
+    echo "$wrapper returned $wrapper_status instead of not_run exit 3" >&2
+    exit 1
+  fi
+  if ! grep -Fxq 'not_run: use telos configure integrations after Phase 2' <<<"$wrapper_output"; then
+    echo "$wrapper did not print the Phase 2 integration guidance" >&2
+    exit 1
+  fi
+done
