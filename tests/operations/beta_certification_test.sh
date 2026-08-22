@@ -174,14 +174,17 @@ if evidence.digest_bytes(payload) != expected:
 PY
 
 snapshot_candidate="$tmp/candidate.fifo"
+replacement_candidate="$tmp/replacement.fifo"
 snapshot_evidence="$tmp/snapshot-evidence.json"
 snapshot_commit="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 replacement_commit="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 snapshot_payload="{\"schemaVersion\":1,\"sourceCommit\":\"$snapshot_commit\"}"$'\n'
 replacement_payload="{\"schemaVersion\":1,\"sourceCommit\":\"$replacement_commit\"}"$'\n'
 mkfifo "$snapshot_candidate"
+mkfifo "$replacement_candidate"
 (
   printf '%s' "$snapshot_payload" >"$snapshot_candidate"
+  mv -- "$replacement_candidate" "$snapshot_candidate"
   printf '%s' "$replacement_payload" >"$snapshot_candidate"
 ) >/dev/null 2>&1 &
 producer=$!
