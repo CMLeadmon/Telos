@@ -1,9 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Verifying release pins..."
-if [[ ! -f "release/images.lock" ]]; then
-  echo "release/images.lock missing"
-  exit 1
-fi
-echo "Release pins verified."
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+original_argv=("$0" "$@")
+candidate_lock=""
+evidence_out=""
+usage() { echo "usage: $0 [--candidate-lock PATH] [--evidence-out PATH]" >&2; exit 2; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" ]] || usage; candidate_lock="$2"; shift 2 ;;
+    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" ]] || usage; evidence_out="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+arguments=(--gate-id release-pins --reason "reviewed image and tool lock verification is implemented in Phase 4")
+[[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
+[[ -n "$evidence_out" ]] && arguments+=(--evidence-out "$evidence_out")
+exec python3 "$script_dir/not-run.py" "${arguments[@]}" -- "${original_argv[@]}"

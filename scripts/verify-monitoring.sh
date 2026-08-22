@@ -1,34 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODE="source"
-EVIDENCE_OUT=""
-
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+original_argv=("$0" "$@")
+candidate_lock=""
+evidence_out=""
+source_mode=0
+usage() { echo "usage: $0 [--source] [--candidate-lock PATH] [--evidence-out PATH]" >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --source)
-      MODE="source"
-      shift
-      ;;
-    --evidence-out)
-      EVIDENCE_OUT="$2"
-      shift 2
-      ;;
-    *)
-      shift
-      ;;
+    --source) [[ $source_mode -eq 0 ]] || usage; source_mode=1; shift ;;
+    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" ]] || usage; candidate_lock="$2"; shift 2 ;;
+    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" ]] || usage; evidence_out="$2"; shift 2 ;;
+    *) usage ;;
   esac
 done
-
-if [[ -n "$EVIDENCE_OUT" ]]; then
-  mkdir -p "$(dirname "$EVIDENCE_OUT")"
-  cat <<EOF > "$EVIDENCE_OUT"
-{
-  "status": "passed",
-  "monitoring": "verified",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-}
-EOF
-fi
-
-echo "Monitoring verification passed."
+arguments=(--gate-id monitoring --reason "live monitoring verification is implemented in Phase 4")
+[[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
+[[ -n "$evidence_out" ]] && arguments+=(--evidence-out "$evidence_out")
+exec python3 "$script_dir/not-run.py" "${arguments[@]}" -- "${original_argv[@]}"
