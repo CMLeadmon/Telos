@@ -781,7 +781,10 @@ REQUIRED_COMMANDS = [
     "bash scripts/check-release-truth.sh",
     "bash scripts/verify-clean-checkout.sh --inventory-only",
 ]
-KEY = re.compile(r"([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$")
+KEY = re.compile(r"(?:([A-Za-z0-9_-]+)|'([^']+)'|\"([^\"]+)\"):(?:[ \t]*(.*))?$")
+JOB_DIRECT_KEYS = {"runs-on", "permissions", "steps", "if", "continue-on-error", "defaults"}
+PERMISSION_DIRECT_KEYS = {"contents"}
+STEP_DIRECT_KEYS = {"name", "uses", "run", "if", "continue-on-error", "shell", "defaults"}
 
 
 class WorkflowError(ValueError):
@@ -796,16 +799,25 @@ def direct_mapping(line, indent):
     match = KEY.fullmatch(line[indent:])
     if match is None:
         return None
-    key, value = match.groups()
+    bare_key, single_quoted_key, double_quoted_key, value = match.groups()
+    key = bare_key or single_quoted_key or double_quoted_key
     return key, (value or "").split(" #", 1)[0].strip()
 
 
-def mapping_blocks(lines, start, end, indent):
+def mapping_blocks(lines, start, end, indent, allowed_keys=None, subject="mapping"):
     entries = []
     for index in range(start, end):
+        if len(lines[index]) - len(lines[index].lstrip(" ")) != indent:
+            continue
+        if not lines[index].strip() or lines[index].lstrip(" ").startswith("#"):
+            continue
         parsed = direct_mapping(lines[index], indent)
-        if parsed is not None:
-            entries.append((index, *parsed))
+        if parsed is None:
+            raise WorkflowError(f"{subject} has malformed direct-level construct")
+        key, value = parsed
+        if allowed_keys is not None and key not in allowed_keys:
+            raise WorkflowError(f"{subject} has unknown direct key: {key}")
+        entries.append((index, key, value))
     blocks = {}
     for position, (index, key, value) in enumerate(entries):
         if key in blocks:
@@ -821,25 +833,37 @@ def require_false_or_absent(mapping, key, subject):
 
 
 def parse_steps(lines, start, end):
-    starts = [
-        index for index in range(start, end)
-        if len(lines[index]) - len(lines[index].lstrip(" ")) == 6
-        and lines[index][6:].startswith("- ")
-    ]
+    starts = []
+    for index in range(start, end):
+        if len(lines[index]) - len(lines[index].lstrip(" ")) != 6:
+            continue
+        direct = lines[index][6:]
+        if not direct.strip() or direct.startswith("#"):
+            continue
+        if not direct.startswith("- "):
+            raise WorkflowError("steps has malformed direct-level construct")
+        starts.append(index)
     steps = []
     for position, index in enumerate(starts):
         step_end = starts[position + 1] if position + 1 < len(starts) else end
         first = KEY.fullmatch(lines[index][8:])
         if first is None:
             raise WorkflowError("step must begin with a direct key")
-        key, value = first.groups()
-        fields = mapping_blocks(lines, index + 1, step_end, 8)
+        bare_key, single_quoted_key, double_quoted_key, value = first.groups()
+        key = bare_key or single_quoted_key or double_quoted_key
+        if key not in STEP_DIRECT_KEYS:
+            raise WorkflowError(f"step has unknown direct key: {key}")
+        fields = mapping_blocks(lines, index + 1, step_end, 8, STEP_DIRECT_KEYS, "step")
         if key in fields:
             raise WorkflowError(f"duplicate direct step key: {key}")
         fields[key] = ((value or "").split(" #", 1)[0].strip(), index + 1, index + 1)
         if "if" in fields:
             raise WorkflowError("step is conditional")
         require_false_or_absent(fields, "continue-on-error", "step")
+        if "defaults" in fields:
+            raise WorkflowError("step must not define defaults")
+        if "run" in fields and "shell" in fields:
+            raise WorkflowError("required run step must not override shell")
         steps.append(fields)
     return steps
 
@@ -851,20 +875,25 @@ def validate_workflow(text):
     )
     if jobs_index is None:
         raise WorkflowError("missing top-level jobs mapping")
-    jobs = mapping_blocks(lines, jobs_index + 1, len(lines), 2)
+    jobs = mapping_blocks(lines, jobs_index + 1, len(lines), 2, subject="jobs")
     if "truth-and-gates" not in jobs:
         raise WorkflowError("missing truth-and-gates job")
     _, job_start, job_end = jobs["truth-and-gates"]
-    job = mapping_blocks(lines, job_start, job_end, 4)
+    job = mapping_blocks(lines, job_start, job_end, 4, JOB_DIRECT_KEYS, "truth-and-gates job")
     if "if" in job:
         raise WorkflowError("truth-and-gates job is conditional")
     require_false_or_absent(job, "continue-on-error", "truth-and-gates job")
+    if "defaults" in job:
+        raise WorkflowError("truth-and-gates job must not define defaults")
     if job.get("runs-on", (None,))[0] != "ubuntu-latest":
         raise WorkflowError("truth-and-gates must run on ubuntu-latest")
     if "permissions" not in job or job["permissions"][0]:
         raise WorkflowError("truth-and-gates must have a permissions mapping")
     _, permissions_start, permissions_end = job["permissions"]
-    permissions = mapping_blocks(lines, permissions_start, permissions_end, 6)
+    permissions = mapping_blocks(
+        lines, permissions_start, permissions_end, 6,
+        PERMISSION_DIRECT_KEYS, "truth-and-gates permissions",
+    )
     if {key: value[0] for key, value in permissions.items()} != {"contents": "read"}:
         raise WorkflowError("truth-and-gates permissions must be exactly contents: read")
     if "steps" not in job or job["steps"][0]:
@@ -892,11 +921,18 @@ def assert_rejected(name, mutation, expected):
     raise SystemExit(f"workflow mutation {name} was accepted")
 
 
+def assert_accepted(name, mutation):
+    try:
+        validate_workflow(mutation)
+    except WorkflowError as error:
+        raise SystemExit(f"workflow mutation {name} was rejected: {error}")
+
+
 first_run = "        run: bash tests/operations/evidence_envelope_test.sh"
 assert_rejected(
     "nested-fake-run",
     workflow.replace(first_run, "        env:\n          run: bash tests/operations/evidence_envelope_test.sh", 1),
-    "exactly match",
+    "unknown direct key",
 )
 assert_rejected(
     "permission-spoof",
@@ -905,7 +941,7 @@ assert_rejected(
         "    permissions:\n      env:\n        contents: read",
         1,
     ),
-    "permissions must be exactly",
+    "unknown direct key",
 )
 assert_rejected(
     "job-if-false",
@@ -926,6 +962,105 @@ assert_rejected(
     "step-continue-true",
     workflow.replace(first_run, "        continue-on-error: true\n" + first_run, 1),
     "step permits continuation",
+)
+for quote in ("'", '"'):
+    assert_accepted(
+        f"quoted-job-key-{quote}",
+        workflow.replace("  truth-and-gates:", f"  {quote}truth-and-gates{quote}:", 1),
+    )
+    assert_accepted(
+        f"quoted-runs-on-{quote}",
+        workflow.replace(
+            "  truth-and-gates:\n    runs-on:",
+            f"  truth-and-gates:\n    {quote}runs-on{quote}:",
+            1,
+        ),
+    )
+    assert_accepted(
+        f"quoted-permission-{quote}",
+        workflow.replace("      contents:", f"      {quote}contents{quote}:", 1),
+    )
+    assert_accepted(
+        f"quoted-sections-{quote}",
+        workflow.replace(
+            "    permissions:\n      contents: read\n    steps:",
+            f"    {quote}permissions{quote}:\n      {quote}contents{quote}: read\n    {quote}steps{quote}:",
+            1,
+        ),
+    )
+    assert_accepted(
+        f"quoted-run-{quote}",
+        workflow.replace(first_run, f"        {quote}run{quote}:" + first_run.split(":", 1)[1], 1),
+    )
+    assert_rejected(
+        f"job-{quote}if{quote}-false",
+        workflow.replace(
+            "  truth-and-gates:\n",
+            f"  truth-and-gates:\n    {quote}if{quote}: ${{{{ false }}}}\n",
+            1,
+        ),
+        "job is conditional",
+    )
+    assert_rejected(
+        f"step-{quote}if{quote}-false",
+        workflow.replace(first_run, f"        {quote}if{quote}: ${{{{ false }}}}\n" + first_run, 1),
+        "step is conditional",
+    )
+    assert_rejected(
+        f"job-{quote}continue{quote}-true",
+        workflow.replace(
+            "  truth-and-gates:\n",
+            f"  truth-and-gates:\n    {quote}continue-on-error{quote}: true\n",
+            1,
+        ),
+        "job permits continuation",
+    )
+    assert_rejected(
+        f"step-{quote}continue{quote}-true",
+        workflow.replace(first_run, f"        {quote}continue-on-error{quote}: true\n" + first_run, 1),
+        "step permits continuation",
+    )
+    assert_rejected(
+        f"job-{quote}defaults{quote}-shell",
+        workflow.replace(
+            "    permissions:\n",
+            f"    {quote}defaults{quote}:\n      run:\n        shell: /bin/true {{0}}\n    permissions:\n",
+            1,
+        ),
+        "must not define defaults",
+    )
+    assert_rejected(
+        f"step-{quote}shell{quote}-override",
+        workflow.replace(first_run, f"        {quote}shell{quote}: /bin/true {{0}}\n" + first_run, 1),
+        "must not override shell",
+    )
+assert_rejected(
+    "job-default-shell",
+    workflow.replace(
+        "    permissions:\n",
+        "    defaults:\n      run:\n        shell: /bin/true {0}\n    permissions:\n",
+        1,
+    ),
+    "must not define defaults",
+)
+assert_rejected(
+    "step-shell-override",
+    workflow.replace(first_run, "        shell: /bin/true {0}\n" + first_run, 1),
+    "must not override shell",
+)
+assert_rejected(
+    "unknown-job-key",
+    workflow.replace(
+        "  truth-and-gates:\n    runs-on:",
+        "  truth-and-gates:\n    unknown: value\n    runs-on:",
+        1,
+    ),
+    "unknown direct key",
+)
+assert_rejected(
+    "malformed-step-key",
+    workflow.replace(first_run, "        malformed direct construct\n" + first_run, 1),
+    "malformed direct-level construct",
 )
 PY
 
