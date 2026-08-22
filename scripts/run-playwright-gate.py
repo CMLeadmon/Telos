@@ -21,6 +21,8 @@ READY_PORT = 3000
 READY_URL = f"http://{READY_HOST}:{READY_PORT}/"
 EXIT_FAILED = 1
 EXIT_TIMEOUT = 124
+TCP_LISTEN_STATE = "0A"
+PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
 
 
 class GateInterrupted(Exception):
@@ -113,6 +115,93 @@ def owned_process_alive(owned):
     return owned.process.poll() is None and process_group_alive(owned.pgid)
 
 
+def listening_socket_inodes(port):
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("listener ownership inspection requires Linux /proc")
+    inodes = set()
+    tables_read = 0
+    for table_path in PROC_TCP_TABLES:
+        try:
+            with open(table_path, encoding="ascii") as table:
+                lines = table.readlines()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise RuntimeError(
+                f"cannot inspect listener ownership via {table_path}: {error}"
+            ) from error
+        tables_read += 1
+        for line in lines[1:]:
+            fields = line.split()
+            if len(fields) < 10:
+                raise RuntimeError(f"cannot parse listener ownership table {table_path}")
+            try:
+                local_port = int(fields[1].rsplit(":", 1)[1], 16)
+            except (IndexError, ValueError) as error:
+                raise RuntimeError(
+                    f"cannot parse listener ownership table {table_path}"
+                ) from error
+            if fields[3] == TCP_LISTEN_STATE and local_port == port:
+                inodes.add(fields[9])
+    if tables_read == 0:
+        raise RuntimeError("listener ownership inspection is unavailable")
+    return inodes
+
+
+def socket_owner_pids(inodes):
+    owners = {inode: set() for inode in inodes}
+    try:
+        processes = list(os.scandir("/proc"))
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect listener process ownership: {error}") from error
+    for process_entry in processes:
+        if not process_entry.name.isdigit():
+            continue
+        try:
+            descriptors = list(os.scandir(f"/proc/{process_entry.name}/fd"))
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                target = os.readlink(descriptor.path)
+            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                continue
+            if target.startswith("socket:[") and target.endswith("]"):
+                inode = target[8:-1]
+                if inode in owners:
+                    owners[inode].add(int(process_entry.name))
+    return owners
+
+
+def owned_listener_alive(server):
+    if not owned_process_alive(server):
+        return False, "frontend dev server leader/group is not live"
+    try:
+        inodes = listening_socket_inodes(READY_PORT)
+        if not inodes:
+            return False, f"port {READY_PORT} has no listening socket"
+        owners = socket_owner_pids(inodes)
+    except RuntimeError as error:
+        return False, str(error)
+    for inode in sorted(inodes):
+        owner_pids = owners[inode]
+        if not owner_pids:
+            return False, f"cannot identify the owner of port {READY_PORT} listener"
+        for pid in owner_pids:
+            try:
+                owner_pgid = os.getpgid(pid)
+            except (ProcessLookupError, PermissionError):
+                return False, f"cannot confirm the owner of port {READY_PORT} listener"
+            if owner_pgid != server.pgid:
+                return (
+                    False,
+                    f"port {READY_PORT} listener is not owned by the frontend dev server group",
+                )
+    return True, ""
+
+
 def wait_until_ready(server, signals, timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
@@ -122,10 +211,16 @@ def wait_until_ready(server, signals, timeout_seconds):
         try:
             with urllib.request.urlopen(READY_URL, timeout=1) as response:
                 if response.status < 500 and owned_process_alive(server):
+                    listener_ready, reason = owned_listener_alive(server)
+                    if not listener_ready:
+                        return False, reason
                     signals.raise_if_received()
                     return True, ""
         except urllib.error.HTTPError as error:
             if error.code < 500 and owned_process_alive(server):
+                listener_ready, reason = owned_listener_alive(server)
+                if not listener_ready:
+                    return False, reason
                 signals.raise_if_received()
                 return True, ""
         except (urllib.error.URLError, TimeoutError):
@@ -146,7 +241,18 @@ def wait_for_playwright(playwright, server, signals, timeout_seconds):
         signals.raise_if_received()
         return_code = playwright.process.poll()
         if return_code is not None:
-            return normalized_return_code(return_code)
+            result = normalized_return_code(return_code)
+            if result == 0:
+                listener_ready, reason = owned_listener_alive(server)
+                if not listener_ready:
+                    print(
+                        "playwright-gate: frontend dev server was not live at "
+                        f"Playwright completion: {reason}",
+                        file=sys.stderr,
+                    )
+                    return EXIT_FAILED
+                signals.raise_if_received()
+            return result
         if not owned_process_alive(server):
             print(
                 "playwright-gate: frontend dev server leader/group exited "
@@ -162,13 +268,15 @@ def wait_for_playwright(playwright, server, signals, timeout_seconds):
     return EXIT_TIMEOUT
 
 
-def wait_for_group_exit(pgid, timeout_seconds):
+def wait_for_owned_exit(owned, timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if not process_group_alive(pgid):
+        leader_exited = owned.process.poll() is not None
+        if leader_exited and not process_group_alive(owned.pgid):
             return True
         time.sleep(0.05)
-    return not process_group_alive(pgid)
+    leader_exited = owned.process.poll() is not None
+    return leader_exited and not process_group_alive(owned.pgid)
 
 
 def stop_owned_group(owned, timeout_seconds):
@@ -177,16 +285,14 @@ def stop_owned_group(owned, timeout_seconds):
             os.killpg(owned.pgid, signal.SIGTERM)
         except ProcessLookupError:
             pass
-    if not wait_for_group_exit(owned.pgid, timeout_seconds):
+    stopped = wait_for_owned_exit(owned, timeout_seconds)
+    if not stopped:
         try:
             os.killpg(owned.pgid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        wait_for_group_exit(owned.pgid, timeout_seconds)
-    try:
-        owned.process.wait(timeout=0)
-    except subprocess.TimeoutExpired:
-        pass
+        stopped = wait_for_owned_exit(owned, timeout_seconds)
+    return stopped
 
 
 def start_owned(argv, cwd, **kwargs):
@@ -209,6 +315,8 @@ def run_gate(args, signals):
 
     server = None
     playwright = None
+    result = EXIT_FAILED
+    cleanup_succeeded = True
     with tempfile.TemporaryFile(mode="w+b") as server_log:
         try:
             try:
@@ -223,30 +331,47 @@ def run_gate(args, signals):
                     f"playwright-gate: cannot start frontend dev server: {error}",
                     file=sys.stderr,
                 )
-                return EXIT_FAILED
-
-            ready, reason = wait_until_ready(
-                server, signals, args.ready_timeout_seconds
-            )
-            if not ready:
-                print(f"playwright-gate: {reason}", file=sys.stderr)
-                replay_server_log(server_log)
-                return EXIT_FAILED
-            try:
-                playwright = start_owned(
-                    ["npx", "playwright", "test"], FRONTEND_ROOT
+            else:
+                ready, reason = wait_until_ready(
+                    server, signals, args.ready_timeout_seconds
                 )
-            except OSError as error:
-                print(f"playwright-gate: cannot run Playwright: {error}", file=sys.stderr)
-                return EXIT_FAILED
-            return wait_for_playwright(
-                playwright, server, signals, args.playwright_timeout_seconds
-            )
+                if not ready:
+                    print(f"playwright-gate: {reason}", file=sys.stderr)
+                    replay_server_log(server_log)
+                else:
+                    try:
+                        playwright = start_owned(
+                            ["npx", "playwright", "test"], FRONTEND_ROOT
+                        )
+                    except OSError as error:
+                        print(
+                            f"playwright-gate: cannot run Playwright: {error}",
+                            file=sys.stderr,
+                        )
+                    else:
+                        result = wait_for_playwright(
+                            playwright, server, signals,
+                            args.playwright_timeout_seconds,
+                        )
         finally:
             if playwright is not None:
-                stop_owned_group(playwright, args.shutdown_timeout_seconds)
+                cleanup_succeeded = (
+                    stop_owned_group(playwright, args.shutdown_timeout_seconds)
+                    and cleanup_succeeded
+                )
             if server is not None:
-                stop_owned_group(server, args.shutdown_timeout_seconds)
+                cleanup_succeeded = (
+                    stop_owned_group(server, args.shutdown_timeout_seconds)
+                    and cleanup_succeeded
+                )
+    if not cleanup_succeeded:
+        print(
+            "playwright-gate: owned process cleanup could not be confirmed",
+            file=sys.stderr,
+        )
+        if result == 0:
+            result = EXIT_FAILED
+    return result
 
 
 def main(argv=None):
@@ -256,7 +381,9 @@ def main(argv=None):
     for signum in (signal.SIGTERM, signal.SIGINT):
         previous_handlers[signum] = signal.signal(signum, signals.receive)
     try:
-        return run_gate(args, signals)
+        result = run_gate(args, signals)
+        signals.raise_if_received()
+        return result
     except GateInterrupted as interruption:
         return 128 + interruption.signum
     finally:

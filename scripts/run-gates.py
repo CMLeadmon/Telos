@@ -221,17 +221,19 @@ def checkout_has_source_changes():
     return bool(completed.stdout)
 
 
+def source_checkout_problem(source_commit):
+    if current_checkout_commit() != source_commit:
+        return "HEAD does not match candidate sourceCommit"
+    if checkout_has_source_changes():
+        return "tree is dirty relative to candidate sourceCommit"
+    return None
+
+
 def validate_subject_bindings(gates, source_commit):
     if any(gate["subjectKind"] == "source" for gate in gates):
-        checkout_commit = current_checkout_commit()
-        if source_commit != checkout_commit:
-            raise GateError(
-                "candidate lock sourceCommit does not match the current checkout commit"
-            )
-        if checkout_has_source_changes():
-            raise GateError(
-                "source checkout is dirty relative to the current checkout commit"
-            )
+        problem = source_checkout_problem(source_commit)
+        if problem:
+            raise GateError(f"source checkout {problem}")
 
 
 def select_gates(catalog, scope, requested_ids, phase):
@@ -453,21 +455,33 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
             reason = f"prerequisite did not pass: {details}"
             exit_code = EXIT_NOT_RUN
             output = f"not_run: {reason}\n".encode("utf-8")
-        elif gate["subjectKind"] == "source" and checkout_has_source_changes():
-            status = "failed"
-            reason = "source checkout was dirty before gate execution"
-            exit_code = EXIT_FAILED
-            output = f"failed: {reason}\n".encode("utf-8")
         else:
-            status, reason, exit_code, output = run_command(gate)
-            if (
-                gate["subjectKind"] == "source"
-                and checkout_has_source_changes()
-            ):
+            source_problem = None
+            if gate["subjectKind"] == "source":
+                source_problem = source_checkout_problem(source_commit)
+            if source_problem:
                 status = "failed"
-                reason = "source gate dirtied the checkout during execution"
+                if source_problem.startswith("tree is dirty"):
+                    reason = "source checkout was dirty before gate execution"
+                else:
+                    reason = f"source checkout {source_problem} before gate execution"
                 exit_code = EXIT_FAILED
-                output += f"failed: {reason}\n".encode("utf-8")
+                output = f"failed: {reason}\n".encode("utf-8")
+            else:
+                status, reason, exit_code, output = run_command(gate)
+                if gate["subjectKind"] == "source":
+                    source_problem = source_checkout_problem(source_commit)
+                if source_problem:
+                    status = "failed"
+                    if source_problem.startswith("tree is dirty"):
+                        reason = "source gate dirtied the checkout during execution"
+                    else:
+                        reason = (
+                            "source gate violated candidate identity during execution: "
+                            f"{source_problem}"
+                        )
+                    exit_code = EXIT_FAILED
+                    output += f"failed: {reason}\n".encode("utf-8")
         if gate["subjectKind"] == "artifact":
             if status == "passed":
                 status = "failed"

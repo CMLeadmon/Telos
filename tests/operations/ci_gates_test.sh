@@ -318,6 +318,63 @@ assert later["exitCode"] == 1, later
 assert "dirty before" in later["reason"], later
 PY
 
+python3 - \
+  "$fixture_dir/moved-head.json" \
+  "$fixture_dir/later-after-head-move-ran" <<'PY'
+import json
+import sys
+
+catalog_path, marker = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [
+    {
+        "id": "moves-head", "phase": 1, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": ["git", "commit", "--allow-empty", "-m", "move fixture head"],
+        "prerequisites": [], "subjectKind": "source",
+    },
+    {
+        "id": "later-after-head-move", "phase": 1, "scope": "local",
+        "required": True, "timeoutSeconds": 10,
+        "command": [
+            "python3", "-c",
+            "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('ran', encoding='utf-8')",
+            marker,
+        ],
+        "prerequisites": [], "subjectKind": "source",
+    },
+]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+set +e
+python3 "$source_runner" \
+  --catalog "$fixture_dir/moved-head.json" --scope local \
+  --candidate-lock "$fixture_dir/matching-candidate.json" \
+  --evidence-dir "$fixture_dir/moved-head-evidence"
+status=$?
+set -e
+git -C "$source_repo" reset --hard "$current_commit" >/dev/null
+[[ $status -ne 0 ]] || { echo "source gate that moved HEAD returned success" >&2; exit 1; }
+[[ ! -e "$fixture_dir/later-after-head-move-ran" ]] || {
+  echo "later source gate ran after HEAD moved away from the candidate" >&2
+  exit 1
+}
+python3 - "$fixture_dir/moved-head-evidence" <<'PY'
+import json
+import pathlib
+import sys
+
+evidence_dir = pathlib.Path(sys.argv[1])
+moving = json.loads((evidence_dir / "moves-head.json").read_text())
+later = json.loads((evidence_dir / "later-after-head-move.json").read_text())
+assert moving["status"] == "failed", moving
+assert moving["exitCode"] == 1, moving
+assert "sourceCommit" in moving["reason"], moving
+assert later["status"] == "failed", later
+assert later["exitCode"] == 1, later
+assert "sourceCommit" in later["reason"], later
+PY
+
 python3 - "$fixture_dir/artifact.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
 import json
 import sys
@@ -657,6 +714,58 @@ for arguments in \
   [[ $status -eq 2 ]] || { echo "Playwright wrapper accepted: $arguments" >&2; exit 1; }
 done
 
+python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
+import argparse
+import contextlib
+import importlib.util
+import io
+import pathlib
+import sys
+
+sys.dont_write_bytecode = True
+script_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("run_playwright_gate", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+class FakeProcess:
+    def poll(self):
+        return None
+
+
+class FakeOwned:
+    def __init__(self, pgid):
+        self.pgid = pgid
+        self.process = FakeProcess()
+
+
+server = FakeOwned(41001)
+playwright = FakeOwned(41002)
+owned = iter((server, playwright))
+module.require_free_port = lambda: None
+module.start_owned = lambda *_args, **_kwargs: next(owned)
+module.wait_until_ready = lambda *_args: (True, "")
+module.wait_for_playwright = lambda *_args: 0
+module.process_group_alive = lambda _pgid: True
+module.wait_for_owned_exit = lambda *_args: False
+sent_signals = []
+module.os.killpg = lambda pgid, signum: sent_signals.append((pgid, signum))
+args = argparse.Namespace(
+    ready_timeout_seconds=1,
+    playwright_timeout_seconds=1,
+    shutdown_timeout_seconds=1,
+)
+with contextlib.redirect_stderr(io.StringIO()):
+    result = module.run_gate(args, module.SignalState())
+assert result == module.EXIT_FAILED, result
+assert sent_signals == [
+    (playwright.pgid, module.signal.SIGTERM),
+    (playwright.pgid, module.signal.SIGKILL),
+    (server.pgid, module.signal.SIGTERM),
+    (server.pgid, module.signal.SIGKILL),
+], sent_signals
+PY
+
 process_fixture="$repo_root/tests/fixtures/gates/process_tree.py"
 fixture_bin="$fixture_dir/process-bin"
 mkdir "$fixture_bin"
@@ -773,6 +882,38 @@ for signal_case in TERM INT; do
   assert_fixture_processes_dead "$signal_state"
 done
 
+cleanup_signal_state="$fixture_dir/process-cleanup-signal"
+mkdir "$cleanup_signal_state"
+env \
+  PATH="$fixture_bin:$PATH" \
+  TELOS_GATE_FIXTURE_STATE="$cleanup_signal_state" \
+  TELOS_GATE_FIXTURE_NPM_MODE=normal \
+  TELOS_GATE_FIXTURE_NPX_MODE=normal \
+  TELOS_GATE_FIXTURE_CHILD_MODE=cleanup-marker \
+  python3 "$repo_root/scripts/run-playwright-gate.py" \
+    --ready-timeout-seconds 5 \
+    --playwright-timeout-seconds 5 \
+    --shutdown-timeout-seconds 2 &
+cleanup_signal_wrapper_pid=$!
+for _ in {1..100}; do
+  [[ -e "$cleanup_signal_state/playwright-cleanup-term.pid" ]] && break
+  sleep 0.05
+done
+[[ -e "$cleanup_signal_state/playwright-cleanup-term.pid" ]] || {
+  echo "Playwright wrapper never entered the controlled cleanup window" >&2
+  exit 1
+}
+kill -s TERM "$cleanup_signal_wrapper_pid"
+set +e
+wait "$cleanup_signal_wrapper_pid"
+status=$?
+set -e
+[[ $status -eq 143 ]] || {
+  echo "TERM received during cleanup returned $status instead of 143" >&2
+  exit 1
+}
+assert_fixture_processes_dead "$cleanup_signal_state"
+
 leader_exit_state="$fixture_dir/process-leader-exit"
 set +e
 run_playwright_fixture "$leader_exit_state" leader-exit hang
@@ -784,6 +925,70 @@ set -e
   exit 1
 }
 assert_fixture_processes_dead "$leader_exit_state"
+
+completion_loss_state="$fixture_dir/process-completion-loss"
+set +e
+run_playwright_fixture "$completion_loss_state" normal server-loss-at-completion
+status=$?
+set -e
+[[ $status -ne 0 ]] || {
+  echo "Playwright completion returned success after the owned HTTP listener exited" >&2
+  exit 1
+}
+[[ -e "$completion_loss_state/playwright-leader.pid" ]] || {
+  echo "completion-loss Playwright fixture never ran" >&2
+  exit 1
+}
+assert_fixture_processes_dead "$completion_loss_state"
+
+gap_state="$fixture_dir/process-port-gap"
+gap_competitor_state="$fixture_dir/process-port-gap-competitor"
+mkdir "$gap_state" "$gap_competitor_state"
+env \
+  PATH="$fixture_bin:$PATH" \
+  TELOS_GATE_FIXTURE_STATE="$gap_state" \
+  TELOS_GATE_FIXTURE_NPM_MODE=delayed-server \
+  TELOS_GATE_FIXTURE_NPX_MODE=normal \
+  python3 "$repo_root/scripts/run-playwright-gate.py" \
+    --ready-timeout-seconds 5 \
+    --playwright-timeout-seconds 5 \
+    --shutdown-timeout-seconds 1 &
+gap_wrapper_pid=$!
+for _ in {1..100}; do
+  [[ -e "$gap_state/server-leader.pid" ]] && break
+  sleep 0.05
+done
+[[ -e "$gap_state/server-leader.pid" ]] || {
+  echo "delayed npm fixture never reached the post-preflight gap" >&2
+  exit 1
+}
+TELOS_GATE_FIXTURE_STATE="$gap_competitor_state" \
+  python3 "$process_fixture" port-holder &
+gap_competitor_pid=$!
+for _ in {1..100}; do
+  [[ -e "$gap_competitor_state/occupied.pid" ]] && break
+  sleep 0.05
+done
+[[ -e "$gap_competitor_state/occupied.pid" ]] || {
+  echo "post-preflight competitor did not claim port 3000" >&2
+  exit 1
+}
+touch "$gap_state/allow-server"
+set +e
+wait "$gap_wrapper_pid"
+status=$?
+set -e
+kill "$gap_competitor_pid" 2>/dev/null || true
+wait "$gap_competitor_pid" 2>/dev/null || true
+[[ $status -ne 0 ]] || {
+  echo "unrelated listener in the port-check/start gap returned success" >&2
+  exit 1
+}
+[[ ! -e "$gap_state/playwright-leader.pid" ]] || {
+  echo "Playwright ran against an unrelated post-preflight listener" >&2
+  exit 1
+}
+assert_fixture_processes_dead "$gap_state"
 
 occupied_state="$fixture_dir/process-occupied"
 mkdir "$occupied_state"

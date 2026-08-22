@@ -24,10 +24,27 @@ def ignore_termination():
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
+def record_cleanup_signal(_signum, _frame):
+    record("playwright-cleanup-term")
+
+
 def wait_for(path, timeout_seconds=5):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if path.exists():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def wait_for_process_exit(pid, timeout_seconds=5):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            fields = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="ascii").split()
+        except FileNotFoundError:
+            return True
+        if len(fields) > 2 and fields[2] == "Z":
             return True
         time.sleep(0.02)
     return False
@@ -54,13 +71,19 @@ class QuietHandler(http.server.BaseHTTPRequestHandler):
 def serve(name, stubborn):
     if stubborn:
         ignore_termination()
-    server = http.server.HTTPServer(("127.0.0.1", 3000), QuietHandler)
+    try:
+        server = http.server.HTTPServer(("127.0.0.1", 3000), QuietHandler)
+    except OSError:
+        return
     record(name)
     server.serve_forever()
 
 
 def run_npm():
     record("server-leader")
+    if os.environ.get("TELOS_GATE_FIXTURE_NPM_MODE") == "delayed-server":
+        if not wait_for(STATE_DIR / "allow-server"):
+            return 2
     child = spawn("server-child")
     if not wait_for(STATE_DIR / "server-child.pid"):
         child.kill()
@@ -77,8 +100,13 @@ def run_npx():
     if not wait_for(STATE_DIR / "stubborn-child.pid"):
         child.kill()
         return 2
-    if os.environ.get("TELOS_GATE_FIXTURE_NPX_MODE") == "normal":
+    mode = os.environ.get("TELOS_GATE_FIXTURE_NPX_MODE")
+    if mode == "normal":
         return 0
+    if mode == "server-loss-at-completion":
+        server_pid = int((STATE_DIR / "server-child.pid").read_text(encoding="ascii"))
+        os.kill(server_pid, signal.SIGKILL)
+        return 0 if wait_for_process_exit(server_pid) else 2
     while True:
         time.sleep(1)
 
@@ -91,14 +119,18 @@ def main():
     if role == "npx":
         return run_npx()
     if role == "server-child":
-        serve("server-child", stubborn=True)
+        return serve("server-child", stubborn=True)
     if role == "stubborn-child":
         record("stubborn-child")
-        ignore_termination()
+        if os.environ.get("TELOS_GATE_FIXTURE_CHILD_MODE") == "cleanup-marker":
+            signal.signal(signal.SIGTERM, record_cleanup_signal)
+            signal.signal(signal.SIGINT, record_cleanup_signal)
+        else:
+            ignore_termination()
         while True:
             time.sleep(1)
     if role == "port-holder":
-        serve("occupied", stubborn=False)
+        return serve("occupied", stubborn=False)
     raise SystemExit(f"unknown fixture role: {role}")
 
 
