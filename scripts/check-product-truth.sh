@@ -191,7 +191,12 @@ go_modules = set(re.findall(r"^\s*([A-Za-z0-9._/-]+)\s+v", text("backend/go.mod"
 removed_route_families = {
     "livekit": (r"/livekit(?:/|$)",),
     "voice-rooms": (r"/api/v1/voice(?:/|$)",),
-    "watch-parties": (r"/api/v1/watch-party(?:/|$)", r"/api/v1/watch_party(?:/|$)"),
+    "watch-parties": (
+        r"/api/v1/watch-party(?:/|$)",
+        r"/api/v1/watch_parties(?:/|$)",
+        r"/api/v1/watch_party(?:/|$)",
+        r"/api/v1/watch-parties(?:/|$)",
+    ),
     "notification-inbox": (r"/api/v1/notifications(?:/|$)",),
     "my-list": (
         r"/api/v1/users/me/media-list(?:/|$)",
@@ -303,6 +308,8 @@ if contract_valid:
             or generic_api[0]["priority"] is None
             or catch_all[0]["priority"] is None
             or generic_api[0]["priority"] <= catch_all[0]["priority"]
+            or f"PathPrefix({chr(96)}/api/v1{chr(96)})" not in generic_api[0]["rule"]
+            or f"Host({chr(96)}" not in generic_api[0]["rule"]
         ):
             fail("apiService", "realized client topology needs a higher-priority generic /api/v1 fallback")
     else:
@@ -315,8 +322,16 @@ if contract_valid:
             fail("browserService", "missing truthful blocked hosted-browser delivery marker")
     def positive_claim(subject):
         for line in status.splitlines():
-            if re.search(subject, line, re.I) and re.search(r"\b(shipping|ready)\b", line, re.I):
-                if not re.search(r"\b(not|never|without)\s+(ready|shipping)\b", line, re.I):
+            if not re.search(subject, line, re.I):
+                continue
+            for claim in re.finditer(r"\b(shipping|ready)\b", line, re.I):
+                prefix = line[max(0, claim.start() - 32):claim.start()]
+                if not re.search(
+                    r"\b(?:not(?:\s+yet)?|never|without|isn't)\s+$"
+                    r"|\b(?:not(?:\s+yet)?|isn't)\s+ready\s+for\s+$",
+                    prefix,
+                    re.I,
+                ):
                     return True
         return False
 

@@ -212,7 +212,7 @@ routes = routes.replace("      service: telos-core\n      tls:\n        certReso
 routes = routes.replace(
     "    # Default: other JSON API and the static frontend, 64 KiB edge limit.",
     """    telos-api:
-      rule: 'Host(telos) && PathPrefix(/api/v1)'
+      rule: 'Host(`telos`) && PathPrefix(`/api/v1`)'
       entryPoints:
         - websecure
       priority: 2
@@ -450,3 +450,56 @@ with open(path, "w", encoding="utf-8") as destination:
 PY
   assert_rejected "traefik-$alias" "removedFeatures" "$alias_fixture"
 done
+
+watch_parties_route="$fixture_root/watch-parties-route"
+copy_fixture "$watch_parties_route"
+printf '\nmux.HandleFunc("GET /api/v1/watch-parties", func(http.ResponseWriter, *http.Request) {})\n' \
+  >>"$watch_parties_route/backend/main.go"
+assert_rejected "watch-parties-route" "removedFeatures" "$watch_parties_route"
+
+honest_browser_isnt_ready="$fixture_root/honest-browser-isnt-ready"
+copy_fixture "$honest_browser_isnt_ready"
+printf "\\nHosted-browser delivery isn't ready.\\n" \
+  >>"$honest_browser_isnt_ready/documentation/product/beta-feature-status.md"
+assert_accepted "$honest_browser_isnt_ready"
+
+mixed_browser_claim="$fixture_root/mixed-browser-claim"
+copy_fixture "$mixed_browser_claim"
+printf '\\nHosted-browser delivery is not ready, but shipping.\\n' \
+  >>"$mixed_browser_claim/documentation/product/beta-feature-status.md"
+assert_rejected "mixed-browser-claim" "browserService" "$mixed_browser_claim"
+
+honest_backup_not_yet_ready="$fixture_root/honest-backup-not-yet-ready"
+copy_fixture "$honest_backup_not_yet_ready"
+printf '\\nEncrypted backup recovery is not yet ready.\\n' \
+  >>"$honest_backup_not_yet_ready/documentation/product/beta-feature-status.md"
+assert_accepted "$honest_backup_not_yet_ready"
+
+mixed_backup_claim="$fixture_root/mixed-backup-claim"
+copy_fixture "$mixed_backup_claim"
+printf '\\nEncrypted backup and recovery are not ready, but shipping.\\n' \
+  >>"$mixed_backup_claim/documentation/product/beta-feature-status.md"
+assert_rejected "mixed-backup-claim" "backupStatus" "$mixed_backup_claim"
+
+for state in ready shipping; do
+  client_state="$fixture_root/client-$state"
+  copy_fixture "$client_state"
+  realize_client "$client_state"
+  sed -i "s/implemented-awaiting-evidence/$state/" \
+    "$client_state/documentation/product/beta-feature-status.md"
+  assert_rejected "client-$state" "browserService" "$client_state"
+done
+
+client_stale_unavailable="$fixture_root/client-stale-unavailable"
+copy_fixture "$client_stale_unavailable"
+realize_client "$client_stale_unavailable"
+printf '\\nHosted-browser delivery remains unavailable.\\n' \
+  >>"$client_stale_unavailable/documentation/product/beta-feature-status.md"
+assert_rejected "client-stale-unavailable" "browserService" "$client_stale_unavailable"
+
+client_blocked_state="$fixture_root/client-blocked-state"
+copy_fixture "$client_blocked_state"
+realize_client "$client_blocked_state"
+sed -i 's/implemented-awaiting-evidence/Blocked until Phase 2/' \
+  "$client_blocked_state/documentation/product/beta-feature-status.md"
+assert_rejected "client-blocked-state" "browserService" "$client_blocked_state"
