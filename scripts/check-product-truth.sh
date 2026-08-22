@@ -79,13 +79,25 @@ expected = {
     ],
 }
 contract = document("documentation/product/beta-contract.json", "contract")
-if contract is not None:
-    if not isinstance(contract, dict) or set(contract) != set(expected):
-        fail("contract", "beta-contract.json must use exactly the approved closed keys")
-    else:
-        for key, value in expected.items():
-            if contract[key] != value:
-                fail(key, "does not match the approved beta contract")
+contract_valid = False
+if not isinstance(contract, dict):
+    fail("contract", "beta-contract.json must be an object")
+else:
+    actual_keys = set(contract)
+    missing_keys = set(expected) - actual_keys
+    extra_keys = actual_keys - set(expected)
+    for key in sorted(missing_keys):
+        fail(key, "is missing from beta-contract.json")
+    if extra_keys:
+        fail("contract", f"has unknown keys: {sorted(extra_keys)!r}")
+    for key, value in expected.items():
+        if key not in contract:
+            continue
+        if type(contract[key]) is not type(value):
+            fail(key, "has the wrong JSON type")
+        elif contract[key] != value:
+            fail(key, "does not match the approved beta contract")
+    contract_valid = not errors
 
 
 def balanced_array(source, symbol):
@@ -156,13 +168,19 @@ else:
         else:
             hrefs.append(href.removeprefix("/"))
             capabilities.append(capability)
-    if contract is not None and hrefs != contract["modules"]:
+    if contract_valid and hrefs != contract["modules"]:
         fail("modules", f"MODULES hrefs are {hrefs!r}, not the contract inventory")
     if capabilities != ["view_channel", "view_media", "view_library", "view_files"]:
         fail("modules", f"MODULES capabilities are {capabilities!r}, not canonical capabilities")
+    if contract_valid and not re.search(
+        rf"<Link\s+[^>]*href=\{{?['\"]/{re.escape(contract['settingsSurface'])}['\"]\}}?",
+        text("frontend/src/components/AppShell.tsx"),
+        re.S,
+    ):
+        fail("settingsSurface", "AppShell.tsx has no canonical settings Link outside MODULES")
 
 
-routes = re.findall(r'mux\.Handle\(\s*"([^"]+)"', text("backend/main.go"))
+routes = re.findall(r'mux\.Handle(?:Func)?\(\s*"([^"]+)"', text("backend/main.go"))
 package = document("frontend/package.json", "removedFeatures")
 dependencies = set()
 if isinstance(package, dict):
@@ -170,10 +188,17 @@ if isinstance(package, dict):
         if isinstance(package.get(section), dict):
             dependencies.update(package[section])
 go_modules = set(re.findall(r"^\s*([A-Za-z0-9._/-]+)\s+v", text("backend/go.mod"), re.M))
-if contract is not None:
+removed_route_families = {
+    "livekit": ("/livekit",),
+    "voice-rooms": ("/api/v1/voice",),
+    "watch-parties": ("/api/v1/watch-party", "/api/v1/watch_party"),
+    "notification-inbox": ("/api/v1/notifications",),
+    "my-list": ("/api/v1/users/me/media-list", "/api/v1/my-list", "/api/v1/media-list"),
+}
+if contract_valid:
     for feature in contract["removedFeatures"]:
-        if any(f"/api/v1/{feature}" in route for route in routes):
-            fail("removedFeatures", f"removed route prefix /api/v1/{feature} is present")
+        if any(any(prefix in route for prefix in removed_route_families[feature]) for route in routes):
+            fail("removedFeatures", f"removed route family {feature} is present")
         token = feature.replace("-", "")
         if any(token in name.lower().replace("-", "") for name in dependencies | go_modules):
             fail("removedFeatures", f"removed dependency {feature} is present")
@@ -184,7 +209,7 @@ services_part = re.search(r"^services:\s*$([\s\S]*)", compose, re.M)
 compose_services = set() if services_part is None else set(
     re.findall(r"^ {2}([A-Za-z0-9][A-Za-z0-9_-]*):\s*$", services_part.group(1), re.M)
 )
-if contract is not None:
+if contract_valid:
     if contract["apiService"] not in compose_services:
         fail("apiService", f"Compose lacks {contract['apiService']}")
     for feature in contract["removedFeatures"]:
@@ -199,31 +224,67 @@ router_blocks = re.findall(
     re.M,
 )
 catch_all = []
+api_router_targets = []
+router_names = []
 for _, block in router_blocks:
+    router_names.append(_)
+    target = re.search(r"^ {6}service:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$", block, re.M)
+    service_target = None if target is None else target.group(1)
     if re.search(r"PathPrefix\([^A-Za-z0-9]*/[^A-Za-z0-9]*\)", block):
-        target = re.search(r"^ {6}service:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$", block, re.M)
-        if target:
-            catch_all.append(target.group(1))
+        if service_target:
+            catch_all.append(service_target)
+    if "/api/v1" in block:
+        api_router_targets.append(service_target)
 traefik_section = re.search(r"^ {2}services:\s*$([\s\S]*)", traefik, re.M)
 traefik_services = set() if traefik_section is None else set(
     re.findall(r"^ {4}([A-Za-z0-9][A-Za-z0-9_-]*):\s*$", traefik_section.group(1), re.M)
 )
+traefik_urls = {} if traefik_section is None else {
+    name: url
+    for name, block in re.findall(
+        r"^ {4}([A-Za-z0-9][A-Za-z0-9_-]*):\s*$([\s\S]*?)(?=^ {4}[A-Za-z0-9][A-Za-z0-9_-]*:\s*$|\Z)",
+        traefik_section.group(1),
+        re.M,
+    )
+    for url in re.findall(r"^ {10}- url:\s*(\S+)\s*$", block, re.M)
+}
 status = text("documentation/product/beta-feature-status.md")
-if contract is not None:
+status_rows = {
+    label.strip(): value.strip()
+    for label, value in re.findall(r"^\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$", status, re.M)
+    if label.strip() != "Delivery boundary"
+}
+if contract_valid:
     browser, api = contract["browserService"], contract["apiService"]
     browser_block = "Hosted-browser delivery is blocked until Phase 2."
     if api not in traefik_services:
         fail("apiService", f"Traefik service {api} is absent")
+    elif traefik_urls.get(api) != f"http://{api}:8080":
+        fail("apiService", f"Traefik service {api} must resolve to http://{api}:8080")
+    if any(target != api for target in api_router_targets):
+        fail("apiService", "every API-matching Traefik router must target the API service")
+    for feature in contract["removedFeatures"]:
+        token = feature.replace("-", "")
+        if any(token in name.lower().replace("-", "") for name in set(router_names) | traefik_services):
+            fail("removedFeatures", f"removed Traefik router or service {feature} is present")
     if browser in compose_services:
         if catch_all != [browser] or browser not in traefik_services:
             fail("browserService", f"Traefik must route the catch-all to {browser}")
-        if browser_block in status:
+        elif traefik_urls.get(browser) != f"http://{browser}:8080":
+            fail("browserService", f"Traefik service {browser} must resolve to http://{browser}:8080")
+        if browser_block in status or "Hosted-browser delivery" in status_rows:
             fail("browserService", "browser delivery remains marked blocked after telos-client exists")
     else:
         if catch_all != [api]:
             fail("browserService", f"transitional catch-all must route to {api}")
-        if browser_block not in status or re.search(r"hosted-browser delivery[^.\n]*\b(shipping|ready)\b", status, re.I):
+        if (
+            browser_block not in status
+            or status_rows.get("Hosted-browser delivery") != "Blocked until Phase 2"
+            or re.search(r"hosted.browser delivery[^.\n]*\b(shipping|ready)\b", status, re.I)
+        ):
             fail("browserService", "missing truthful blocked hosted-browser delivery marker")
+    if re.search(r"hosted[\s-]browser delivery.{0,100}\b(shipping|ready)\b", status, re.I | re.S):
+        fail("browserService", "hosted-browser delivery is called ready or shipping")
     for platform in [contract["server"]["os"], contract["server"]["arch"],
                      contract["server"]["podmanMinimum"], *contract["desktop"]]:
         if platform not in status:
@@ -232,12 +293,21 @@ if contract is not None:
         if surface.casefold() not in status.casefold():
             fail("modules", f"beta status does not name {surface}")
     backup_block = "Encrypted off-node backup and recovery are blocked until Phase 4 evidence exists."
-    if backup_block not in status or re.search(r"encrypted off-node backup(?:s)?[^.\n]*\bshipping\b", status, re.I):
+    required_status_rows = {
+        "desktop": ("Desktop distribution", "Unsigned invite-only beta packages; blocked until Phase 3 evidence"),
+        "https": ("HTTPS trust", "Platform-trusted HTTPS only"),
+        "browserMatrix": ("Browser matrix", "Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome"),
+        "backupStatus": ("Backup/recovery", "Blocked until Phase 4 evidence"),
+    }
+    for field, (label, value) in required_status_rows.items():
+        if status_rows.get(label) != value:
+            fail(field, f"beta status is missing required {label} table value")
+    if backup_block not in status or re.search(r"(?:encrypted.{0,80})?(?:backup|recovery).{0,80}\b(shipping|ready)\b", status, re.I | re.S):
         fail("backupStatus", "blocked backup/recovery is missing or called shipping")
 
 
 catalog = document("ci/phase-gates.json", "requiredExternalGates")
-if contract is not None and isinstance(catalog, dict):
+if contract_valid and isinstance(catalog, dict):
     gate_ids = [gate.get("id") for gate in catalog.get("gates", []) if isinstance(gate, dict)]
     for gate in contract["requiredExternalGates"]:
         if gate_ids.count(gate) != 1:
@@ -255,12 +325,12 @@ def shipped_files(relative):
         return []
     files = []
     for path in directory.rglob("*"):
-        if not path.is_file():
-            continue
         try:
             path.resolve().relative_to(root)
         except ValueError:
             fail("root", f"{path.relative_to(root)} resolves outside --root")
+            continue
+        if not path.is_file():
             continue
         files.append(path)
     return files
