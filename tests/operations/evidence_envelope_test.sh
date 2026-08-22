@@ -8,6 +8,49 @@ trap 'rm -rf "$fixture_dir"' EXIT
 printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$fixture_dir/candidate.json"
 candidate_digest="sha256:$(sha256sum "$fixture_dir/candidate.json" | awk '{print $1}')"
 
+python3 - "$repo_root/scripts/lib/evidence.py" <<'PY'
+import builtins
+import hashlib
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("evidence", sys.argv[1])
+evidence = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(evidence)
+
+payload = (b"telos-evidence-streaming-" * 100_000) + b"done"
+chunk_size = 1024 * 1024
+
+class BoundedReader:
+    def __init__(self, value):
+        self.value = value
+        self.offset = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def read(self, size=-1):
+        if size < 0 or size > chunk_size:
+            raise AssertionError("digest_path requested an unbounded read")
+        chunk = self.value[self.offset:self.offset + size]
+        self.offset += len(chunk)
+        return chunk
+
+reader = BoundedReader(payload)
+original_open = builtins.open
+builtins.open = lambda path, mode: reader
+try:
+    actual = evidence.digest_path("candidate-lock")
+finally:
+    builtins.open = original_open
+expected = "sha256:" + hashlib.sha256(payload).hexdigest()
+if actual != expected:
+    raise SystemExit("digest_path did not hash every streamed byte")
+PY
+
 python3 "$repo_root/scripts/lib/evidence.py" write \
   --output "$fixture_dir/passed.json" \
   --gate-id phase-1-self-test --status passed --reason "fixture assertions passed" \

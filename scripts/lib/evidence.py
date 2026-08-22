@@ -193,11 +193,14 @@ def digest_bytes(payload):
 
 
 def digest_path(path):
+    digest = hashlib.sha256()
     try:
         with open(path, "rb") as input_file:
-            return digest_bytes(input_file.read())
+            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
+                digest.update(chunk)
     except OSError as error:
         fail(f"cannot read {path}: {error}")
+    return f"sha256:{digest.hexdigest()}"
 
 
 def load_envelope(path):
