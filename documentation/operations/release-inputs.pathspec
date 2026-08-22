@@ -30,7 +30,6 @@ backend/settings_test.go
 config/traefik.yaml
 documentation/architecture/01-system-overview.md
 documentation/architecture/02-deployment.md
-documentation/operations/release-inputs.pathspec
 frontend/AGENTS.md
 frontend/dev-server.mjs
 frontend/e2e/chat.spec.ts
@@ -79,7 +78,6 @@ backend/security.go
 backend/security_test.go
 backend/proxy.go
 backend/proxy_test.go
-backend/media.go
 backend/auth.go
 backend/auth_test.go
 backend/testutil/integration.go

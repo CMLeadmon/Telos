@@ -607,6 +607,13 @@ if [[ $dev_proxy_residue -ne 0 ]]; then
 fi
 
 migration_pathspec="$repo_root/documentation/operations/release-inputs.pathspec"
+if duplicate_pathspec_entries="$(awk 'NF && $1 !~ /^#/ { if (++seen[$0] == 2) print $0 }' "$migration_pathspec")"; then
+  if [[ -n $duplicate_pathspec_entries ]]; then
+    echo "release inputs must not repeat noncomment paths:" >&2
+    echo "$duplicate_pathspec_entries" >&2
+    exit 1
+  fi
+fi
 while IFS= read -r migration; do
   migration_path="backend/db/migrations/$migration"
   migration_count="$(grep -Fxc -- "$migration_path" "$migration_pathspec" || true)"

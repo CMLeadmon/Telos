@@ -20,7 +20,7 @@ invalidated before success is reported.
 | Private annotations (`annotations` where `visibility = 'private'`) | Deleted |
 | Channel permission overrides (`channel_permission_overrides`) | Cascade-deleted when the role or channel is removed |
 | Community annotations and replies | Retained, authored by the anonymized user |
-| Private uploads and avatars (`files` where `purpose <> 'shared'`) | Row deleted; physical asset queued for removal |
+| Private uploads and avatars (`files` where `purpose <> 'shared'`) | Logical row deleted; the default no-op remover records the job as done without claiming physical removal |
 | Shared community files (`files` where `purpose = 'shared'`) | Retained |
 | Public chat messages | Retained, authored by the anonymized user |
 | User row | Anonymized (`deleted-<id>`, display "Deleted User", disabled, no avatar) |
@@ -33,13 +33,14 @@ shared Grimmory book deletion instead removes both progress representations for
 that resolved catalog item in one transaction. An upstream deletion failure
 preserves both.
 
-## Physical asset deletion
+## Physical asset deletion status
 
-Private avatar and upload assets are removed after the database transaction
-records the deletion job (`asset_deletion_jobs`). Jobs run after commit through
-an `AssetRemover`; a failed job stays pending for the reconciliation pass so
-database and filesystem state converge. The Phase 4 storage layer supplies the
-filesystem-backed remover.
+Account deletion records `asset_deletion_jobs` after the transaction. In the
+current production wiring, `noopAssetRemover` succeeds without removing the
+physical asset, so the asynchronous job is marked `done`; it does not remain
+pending and it is not evidence of physical deletion. Physical asset deletion
+and reconciliation are blocked until Phase 4 supplies a real remover and its
+operational evidence.
 
 ## Durable event
 

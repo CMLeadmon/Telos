@@ -1,43 +1,32 @@
 # Restore and Recovery Drill
 
-> Normative recovery runbook. The mechanics below are implemented and
-> unit-tested (`scripts/tests/restore_test.sh`, `TestBackupManifest*`); the
-> **live clean-node disaster-recovery drill is a P7 operator gate** because it
-> requires a reference recovery environment, the documented DNS/provider
-> credentials, and external probes that cannot run in CI.
+> **Status:** no operational separate-host recovery drill is available. The
+> catalog's `separate-host-restore` external-host gate belongs to Phase 4 and
+> remains blocked until that phase supplies the recovery implementation and
+> evidence.
 
-## Restore order (fail closed)
+## Current behavior
 
-1. Acquire the shared maintenance lock (`scripts/maintenance-lock.sh`).
-2. Fetch/decrypt and verify checksums, release, schema, and migration checksum
-   set against this node (`scripts/verify-restore.sh` — a missing component,
-   future schema, or checksum mismatch aborts before any active state changes).
-3. Restore and probe a candidate generation in isolation (generation-scoped
-   temporary database names and same-filesystem generation directories).
-4. Stop every writer with checked exits.
-5. `journal-begin`: persist and fsync the transition journal
-   (`scripts/restore-state.sh`).
-6. Atomically activate the candidate by renaming the mode-0600
-   active-generation pointer consumed by Compose.
-7. Invalidate restored sessions and invites; clear Redis.
-8. Run the locked migrator.
-9. Reopen internal services and run functional probes: health, authentication,
-   recent chat, one authorized Jellyfin item, one EPUB, and one PDF.
-10. Only then reopen Traefik.
+- `scripts/verify-restore.sh --manifest <path> --node-schema <n>
+  --node-checksum <hex>` validates a supplied manifest's components, schema,
+  and checksum set. It does not restore a node.
+- `scripts/restore-drill.sh --fixture --backup-epoch <s> --restore-start <s>
+  --restore-end <s> [--out <path>]` computes a fixture RPO/RTO record from
+  supplied timestamps for tests. It does not provision, restore, or probe a
+  recovery host.
+- `scripts/restore-drill.sh --out <path>` without `--fixture` exits 3.
+- `scripts/drills/recovery.sh` emits `not_run` with exit 3 until the Phase 4
+  `separate-host-restore` gate has a second Ubuntu reference host and recovery
+  implementation.
 
-Any failure after activation automatically reactivates and probes the preserved
-prior generation before returning failure; if rollback verification fails,
-Traefik stays closed and both generations are preserved for operator recovery.
-After an untrappable exit, the next invocation reads the journal and completes
-rollback before accepting another operation.
+The interim local backup and restore scripts are documented separately in
+[`backup-and-restore.md`](./backup-and-restore.md). They are not evidence for
+the blocked separate-host recovery gate.
 
-## Recovery objectives
+## Blocked target
 
-The drill record (`scripts/restore-drill.sh`) captures backup/restore
-timestamps, RPO/RTO seconds, release/checksum set, and probe results, and fails
-above an 86,400-second RPO or a 14,400-second RTO. For clean-node disaster
-recovery the RTO clock starts when host-loss recovery is declared and ends only
-after automated firewall and A/AAAA cutover for the documented low-TTL DNS zone
-plus a valid application certificate pass external HTTPS redirect/SNI/chain,
-authenticated WSS, and range-media probes. A same-host-only restore cannot
-satisfy the beta RTO claim.
+The Phase 4 target is a candidate-bound, separate-host restore with measured
+RPO/RTO and external recovery evidence. Do not treat fixture timestamps,
+manifest validation, or local restore mechanics as proof of that target. The
+required gate and prerequisites are recorded in
+[`ci/phase-gates.json`](../../ci/phase-gates.json).

@@ -2,7 +2,7 @@
 
 This runbook describes a candidate-specific verification procedure; it is not
 proof that any prior candidate remains shipping-ready. Each invocation writes
-its own sanitized evidence for the exact source reference. Smoke-environment
+its own sanitized evidence artifact for the exact source reference. Smoke-environment
 credentials are generated randomly per run, held in a mode-0600 file inside
 the disposable export, and never recorded here.
 
@@ -18,7 +18,7 @@ The script exports the exact tree-ish to a temporary directory (never copying
 random smoke environment, validates the Compose model, builds the image from
 the export, boots an isolated `telos-core` + `postgres` + `redis` project on
 a random loopback port with project-scoped container names, networks, and
-volumes, probes the gateway, writes evidence outside the repository, and
+volumes, probes the gateway, writes the evidence artifact outside the repository, and
 tears everything down.
 
 ## Current model inventory
@@ -28,7 +28,7 @@ tears everything down.
 | Compose services | traefik, telos-migrate, telos-audiobook-migrate, telos-core, postgres, redis, telos-egress-proxy, clamav, jellyfin, grimmory-db, grimmory |
 | Migration inventory | 0001–0023; the verifier requires a contiguous tracked sequence |
 | Runtime tool and builder images | Recorded by the candidate invocation |
-| Compose, image, health, static asset, bootstrap, login, and teardown results | Candidate-specific; read the emitted evidence envelope |
+| Compose, image, health, static asset, bootstrap, login, and teardown results | Candidate-specific; read the emitted evidence artifact |
 
 ## Exit-code contract
 
