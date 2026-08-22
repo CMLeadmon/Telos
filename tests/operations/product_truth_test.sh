@@ -258,6 +258,65 @@ copy_fixture "$realized_client"
 realize_client "$realized_client"
 assert_accepted "$realized_client"
 
+client_double_quoted_api_rule="$fixture_root/client-double-quoted-api-rule"
+copy_fixture "$client_double_quoted_api_rule"
+realize_client "$client_double_quoted_api_rule"
+python3 - "$client_double_quoted_api_rule/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+needle = "      rule: 'Host(`telos`) && PathPrefix(`/api/v1`)'"
+replacement = '      rule: "Host(`telos`) && PathPrefix(`/api/v1`)"'
+if needle not in text:
+    raise SystemExit("generic API rule fixture anchor is missing")
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text.replace(needle, replacement, 1))
+PY
+assert_accepted "$client_double_quoted_api_rule"
+
+client_folded_api_rule="$fixture_root/client-folded-api-rule"
+copy_fixture "$client_folded_api_rule"
+realize_client "$client_folded_api_rule"
+python3 - "$client_folded_api_rule/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+needle = "      rule: 'Host(`telos`) && PathPrefix(`/api/v1`)'"
+replacement = """      rule: >-
+        Host(`telos`) &&
+        PathPrefix(`/api/v1`)"""
+if needle not in text:
+    raise SystemExit("generic API rule fixture anchor is missing")
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text.replace(needle, replacement, 1))
+PY
+assert_accepted "$client_folded_api_rule"
+
+client_api_matcher_only_in_comment="$fixture_root/client-api-matcher-only-in-comment"
+copy_fixture "$client_api_matcher_only_in_comment"
+realize_client "$client_api_matcher_only_in_comment"
+python3 - "$client_api_matcher_only_in_comment/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+needle = "      rule: 'Host(`telos`) && PathPrefix(`/api/v1`)'"
+replacement = """      # rule: 'Host(`telos`) && PathPrefix(`/api/v1`)'
+      rule: 'Host(`telos`) && PathPrefix(`/not-api`)'
+""".rstrip("\n")
+if needle not in text:
+    raise SystemExit("generic API rule fixture anchor is missing")
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text.replace(needle, replacement, 1))
+PY
+assert_rejected "client-api-matcher-only-in-comment" "browserService" \
+  "$client_api_matcher_only_in_comment"
+
 client_with_marker="$fixture_root/client-with-marker"
 copy_fixture "$client_with_marker"
 realize_client "$client_with_marker"
@@ -293,7 +352,7 @@ end = text.index("    # Default", start)
 with open(path, "w", encoding="utf-8") as destination:
     destination.write(text[:start] + text[end:])
 PY
-assert_rejected "client-missing-api" "apiService" "$client_missing_api"
+assert_rejected "client-missing-api" "browserService" "$client_missing_api"
 
 client_api_wrong_target="$fixture_root/client-api-wrong-target"
 copy_fixture "$client_api_wrong_target"
@@ -463,11 +522,30 @@ printf "\\nHosted-browser delivery isn't ready.\\n" \
   >>"$honest_browser_isnt_ready/documentation/product/beta-feature-status.md"
 assert_accepted "$honest_browser_isnt_ready"
 
+honest_browser_never_ready_for_shipping="$fixture_root/honest-browser-never-ready-for-shipping"
+copy_fixture "$honest_browser_never_ready_for_shipping"
+printf '\nHosted-browser delivery is never ready for shipping.\n' \
+  >>"$honest_browser_never_ready_for_shipping/documentation/product/beta-feature-status.md"
+assert_accepted "$honest_browser_never_ready_for_shipping"
+
+honest_backup_without_being_ready_for_shipping="$fixture_root/honest-backup-without-being-ready-for-shipping"
+copy_fixture "$honest_backup_without_being_ready_for_shipping"
+printf '\nEncrypted backup recovery remains without being ready for shipping.\n' \
+  >>"$honest_backup_without_being_ready_for_shipping/documentation/product/beta-feature-status.md"
+assert_accepted "$honest_backup_without_being_ready_for_shipping"
+
 mixed_browser_claim="$fixture_root/mixed-browser-claim"
 copy_fixture "$mixed_browser_claim"
 printf '\\nHosted-browser delivery is not ready, but shipping.\\n' \
   >>"$mixed_browser_claim/documentation/product/beta-feature-status.md"
 assert_rejected "mixed-browser-claim" "browserService" "$mixed_browser_claim"
+
+mixed_browser_never_ready_shipping="$fixture_root/mixed-browser-never-ready-shipping"
+copy_fixture "$mixed_browser_never_ready_shipping"
+printf '\nHosted-browser delivery is never ready for shipping, but shipping.\n' \
+  >>"$mixed_browser_never_ready_shipping/documentation/product/beta-feature-status.md"
+assert_rejected "mixed-browser-never-ready-shipping" "browserService" \
+  "$mixed_browser_never_ready_shipping"
 
 honest_backup_not_yet_ready="$fixture_root/honest-backup-not-yet-ready"
 copy_fixture "$honest_backup_not_yet_ready"
@@ -480,6 +558,13 @@ copy_fixture "$mixed_backup_claim"
 printf '\\nEncrypted backup and recovery are not ready, but shipping.\\n' \
   >>"$mixed_backup_claim/documentation/product/beta-feature-status.md"
 assert_rejected "mixed-backup-claim" "backupStatus" "$mixed_backup_claim"
+
+mixed_backup_without_ready_shipping="$fixture_root/mixed-backup-without-ready-shipping"
+copy_fixture "$mixed_backup_without_ready_shipping"
+printf '\nEncrypted backup recovery remains without being ready for shipping, but shipping.\n' \
+  >>"$mixed_backup_without_ready_shipping/documentation/product/beta-feature-status.md"
+assert_rejected "mixed-backup-without-ready-shipping" "backupStatus" \
+  "$mixed_backup_without_ready_shipping"
 
 for state in ready shipping; do
   client_state="$fixture_root/client-$state"

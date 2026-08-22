@@ -232,6 +232,70 @@ router_blocks = re.findall(
     traefik,
     re.M,
 )
+
+
+def inline_yaml_scalar(source):
+    value = source.strip()
+    if not value:
+        return ""
+    if value[0] == "'":
+        decoded, position = [], 1
+        while position < len(value):
+            if value[position] != "'":
+                decoded.append(value[position])
+                position += 1
+            elif position + 1 < len(value) and value[position + 1] == "'":
+                decoded.append("'")
+                position += 2
+            else:
+                suffix = value[position + 1:].strip()
+                return "".join(decoded) if not suffix or suffix.startswith("#") else None
+        return None
+    if value[0] == '"':
+        escaped = False
+        for position in range(1, len(value)):
+            if escaped:
+                escaped = False
+            elif value[position] == "\\":
+                escaped = True
+            elif value[position] == '"':
+                suffix = value[position + 1:].strip()
+                if suffix and not suffix.startswith("#"):
+                    return None
+                try:
+                    return json.loads(value[:position + 1])
+                except json.JSONDecodeError:
+                    return None
+        return None
+    return re.split(r"\s+#", value, maxsplit=1)[0].rstrip()
+
+
+def yaml_rule_scalar(block):
+    lines = block.splitlines()
+    for index, line in enumerate(lines):
+        found = re.match(r"^ {6}rule:\s*(.*?)\s*$", line)
+        if found is None:
+            continue
+        indicator = found.group(1)
+        if not re.fullmatch(r">[+-]?", indicator):
+            return inline_yaml_scalar(indicator)
+        content = []
+        for continuation in lines[index + 1:]:
+            if not continuation.strip():
+                content.append("")
+                continue
+            indentation = len(continuation) - len(continuation.lstrip(" "))
+            if indentation <= 6:
+                break
+            content.append(continuation)
+        nonempty = [line for line in content if line.strip()]
+        if not nonempty:
+            return ""
+        content_indent = min(len(line) - len(line.lstrip(" ")) for line in nonempty)
+        return " ".join(line[content_indent:].strip() for line in content if line.strip())
+    return None
+
+
 router_records = []
 for name, block in router_blocks:
     target = re.search(r"^ {6}service:\s*([A-Za-z0-9][A-Za-z0-9_-]*)\s*$", block, re.M)
@@ -239,19 +303,24 @@ for name, block in router_blocks:
     router_records.append(
         {
             "name": name,
-            "rule": block,
+            "rule": yaml_rule_scalar(block),
             "target": None if target is None else target.group(1),
             "priority": None if priority is None else int(priority.group(1)),
         }
     )
 catch_all = [
     record for record in router_records
-    if re.search(r"PathPrefix\([^A-Za-z0-9]*/[^A-Za-z0-9]*\)", record["rule"])
+    if record["rule"] is not None
+    and re.search(r"PathPrefix\([^A-Za-z0-9]*/[^A-Za-z0-9]*\)", record["rule"])
 ]
-api_routers = [record for record in router_records if "/api/v1" in record["rule"]]
+api_routers = [
+    record for record in router_records
+    if record["rule"] is not None and "/api/v1" in record["rule"]
+]
 generic_api = [
     record for record in router_records
-    if re.search(r"PathPrefix\([^A-Za-z0-9]*/api/v1[^A-Za-z0-9]*\)", record["rule"])
+    if record["rule"] is not None
+    and re.search(r"PathPrefix\([^A-Za-z0-9]*/api/v1[^A-Za-z0-9]*\)", record["rule"])
 ]
 traefik_section = re.search(r"^ {2}services:\s*$([\s\S]*)", traefik, re.M)
 traefik_services = set() if traefik_section is None else set(
@@ -302,9 +371,10 @@ if contract_valid:
             or re.search(r"hosted-browser delivery.{0,100}\bunavailable\b", status, re.I | re.S)
         ):
             fail("browserService", "browser delivery lacks the truthful post-transition state")
-        if (
-            len(generic_api) != 1
-            or generic_api[0]["target"] != api
+        if len(generic_api) != 1:
+            fail("browserService", "realized client topology needs a generic /api/v1 fallback")
+        elif (
+            generic_api[0]["target"] != api
             or generic_api[0]["priority"] is None
             or catch_all[0]["priority"] is None
             or generic_api[0]["priority"] <= catch_all[0]["priority"]
@@ -327,8 +397,10 @@ if contract_valid:
             for claim in re.finditer(r"\b(shipping|ready)\b", line, re.I):
                 prefix = line[max(0, claim.start() - 32):claim.start()]
                 if not re.search(
-                    r"\b(?:not(?:\s+yet)?|never|without|isn't)\s+$"
-                    r"|\b(?:not(?:\s+yet)?|isn't)\s+ready\s+for\s+$",
+                    r"\b(?:not(?:\s+yet)?|never|isn't)\s+$"
+                    r"|\bwithout(?:\s+being)?\s+$"
+                    r"|\b(?:not(?:\s+yet)?|never|isn't)\s+ready\s+for\s+$"
+                    r"|\bwithout(?:\s+being)?\s+ready\s+for\s+$",
                     prefix,
                     re.I,
                 ):
