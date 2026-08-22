@@ -6,26 +6,29 @@ import datetime
 import json
 import os
 import platform
-import subprocess
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
+import evidence
 
 
 EXIT_NOT_RUN = 3
 EMPTY_OUTPUT_DIGEST = "sha256:" + ("e3b0c44298fc1c149afbf4c8996fb924" "27ae41e4649b934ca495991b7852b855")
 
 
-def parse_candidate_source_commit(candidate_lock):
+def read_candidate_snapshot(candidate_lock):
     try:
-        with open(candidate_lock, encoding="utf-8") as candidate_file:
-            candidate = json.load(candidate_file)
-    except (OSError, json.JSONDecodeError) as error:
+        with open(candidate_lock, "rb") as candidate_file:
+            candidate_bytes = candidate_file.read()
+        candidate = json.loads(candidate_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError(f"cannot read candidate lock: {error}") from error
     source_commit = candidate.get("sourceCommit") if isinstance(candidate, dict) else None
     if not isinstance(source_commit, str) or len(source_commit) != 40:
         raise ValueError("candidate lock must contain a 40-character sourceCommit")
     if any(character not in "0123456789abcdef" for character in source_commit):
         raise ValueError("candidate lock must contain a lowercase hexadecimal sourceCommit")
-    return source_commit
+    return source_commit, evidence.digest_bytes(candidate_bytes)
 
 
 def timestamp():
@@ -33,43 +36,28 @@ def timestamp():
 
 
 def write_evidence(args):
-    source_commit = parse_candidate_source_commit(args.candidate_lock)
-    evidence_path = os.path.join(os.path.dirname(__file__), "lib", "evidence.py")
-    digest_result = subprocess.run(
-        [sys.executable, evidence_path, "digest", args.candidate_lock],
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    if digest_result.returncode != 0:
-        raise ValueError(digest_result.stderr.strip() or "cannot digest candidate lock")
-    candidate_digest = digest_result.stdout.strip()
+    source_commit, candidate_digest = read_candidate_snapshot(args.candidate_lock)
     started_at = timestamp()
     finished_at = timestamp()
-    write_result = subprocess.run(
-        [
-            sys.executable,
-            evidence_path,
-            "write",
-            "--output", args.evidence_out,
-            "--gate-id", args.gate_id,
-            "--status", "not_run",
-            "--reason", args.reason,
-            "--source-commit", source_commit,
-            "--candidate-lock-digest", candidate_digest,
-            "--command-json", json.dumps(args.original_argv, separators=(",", ":")),
-            "--started-at", started_at,
-            "--finished-at", finished_at,
-            "--exit-code", str(EXIT_NOT_RUN),
-            "--output-digest", EMPTY_OUTPUT_DIGEST,
-            "--tool-versions-json", json.dumps({"python": platform.python_version()}),
-            "--subject-json", json.dumps({"kind": "source", "digest": candidate_digest}),
-        ],
-        check=False,
+    envelope_args = argparse.Namespace(
+        output=args.evidence_out,
+        gate_id=args.gate_id,
+        status="not_run",
+        reason=args.reason,
+        source_commit=source_commit,
+        candidate_lock_digest=candidate_digest,
+        command_json=json.dumps(args.original_argv, separators=(",", ":")),
+        started_at=started_at,
+        finished_at=finished_at,
+        exit_code=EXIT_NOT_RUN,
+        output_digest=EMPTY_OUTPUT_DIGEST,
+        tool_versions_json=json.dumps({"python": platform.python_version()}),
+        subject_json=json.dumps({"kind": "source", "digest": candidate_digest}),
     )
-    if write_result.returncode != 0:
-        raise ValueError("evidence writer rejected the not_run envelope")
+    try:
+        evidence.write_envelope(envelope_args)
+    except evidence.EvidenceError as error:
+        raise ValueError(f"evidence writer rejected the not_run envelope: {error}") from error
 
 
 def build_parser():

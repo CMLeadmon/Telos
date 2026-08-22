@@ -186,15 +186,18 @@ def load_schema(path):
     return schema
 
 
-def digest_path(path):
+def digest_bytes(payload):
     digest = hashlib.sha256()
+    digest.update(payload)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def digest_path(path):
     try:
         with open(path, "rb") as input_file:
-            for chunk in iter(lambda: input_file.read(1024 * 1024), b""):
-                digest.update(chunk)
+            return digest_bytes(input_file.read())
     except OSError as error:
         fail(f"cannot read {path}: {error}")
-    return f"sha256:{digest.hexdigest()}"
 
 
 def load_envelope(path):

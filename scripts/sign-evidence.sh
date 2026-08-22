@@ -8,8 +8,8 @@ evidence_out=""
 usage() { echo "usage: $0 [--candidate-lock PATH] [--evidence-out PATH]" >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" ]] || usage; candidate_lock="$2"; shift 2 ;;
-    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" ]] || usage; evidence_out="$2"; shift 2 ;;
+    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" && -n "$2" && "$2" != --* ]] || usage; candidate_lock="$2"; shift 2 ;;
+    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" && -n "$2" && "$2" != --* ]] || usage; evidence_out="$2"; shift 2 ;;
     *) usage ;;
   esac
 done

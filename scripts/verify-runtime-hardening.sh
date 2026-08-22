@@ -10,10 +10,10 @@ env_file=""
 usage() { echo "usage: $0 [--compose PATH] [--env-file PATH] [--candidate-lock PATH] [--evidence-out PATH]" >&2; exit 2; }
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --compose) [[ $# -ge 2 && -z "$compose" ]] || usage; compose="$2"; shift 2 ;;
-    --env-file) [[ $# -ge 2 && -z "$env_file" ]] || usage; env_file="$2"; shift 2 ;;
-    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" ]] || usage; candidate_lock="$2"; shift 2 ;;
-    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" ]] || usage; evidence_out="$2"; shift 2 ;;
+    --compose) [[ $# -ge 2 && -z "$compose" && -n "$2" && "$2" != --* ]] || usage; compose="$2"; shift 2 ;;
+    --env-file) [[ $# -ge 2 && -z "$env_file" && -n "$2" && "$2" != --* ]] || usage; env_file="$2"; shift 2 ;;
+    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" && -n "$2" && "$2" != --* ]] || usage; candidate_lock="$2"; shift 2 ;;
+    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" && -n "$2" && "$2" != --* ]] || usage; evidence_out="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
