@@ -782,6 +782,7 @@ REQUIRED_COMMANDS = [
     "bash scripts/verify-clean-checkout.sh --inventory-only",
 ]
 KEY = re.compile(r"(?:([A-Za-z0-9_-]+)|'([^']+)'|\"([^\"]+)\"):(?:[ \t]*(.*))?$")
+TOP_LEVEL_DIRECT_KEYS = {"name", "on", "permissions", "jobs", "defaults"}
 JOB_DIRECT_KEYS = {"runs-on", "permissions", "steps", "if", "continue-on-error", "defaults"}
 PERMISSION_DIRECT_KEYS = {"contents"}
 STEP_DIRECT_KEYS = {"name", "uses", "run", "if", "continue-on-error", "shell", "defaults"}
@@ -870,12 +871,15 @@ def parse_steps(lines, start, end):
 
 def validate_workflow(text):
     lines = text.splitlines()
-    jobs_index = next(
-        (index for index, line in enumerate(lines) if line == "jobs:"), None
+    workflow_mapping = mapping_blocks(
+        lines, 0, len(lines), 0, TOP_LEVEL_DIRECT_KEYS, "workflow",
     )
-    if jobs_index is None:
+    if "defaults" in workflow_mapping:
+        raise WorkflowError("workflow must not define defaults")
+    if "jobs" not in workflow_mapping or workflow_mapping["jobs"][0]:
         raise WorkflowError("missing top-level jobs mapping")
-    jobs = mapping_blocks(lines, jobs_index + 1, len(lines), 2, subject="jobs")
+    _, jobs_start, jobs_end = workflow_mapping["jobs"]
+    jobs = mapping_blocks(lines, jobs_start, jobs_end, 2, subject="jobs")
     if "truth-and-gates" not in jobs:
         raise WorkflowError("missing truth-and-gates job")
     _, job_start, job_end = jobs["truth-and-gates"]
@@ -1062,6 +1066,39 @@ assert_rejected(
     workflow.replace(first_run, "        malformed direct construct\n" + first_run, 1),
     "malformed direct-level construct",
 )
+for quote in ("", "'", '"'):
+    key = "defaults" if not quote else f"{quote}defaults{quote}"
+    assert_rejected(
+        f"top-level-{key}-shell",
+        workflow.replace(
+            "jobs:\n",
+            f"{key}:\n  run:\n    shell: /bin/true {{0}}\njobs:\n",
+            1,
+        ),
+        "workflow must not define defaults",
+    )
+assert_rejected(
+    "malformed-top-level-defaults",
+    workflow.replace("jobs:\n", "defaults\n  run:\n    shell: /bin/true {0}\njobs:\n", 1),
+    "workflow has malformed direct-level construct",
+)
+for quote in ("'", '"'):
+    assert_accepted(
+        f"quoted-top-level-name-{quote}",
+        workflow.replace("name:", f"{quote}name{quote}:", 1),
+    )
+    assert_accepted(
+        f"quoted-top-level-on-{quote}",
+        workflow.replace("on:\n", f"{quote}on{quote}:\n", 1),
+    )
+    assert_accepted(
+        f"quoted-top-level-permissions-{quote}",
+        workflow.replace("permissions:\n  contents:", f"{quote}permissions{quote}:\n  contents:", 1),
+    )
+    assert_accepted(
+        f"quoted-top-level-jobs-{quote}",
+        workflow.replace("jobs:\n", f"{quote}jobs{quote}:\n", 1),
+    )
 PY
 
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
