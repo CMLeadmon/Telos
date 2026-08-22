@@ -9,6 +9,8 @@ repo_root="$(git rev-parse --show-toplevel)"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
 
+node "$repo_root/tests/operations/dev_server_proxy_test.mjs"
+
 copy_fixture() {
   local fixture="$1"
   local relative
@@ -604,14 +606,42 @@ if [[ $dev_proxy_residue -ne 0 ]]; then
   exit 1
 fi
 
-if ! head -n 1 "$repo_root/telos" | grep -Fxq '#!/usr/bin/env bash'; then
-  echo "operator CLI is no longer the Bash ./telos dispatcher" >&2
+migration_pathspec="$repo_root/documentation/operations/release-inputs.pathspec"
+while IFS= read -r migration; do
+  migration_path="backend/db/migrations/$migration"
+  migration_count="$(grep -Fxc -- "$migration_path" "$migration_pathspec" || true)"
+  if [[ $migration_count -ne 1 ]]; then
+    echo "release inputs must include applied migration exactly once: $migration_path" >&2
+    exit 1
+  fi
+done < <(find "$repo_root/backend/db/migrations" -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort)
+
+current_operations=(
+  documentation/operations/restore-drill.md
+  documentation/operations/api-list-inventory.md
+  documentation/operations/data-retention.md
+)
+if operation_residue="$(rg -ni -e 'livekit|voice([ _-]?rooms?)?|\bturn(\.|[ _-](probes?|media|server|credential))|watch[ _-]?part(y|ies)|notification([ _-]?inbox)?s?|my[ _-]?list|media[_-]?lists?' "${current_operations[@]}" 2>&1)"; then
+  echo "current operations documentation retains removed-feature residue:" >&2
+  echo "$operation_residue" >&2
+  exit 1
+elif [[ $? -ne 1 ]]; then
+  echo "$operation_residue" >&2
   exit 1
 fi
-if ! cli_help="$("$repo_root/telos" help)" || ! grep -Fq 'telos — operate a Telos node' <<<"$cli_help"; then
+
+if ! cli_help="$("$repo_root/telos" help)"; then
   echo "Bash ./telos dispatcher did not produce the authoritative CLI help" >&2
   exit 1
 fi
+for help_statement in \
+  'Bash ./telos is the authoritative operator CLI.' \
+  'backend/cmd/telos/ is experimental.'; do
+  if ! grep -Fxq "$help_statement" <<<"$cli_help"; then
+    echo "CLI help is missing: $help_statement" >&2
+    exit 1
+  fi
+done
 
 for wrapper in provision-jellyfin.sh provision-grimmory.sh; do
   set +e

@@ -16,11 +16,8 @@ invalidated before success is reported.
 | Legacy reading progress (`book_progress`, compatibility period) | Deleted |
 | Reactions (`message_reactions`) | Deleted |
 | Channel read state (`channel_reads`) | Deleted |
-| Notifications (`notifications`) | Deleted |
 | User-event stream (`user_events` where `recipient_id`) | Deleted |
 | Private annotations (`annotations` where `visibility = 'private'`) | Deleted |
-| My List entries + revision (`media_list_entries`, `media_lists`) | Deleted |
-| Watch Party membership/invitations/host offers | Deleted; hosted parties are ended |
 | Channel permission overrides (`channel_permission_overrides`) | Cascade-deleted when the role or channel is removed |
 | Community annotations and replies | Retained, authored by the anonymized user |
 | Private uploads and avatars (`files` where `purpose <> 'shared'`) | Row deleted; physical asset queued for removal |
@@ -74,5 +71,5 @@ never leak. Logical folders are database-only nodes with normalized sibling
 uniqueness; physical storage stays content-addressed. Every file/folder action
 writes an immutable `file_audit` row.
 
-Later phases extend this matrix (annotations, My List, Watch Party membership)
-by extending the same deletion fixture before passing.
+Any future account-owned data must extend the same deletion fixture before it
+is released.

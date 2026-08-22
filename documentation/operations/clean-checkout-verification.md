@@ -1,13 +1,10 @@
 # Clean-Checkout Verification
 
-Phase 1 (P1-T5) evidence summary. Stable, sanitized fields copied from the
-preview verification evidence produced by
-`scripts/verify-clean-checkout.sh --source-ref <candidate> --evidence-out <path>`
-run against the staged Phase 1 implementation tree. Smoke-environment
+This runbook describes a candidate-specific verification procedure; it is not
+proof that any prior candidate remains shipping-ready. Each invocation writes
+its own sanitized evidence for the exact source reference. Smoke-environment
 credentials are generated randomly per run, held in a mode-0600 file inside
-the disposable export, and never recorded here. This document intentionally
-records no candidate commit/tree ID; the accepted commit carries its own
-`Verified-Tree` trailer.
+the disposable export, and never recorded here.
 
 ## Verification command
 
@@ -24,21 +21,14 @@ a random loopback port with project-scoped container names, networks, and
 volumes, probes the gateway, writes evidence outside the repository, and
 tears everything down.
 
-## Stable evidence fields
+## Current model inventory
 
 | Field | Value |
 |---|---|
-| Tool | podman version 5.8.4 |
-| Compose services (validated model) | traefik, telos-core, postgres, redis, clamav, jellyfin, grimmory-db, grimmory |
-| Builder images | node:24.18.0-alpine, golang:1.26.5-alpine, alpine:3.22.2 |
-| Inventory check | pass (migrations 0001–0007 contiguous; all release inputs tracked; pinned toolchains asserted) |
-| Compose validation | pass |
-| Image build from export | pass |
-| Gateway liveness (`GET /api/v1/health`) | HTTP 200 |
-| Static assets (`GET /`) | HTTP 200 |
-| First-owner bootstrap (`POST /api/v1/auth/bootstrap`) | HTTP 201 |
-| Login issuing `telos_session` cookie (`POST /api/v1/auth/login`) | HTTP 200 |
-| Teardown | pass (containers, networks, volumes, image, and export removed) |
+| Compose services | traefik, telos-migrate, telos-audiobook-migrate, telos-core, postgres, redis, telos-egress-proxy, clamav, jellyfin, grimmory-db, grimmory |
+| Migration inventory | 0001–0023; the verifier requires a contiguous tracked sequence |
+| Runtime tool and builder images | Recorded by the candidate invocation |
+| Compose, image, health, static asset, bootstrap, login, and teardown results | Candidate-specific; read the emitted evidence envelope |
 
 ## Exit-code contract
 

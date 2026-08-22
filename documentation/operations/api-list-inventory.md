@@ -34,8 +34,5 @@ scope/version/sort/key or an expired/tampered token with `400 invalid_cursor`.
 
 ## Reserved for later phases
 
-Phase 4 registers audit streams and catalog lists; Phase 5 registers
-notifications, annotations, My List (`manual=(list_revision,position,id)`,
-`409 list_changed` after a reorder), and Watch Party membership; Phase 3's
-reconciliation lists register as they are added. An unregistered array
-response fails CI.
+Future audit, catalog, and reconciliation lists must register before they are
+returned. An unregistered array response fails CI.

@@ -68,6 +68,9 @@ Environment:
 
 Exit codes:
   0 success   1 failure   2 telos could not run
+
+Bash ./telos is the authoritative operator CLI.
+backend/cmd/telos/ is experimental.
 EOF
 }
 

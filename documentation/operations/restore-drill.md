@@ -22,8 +22,7 @@
 7. Invalidate restored sessions and invites; clear Redis.
 8. Run the locked migrator.
 9. Reopen internal services and run functional probes: health, authentication,
-   recent chat, one authorized Jellyfin item, one EPUB, one PDF (Phase 5 adds
-   notifications, annotations, My List, and Watch Party).
+   recent chat, one authorized Jellyfin item, one EPUB, and one PDF.
 10. Only then reopen Traefik.
 
 Any failure after activation automatically reactivates and probes the preserved
@@ -39,6 +38,6 @@ timestamps, RPO/RTO seconds, release/checksum set, and probe results, and fails
 above an 86,400-second RPO or a 14,400-second RTO. For clean-node disaster
 recovery the RTO clock starts when host-loss recovery is declared and ends only
 after automated firewall and A/AAAA cutover for the documented low-TTL DNS zone
-plus valid app/`turn.` certificates pass external HTTPS redirect/SNI/chain,
-authenticated WSS, range-media, voice-join, and TURN probes. A same-host-only
-restore cannot satisfy the beta RTO claim.
+plus a valid application certificate pass external HTTPS redirect/SNI/chain,
+authenticated WSS, and range-media probes. A same-host-only restore cannot
+satisfy the beta RTO claim.
