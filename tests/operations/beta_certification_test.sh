@@ -4,11 +4,15 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 tmp="$(mktemp -d)"
 producer=""
-cleanup() {
+stop_producer() {
   if [[ -n "$producer" ]]; then
     kill "$producer" 2>/dev/null || true
     wait "$producer" 2>/dev/null || true
+    producer=""
   fi
+}
+cleanup() {
+  stop_producer
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -183,17 +187,20 @@ replacement_payload="{\"schemaVersion\":1,\"sourceCommit\":\"$replacement_commit
 mkfifo "$snapshot_candidate"
 mkfifo "$replacement_candidate"
 (
-  printf '%s' "$snapshot_payload" >"$snapshot_candidate"
+  exec 3>"$snapshot_candidate"
+  printf '%s' "$snapshot_payload" >&3
   mv -- "$replacement_candidate" "$snapshot_candidate"
+  exec 3>&-
   printf '%s' "$replacement_payload" >"$snapshot_candidate"
 ) >/dev/null 2>&1 &
 producer=$!
 
 set +e
-bash "$repo_root/scripts/certify-beta.sh" --candidate-lock "$snapshot_candidate" \
+timeout 5s bash "$repo_root/scripts/certify-beta.sh" --candidate-lock "$snapshot_candidate" \
   --evidence-out "$snapshot_evidence" >/dev/null 2>&1
 status=$?
 set -e
+[[ $status -ne 124 ]] || { echo "snapshot candidate invocation timed out" >&2; exit 1; }
 [[ $status -eq 3 ]] || { echo "snapshot candidate invocation returned $status" >&2; exit 1; }
 python3 - "$snapshot_evidence" "$snapshot_payload" "$snapshot_commit" <<'PY'
 import hashlib
@@ -209,4 +216,57 @@ if envelope["candidateLockDigest"] != expected_digest:
     raise SystemExit("evidence candidate digest was not computed from the candidate snapshot")
 if envelope["subject"]["digest"] != expected_digest:
     raise SystemExit("evidence subject digest was not computed from the candidate snapshot")
+PY
+stop_producer
+
+two_read_candidate="$tmp/two-read-candidate.fifo"
+two_read_replacement="$tmp/two-read-replacement.fifo"
+two_read_observation="$tmp/two-read-observation.json"
+mkfifo "$two_read_candidate"
+mkfifo "$two_read_replacement"
+(
+  exec 3>"$two_read_candidate"
+  printf '%s' "$snapshot_payload" >&3
+  mv -- "$two_read_replacement" "$two_read_candidate"
+  exec 3>&-
+  printf '%s' "$replacement_payload" >"$two_read_candidate"
+) >/dev/null 2>&1 &
+producer=$!
+
+set +e
+timeout 5s python3 - "$two_read_candidate" "$two_read_observation" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "rb") as candidate_file:
+    snapshot = json.load(candidate_file)
+with open(sys.argv[1], "rb") as candidate_file:
+    replacement = json.load(candidate_file)
+with open(sys.argv[2], "w", encoding="utf-8") as observation_file:
+    json.dump(
+        {
+            "snapshotCommit": snapshot["sourceCommit"],
+            "replacementCommit": replacement["sourceCommit"],
+        },
+        observation_file,
+    )
+PY
+status=$?
+set -e
+[[ $status -ne 124 ]] || { echo "two-read candidate fixture timed out" >&2; exit 1; }
+[[ $status -eq 0 ]] || { echo "two-read candidate fixture returned $status" >&2; exit 1; }
+wait "$producer"
+producer=""
+python3 - "$two_read_observation" "$snapshot_commit" "$replacement_commit" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as observation_file:
+    observation = json.load(observation_file)
+if observation["snapshotCommit"] != sys.argv[2]:
+    raise SystemExit("two-read fixture did not observe the snapshot identity first")
+if observation["replacementCommit"] != sys.argv[3]:
+    raise SystemExit("two-read fixture did not observe the replacement identity second")
+if observation["snapshotCommit"] == observation["replacementCommit"]:
+    raise SystemExit("two-read fixture did not distinguish snapshot from replacement")
 PY
