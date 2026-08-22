@@ -4,6 +4,7 @@
 import argparse
 import errno
 import os
+import secrets
 import signal
 import socket
 import subprocess
@@ -23,6 +24,9 @@ EXIT_FAILED = 1
 EXIT_TIMEOUT = 124
 TCP_LISTEN_STATE = "0A"
 PROC_TCP_TABLES = ("/proc/net/tcp", "/proc/net/tcp6")
+PROC_ROOT = "/proc"
+PROCESS_OWNER_ENV = "TELOS_PLAYWRIGHT_GATE_OWNER"
+IDENTITY_BIND_TIMEOUT_SECONDS = 1
 
 
 class GateInterrupted(Exception):
@@ -46,11 +50,38 @@ class SignalState:
             raise GateInterrupted(self.signum)
 
 
+class OpenProcessIdentity:
+    def __init__(self, pid, start_time, pidfd):
+        self.pid = pid
+        self.start_time = start_time
+        self.pidfd = pidfd
+
+    def close(self):
+        if self.pidfd is not None:
+            os.close(self.pidfd)
+            self.pidfd = None
+
+
 class OwnedProcess:
-    def __init__(self, process):
+    def __init__(self, process, ownership_token, leader_identity):
         self.process = process
-        # start_new_session=True makes the child PID its stable process-group ID.
+        self.ownership_token = ownership_token
+        self.leader_start_time = (
+            None if leader_identity is None else leader_identity.start_time
+        )
+        self.leader_pidfd = (
+            None if leader_identity is None else leader_identity.pidfd
+        )
+        if leader_identity is not None:
+            leader_identity.pidfd = None
+        # Retained for non-destructive diagnostics only. Numeric PGIDs are
+        # reusable and are never destructive-signal targets.
         self.pgid = process.pid
+
+    def close(self):
+        if self.leader_pidfd is not None:
+            os.close(self.leader_pidfd)
+            self.leader_pidfd = None
 
 
 def positive_seconds(value):
@@ -101,18 +132,178 @@ def require_free_port():
             ) from error
 
 
-def process_group_alive(pgid):
+def require_process_identity_support():
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError("process ownership cleanup requires Linux /proc")
+    if not callable(getattr(os, "pidfd_open", None)):
+        raise RuntimeError("process ownership cleanup requires os.pidfd_open")
+    if not callable(getattr(signal, "pidfd_send_signal", None)):
+        raise RuntimeError(
+            "process ownership cleanup requires signal.pidfd_send_signal"
+        )
     try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
+        if read_process_start_time(os.getpid()) is None:
+            raise RuntimeError("cannot inspect the wrapper process identity")
+        with open(f"{PROC_ROOT}/self/environ", "rb") as environment_file:
+            environment_file.read()
+    except RuntimeError:
+        raise
+    except OSError as error:
+        raise RuntimeError(
+            f"process ownership inspection is unavailable: {error}"
+        ) from error
+
+
+def read_process_stat(pid):
+    try:
+        with open(f"{PROC_ROOT}/{pid}/stat", "rb") as stat_file:
+            stat_bytes = stat_file.read()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect process {pid} identity: {error}") from error
+    command_end = stat_bytes.rfind(b")")
+    if command_end < 0:
+        raise RuntimeError(f"cannot parse process {pid} identity")
+    fields = stat_bytes[command_end + 1:].split()
+    if len(fields) <= 19:
+        raise RuntimeError(f"cannot parse process {pid} identity")
+    try:
+        return fields[0].decode("ascii"), int(fields[2]), int(fields[19])
+    except (UnicodeDecodeError, ValueError) as error:
+        raise RuntimeError(f"cannot parse process {pid} identity") from error
+
+
+def read_process_start_time(pid):
+    process_stat = read_process_stat(pid)
+    if process_stat is None or process_stat[0] in {"X", "Z"}:
+        return None
+    return process_stat[2]
+
+
+def process_has_ownership_token(
+    pid, ownership_token, allow_unrelated_permission_denied=False
+):
+    expected = f"{PROCESS_OWNER_ENV}={ownership_token}".encode("ascii")
+    try:
+        with open(f"{PROC_ROOT}/{pid}/environ", "rb") as environment_file:
+            environment = environment_file.read().split(b"\0")
+    except (FileNotFoundError, ProcessLookupError):
         return False
     except PermissionError:
-        return True
-    return True
+        if allow_unrelated_permission_denied:
+            return False
+        raise RuntimeError(f"cannot inspect process {pid} ownership token")
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot inspect process {pid} ownership token: {error}"
+        ) from error
+    return expected in environment
+
+
+def open_owned_process(pid, ownership_token):
+    start_time = read_process_start_time(pid)
+    if start_time is None or not process_has_ownership_token(
+        pid, ownership_token
+    ):
+        return None
+    try:
+        pidfd = os.pidfd_open(pid, 0)
+    except ProcessLookupError:
+        return None
+    except OSError as error:
+        raise RuntimeError(
+            f"cannot open stable identity for process {pid}: {error}"
+        ) from error
+    identity = OpenProcessIdentity(pid, start_time, pidfd)
+    try:
+        confirmed_start_time = read_process_start_time(pid)
+        if (
+            confirmed_start_time != start_time
+            or not process_has_ownership_token(pid, ownership_token)
+        ):
+            identity.close()
+            return None
+    except Exception:
+        identity.close()
+        raise
+    return identity
+
+
+def wait_for_owned_process(process, ownership_token):
+    deadline = time.monotonic() + IDENTITY_BIND_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        identity = open_owned_process(process.pid, ownership_token)
+        if identity is not None:
+            return identity
+        if process.poll() is not None:
+            return None
+        time.sleep(0.01)
+    return open_owned_process(process.pid, ownership_token)
+
+
+def open_owned_processes(owned):
+    try:
+        process_entries = list(os.scandir(PROC_ROOT))
+    except OSError as error:
+        raise RuntimeError(f"cannot inspect owned process set: {error}") from error
+    identities = []
+    try:
+        for process_entry in process_entries:
+            if not process_entry.name.isdigit():
+                continue
+            try:
+                process_uid = process_entry.stat(follow_symlinks=False).st_uid
+            except FileNotFoundError:
+                continue
+            except OSError as error:
+                raise RuntimeError(
+                    f"cannot inspect process {process_entry.name} owner: {error}"
+                ) from error
+            if process_uid != os.geteuid():
+                continue
+            process_stat = read_process_stat(int(process_entry.name))
+            if process_stat is None:
+                continue
+            process_state, process_pgid, _process_start_time = process_stat
+            if process_state in {"X", "Z"}:
+                continue
+            allow_unrelated_permission_denied = process_pgid != owned.pgid
+            if not process_has_ownership_token(
+                int(process_entry.name),
+                owned.ownership_token,
+                allow_unrelated_permission_denied=allow_unrelated_permission_denied,
+            ):
+                continue
+            identity = open_owned_process(
+                int(process_entry.name), owned.ownership_token
+            )
+            if identity is not None:
+                identities.append(identity)
+    except Exception:
+        for identity in identities:
+            identity.close()
+        raise
+    return identities
+
+
+def process_matches_owned_leader(owned):
+    start_time = read_process_start_time(owned.process.pid)
+    return (
+        start_time == owned.leader_start_time
+        and process_has_ownership_token(
+            owned.process.pid, owned.ownership_token
+        )
+    )
 
 
 def owned_process_alive(owned):
-    return owned.process.poll() is None and process_group_alive(owned.pgid)
+    if owned.process.poll() is not None:
+        return False
+    try:
+        return process_matches_owned_leader(owned)
+    except RuntimeError:
+        return False
 
 
 def listening_socket_inodes(port):
@@ -191,13 +382,15 @@ def owned_listener_alive(server):
             return False, f"cannot identify the owner of port {READY_PORT} listener"
         for pid in owner_pids:
             try:
-                owner_pgid = os.getpgid(pid)
-            except (ProcessLookupError, PermissionError):
+                owner_is_server = process_has_ownership_token(
+                    pid, server.ownership_token
+                )
+            except RuntimeError:
                 return False, f"cannot confirm the owner of port {READY_PORT} listener"
-            if owner_pgid != server.pgid:
+            if not owner_is_server:
                 return (
                     False,
-                    f"port {READY_PORT} listener is not owned by the frontend dev server group",
+                    f"port {READY_PORT} listener is not owned by the frontend dev server",
                 )
     return True, ""
 
@@ -271,39 +464,76 @@ def wait_for_playwright(playwright, server, signals, timeout_seconds):
 def wait_for_owned_exit(owned, timeout_seconds):
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        leader_exited = owned.process.poll() is not None
-        if leader_exited and not process_group_alive(owned.pgid):
+        if owned_processes_gone(owned):
             return True
         time.sleep(0.05)
-    leader_exited = owned.process.poll() is not None
-    return leader_exited and not process_group_alive(owned.pgid)
+    return owned_processes_gone(owned)
+
+
+def close_process_identities(identities):
+    for identity in identities:
+        identity.close()
+
+
+def owned_processes_gone(owned):
+    identities = open_owned_processes(owned)
+    try:
+        return owned.process.poll() is not None and not identities
+    finally:
+        close_process_identities(identities)
+
+
+def send_pidfd_signal(pidfd, signum):
+    try:
+        signal.pidfd_send_signal(pidfd, signum, None, 0)
+    except ProcessLookupError:
+        return
+
+
+def signal_owned_processes(owned, signum):
+    # The persistent leader pidfd was bound at launch and cannot be redirected
+    # by PID/PGID reuse. Signal it first so it cannot keep creating children.
+    if owned.leader_pidfd is not None:
+        send_pidfd_signal(owned.leader_pidfd, signum)
+
+    identities = open_owned_processes(owned)
+    try:
+        for identity in identities:
+            if identity.pid != owned.process.pid:
+                send_pidfd_signal(identity.pidfd, signum)
+    finally:
+        close_process_identities(identities)
 
 
 def stop_owned_group(owned, timeout_seconds):
-    if process_group_alive(owned.pgid):
-        try:
-            os.killpg(owned.pgid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-    stopped = wait_for_owned_exit(owned, timeout_seconds)
-    if not stopped:
-        try:
-            os.killpg(owned.pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stopped = wait_for_owned_exit(owned, timeout_seconds)
-    return stopped
+    try:
+        stopped = owned_processes_gone(owned)
+        if not stopped:
+            signal_owned_processes(owned, signal.SIGTERM)
+            stopped = wait_for_owned_exit(owned, timeout_seconds)
+        if not stopped:
+            signal_owned_processes(owned, signal.SIGKILL)
+            stopped = wait_for_owned_exit(owned, timeout_seconds)
+        return stopped
+    finally:
+        owned.close()
 
 
 def start_owned(argv, cwd, **kwargs):
+    require_process_identity_support()
+    ownership_token = secrets.token_hex(32)
+    environment = dict(kwargs.pop("env", os.environ))
+    environment[PROCESS_OWNER_ENV] = ownership_token
     process = subprocess.Popen(
         argv,
         cwd=cwd,
         shell=False,
         start_new_session=True,
+        env=environment,
         **kwargs,
     )
-    return OwnedProcess(process)
+    leader_identity = wait_for_owned_process(process, ownership_token)
+    return OwnedProcess(process, ownership_token, leader_identity)
 
 
 def run_gate(args, signals):
@@ -354,16 +584,23 @@ def run_gate(args, signals):
                             args.playwright_timeout_seconds,
                         )
         finally:
-            if playwright is not None:
-                cleanup_succeeded = (
-                    stop_owned_group(playwright, args.shutdown_timeout_seconds)
-                    and cleanup_succeeded
-                )
-            if server is not None:
-                cleanup_succeeded = (
-                    stop_owned_group(server, args.shutdown_timeout_seconds)
-                    and cleanup_succeeded
-                )
+            for label, owned in (
+                ("Playwright", playwright),
+                ("frontend dev server", server),
+            ):
+                if owned is None:
+                    continue
+                try:
+                    stopped = stop_owned_group(
+                        owned, args.shutdown_timeout_seconds
+                    )
+                except Exception as error:
+                    print(
+                        f"playwright-gate: {label} cleanup failed: {error}",
+                        file=sys.stderr,
+                    )
+                    stopped = False
+                cleanup_succeeded = stopped and cleanup_succeeded
     if not cleanup_succeeded:
         print(
             "playwright-gate: owned process cleanup could not be confirmed",

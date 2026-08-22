@@ -715,6 +715,50 @@ for arguments in \
 done
 
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
+import importlib.util
+import pathlib
+import signal
+import sys
+
+sys.dont_write_bytecode = True
+script_path = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location("run_playwright_gate_reuse", script_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+
+class ExitedProcess:
+    def poll(self):
+        return 0
+
+
+class FormerlyOwned:
+    process = ExitedProcess()
+    pgid = 41000
+    ownership_token = "fixture-owner-token"
+    leader_pidfd = None
+
+    def close(self):
+        return None
+
+
+owned = FormerlyOwned()
+module.open_owned_processes = lambda _owned: []
+module.process_group_alive = lambda pgid: pgid == owned.pgid
+group_signals = []
+module.os.killpg = lambda pgid, signum: group_signals.append((pgid, signum))
+
+stopped = module.stop_owned_group(owned, 0)
+assert stopped is True, stopped
+assert group_signals == [], (
+    "reused process group received a destructive signal",
+    group_signals,
+    signal.SIGTERM,
+    signal.SIGKILL,
+)
+PY
+
+python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
 import argparse
 import contextlib
 import importlib.util
@@ -737,6 +781,11 @@ class FakeOwned:
     def __init__(self, pgid):
         self.pgid = pgid
         self.process = FakeProcess()
+        self.ownership_token = f"owner-{pgid}"
+        self.leader_pidfd = pgid
+
+    def close(self):
+        self.leader_pidfd = None
 
 
 server = FakeOwned(41001)
@@ -746,10 +795,13 @@ module.require_free_port = lambda: None
 module.start_owned = lambda *_args, **_kwargs: next(owned)
 module.wait_until_ready = lambda *_args: (True, "")
 module.wait_for_playwright = lambda *_args: 0
-module.process_group_alive = lambda _pgid: True
+module.owned_processes_gone = lambda _owned: False
+module.open_owned_processes = lambda _owned: []
 module.wait_for_owned_exit = lambda *_args: False
 sent_signals = []
-module.os.killpg = lambda pgid, signum: sent_signals.append((pgid, signum))
+module.signal.pidfd_send_signal = (
+    lambda pidfd, signum, _siginfo, _flags: sent_signals.append((pidfd, signum))
+)
 args = argparse.Namespace(
     ready_timeout_seconds=1,
     playwright_timeout_seconds=1,
@@ -764,6 +816,36 @@ assert sent_signals == [
     (server.pgid, module.signal.SIGTERM),
     (server.pgid, module.signal.SIGKILL),
 ], sent_signals
+
+server = FakeOwned(42001)
+playwright = FakeOwned(42002)
+owned = iter((server, playwright))
+module.start_owned = lambda *_args, **_kwargs: next(owned)
+signal_attempts = []
+
+
+def first_signal_fails(pidfd, signum, _siginfo, _flags):
+    signal_attempts.append((pidfd, signum))
+    if pidfd == playwright.leader_pidfd:
+        raise PermissionError("fixture denied the first ownership-set signal")
+
+
+module.owned_processes_gone = lambda _owned: False
+module.wait_for_owned_exit = lambda owned_process, _timeout: owned_process is server
+module.signal.pidfd_send_signal = first_signal_fails
+with contextlib.redirect_stderr(io.StringIO()):
+    try:
+        result = module.run_gate(args, module.SignalState())
+    except PermissionError:
+        result = "cleanup exception escaped"
+assert signal_attempts == [
+    (playwright.pgid, module.signal.SIGTERM),
+    (server.pgid, module.signal.SIGTERM),
+], (
+    "server cleanup was skipped after Playwright signaling failed",
+    signal_attempts,
+)
+assert result == module.EXIT_FAILED, result
 PY
 
 process_fixture="$repo_root/tests/fixtures/gates/process_tree.py"
