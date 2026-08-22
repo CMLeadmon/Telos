@@ -771,9 +771,7 @@ import re
 import sys
 from pathlib import Path
 
-workflow_path = Path(sys.argv[1])
-lines = workflow_path.read_text(encoding="utf-8").splitlines()
-required_commands = [
+REQUIRED_COMMANDS = [
     "bash tests/operations/evidence_envelope_test.sh",
     "bash tests/operations/beta_certification_test.sh",
     "bash tests/operations/ci_gates_test.sh",
@@ -783,79 +781,152 @@ required_commands = [
     "bash scripts/check-release-truth.sh",
     "bash scripts/verify-clean-checkout.sh --inventory-only",
 ]
+KEY = re.compile(r"([A-Za-z0-9_-]+):(?:[ \t]*(.*))?$")
 
-job_start = next(
-    (index for index, line in enumerate(lines) if line == "  truth-and-gates:"),
-    None,
-)
-if job_start is None:
-    job_lines = []
-else:
-    job_end = next(
-        (
-            index
-            for index in range(job_start + 1, len(lines))
-            if re.fullmatch(r"  [A-Za-z0-9_-]+:", lines[index])
-        ),
-        len(lines),
-    )
-    job_lines = lines[job_start:job_end]
 
-if job_start is not None and "    runs-on: ubuntu-latest" not in job_lines:
-    print("workflow contract: truth-and-gates must run on ubuntu-latest", file=sys.stderr)
-    raise SystemExit(1)
-if job_start is not None and "      - uses: actions/checkout@v4" not in job_lines:
-    print("workflow contract: truth-and-gates is missing the pinned checkout action", file=sys.stderr)
-    raise SystemExit(1)
+class WorkflowError(ValueError):
+    pass
 
-permissions_start = next(
-    (index for index, line in enumerate(job_lines) if line == "    permissions:"),
-    None,
-)
-if job_start is not None and (
-    permissions_start is None or "      contents: read" not in job_lines[permissions_start + 1:]
-):
-    print("workflow contract: truth-and-gates must have contents: read permissions", file=sys.stderr)
-    raise SystemExit(1)
 
-steps = []
-step_start = None
-for index, line in enumerate(job_lines):
-    if line.startswith("      - "):
-        if step_start is not None:
-            steps.append(job_lines[step_start:index])
-        step_start = index
-if step_start is not None:
-    steps.append(job_lines[step_start:])
+def direct_mapping(line, indent):
+    if len(line) - len(line.lstrip(" ")) != indent:
+        return None
+    if line.lstrip(" ").startswith("#"):
+        return None
+    match = KEY.fullmatch(line[indent:])
+    if match is None:
+        return None
+    key, value = match.groups()
+    return key, (value or "").split(" #", 1)[0].strip()
 
-command_steps = {}
-for step in steps:
-    run_lines = [line.strip()[5:].strip() for line in step if line.strip().startswith("run:")]
-    if len(run_lines) == 1 and run_lines[0] in required_commands:
-        command_steps[run_lines[0]] = step
 
-missing = [command for command in required_commands if command not in command_steps]
-if missing:
-    if job_start is None:
-        print("workflow contract: missing truth-and-gates job", file=sys.stderr)
-    print(
-        "workflow contract: missing required commands: " + ", ".join(missing),
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
+def mapping_blocks(lines, start, end, indent):
+    entries = []
+    for index in range(start, end):
+        parsed = direct_mapping(lines[index], indent)
+        if parsed is not None:
+            entries.append((index, *parsed))
+    blocks = {}
+    for position, (index, key, value) in enumerate(entries):
+        if key in blocks:
+            raise WorkflowError(f"duplicate direct key: {key}")
+        next_index = entries[position + 1][0] if position + 1 < len(entries) else end
+        blocks[key] = (value, index + 1, next_index)
+    return blocks
 
-for command, step in command_steps.items():
-    continue_on_error = [
-        line.strip().split(":", 1)[1].strip()
-        for line in step
-        if line.strip().startswith("continue-on-error:")
+
+def require_false_or_absent(mapping, key, subject):
+    if key in mapping and mapping[key][0] != "false":
+        raise WorkflowError(f"{subject} permits continuation after failure")
+
+
+def parse_steps(lines, start, end):
+    starts = [
+        index for index in range(start, end)
+        if len(lines[index]) - len(lines[index].lstrip(" ")) == 6
+        and lines[index][6:].startswith("- ")
     ]
-    if any(value != "false" for value in continue_on_error):
-        print(
-            f"workflow contract: required command is allowed to continue after error: {command}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
+    steps = []
+    for position, index in enumerate(starts):
+        step_end = starts[position + 1] if position + 1 < len(starts) else end
+        first = KEY.fullmatch(lines[index][8:])
+        if first is None:
+            raise WorkflowError("step must begin with a direct key")
+        key, value = first.groups()
+        fields = mapping_blocks(lines, index + 1, step_end, 8)
+        if key in fields:
+            raise WorkflowError(f"duplicate direct step key: {key}")
+        fields[key] = ((value or "").split(" #", 1)[0].strip(), index + 1, index + 1)
+        if "if" in fields:
+            raise WorkflowError("step is conditional")
+        require_false_or_absent(fields, "continue-on-error", "step")
+        steps.append(fields)
+    return steps
+
+
+def validate_workflow(text):
+    lines = text.splitlines()
+    jobs_index = next(
+        (index for index, line in enumerate(lines) if line == "jobs:"), None
+    )
+    if jobs_index is None:
+        raise WorkflowError("missing top-level jobs mapping")
+    jobs = mapping_blocks(lines, jobs_index + 1, len(lines), 2)
+    if "truth-and-gates" not in jobs:
+        raise WorkflowError("missing truth-and-gates job")
+    _, job_start, job_end = jobs["truth-and-gates"]
+    job = mapping_blocks(lines, job_start, job_end, 4)
+    if "if" in job:
+        raise WorkflowError("truth-and-gates job is conditional")
+    require_false_or_absent(job, "continue-on-error", "truth-and-gates job")
+    if job.get("runs-on", (None,))[0] != "ubuntu-latest":
+        raise WorkflowError("truth-and-gates must run on ubuntu-latest")
+    if "permissions" not in job or job["permissions"][0]:
+        raise WorkflowError("truth-and-gates must have a permissions mapping")
+    _, permissions_start, permissions_end = job["permissions"]
+    permissions = mapping_blocks(lines, permissions_start, permissions_end, 6)
+    if {key: value[0] for key, value in permissions.items()} != {"contents": "read"}:
+        raise WorkflowError("truth-and-gates permissions must be exactly contents: read")
+    if "steps" not in job or job["steps"][0]:
+        raise WorkflowError("truth-and-gates must have a steps sequence")
+    _, steps_start, steps_end = job["steps"]
+    steps = parse_steps(lines, steps_start, steps_end)
+    if not any(step.get("uses", (None,))[0] == "actions/checkout@v4" for step in steps):
+        raise WorkflowError("truth-and-gates is missing the pinned checkout action")
+    commands = [step["run"][0] for step in steps if "run" in step]
+    if commands != REQUIRED_COMMANDS:
+        raise WorkflowError("truth-and-gates run steps must exactly match the required commands")
+
+
+workflow = Path(sys.argv[1]).read_text(encoding="utf-8")
+validate_workflow(workflow)
+
+
+def assert_rejected(name, mutation, expected):
+    try:
+        validate_workflow(mutation)
+    except WorkflowError as error:
+        if expected not in str(error):
+            raise SystemExit(f"workflow mutation {name} reported {error!r}, expected {expected!r}")
+        return
+    raise SystemExit(f"workflow mutation {name} was accepted")
+
+
+first_run = "        run: bash tests/operations/evidence_envelope_test.sh"
+assert_rejected(
+    "nested-fake-run",
+    workflow.replace(first_run, "        env:\n          run: bash tests/operations/evidence_envelope_test.sh", 1),
+    "exactly match",
+)
+assert_rejected(
+    "permission-spoof",
+    workflow.replace(
+        "    permissions:\n      contents: read",
+        "    permissions:\n      env:\n        contents: read",
+        1,
+    ),
+    "permissions must be exactly",
+)
+assert_rejected(
+    "job-if-false",
+    workflow.replace("  truth-and-gates:\n", "  truth-and-gates:\n    if: ${{ false }}\n", 1),
+    "job is conditional",
+)
+assert_rejected(
+    "job-continue-true",
+    workflow.replace("  truth-and-gates:\n", "  truth-and-gates:\n    continue-on-error: true\n", 1),
+    "job permits continuation",
+)
+assert_rejected(
+    "step-if-false",
+    workflow.replace(first_run, "        if: ${{ false }}\n" + first_run, 1),
+    "step is conditional",
+)
+assert_rejected(
+    "step-continue-true",
+    workflow.replace(first_run, "        continue-on-error: true\n" + first_run, 1),
+    "step permits continuation",
+)
 PY
 
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
@@ -1194,6 +1265,39 @@ set -e
 kill "$occupied_pid"
 wait "$occupied_pid" || true
 
-# The behavioral runner test invokes real Phase 1 wrappers. Their ordinary
-# Python bytecode cache is derived tool state, not a missing release input.
+make_inventory_fixture() {
+  local fixture="$1"
+  mkdir -p "$fixture"
+  while IFS= read -r path; do
+    mkdir -p "$fixture/$(dirname "$path")"
+    cp "$repo_root/$path" "$fixture/$path"
+  done < <(bash "$repo_root/scripts/verify-clean-checkout.sh" --list-required)
+  mkdir -p "$fixture/backend/db/migrations"
+  cp "$repo_root"/backend/db/migrations/*.sql "$fixture/backend/db/migrations/"
+  git -C "$fixture" init -q
+  git -C "$fixture" config user.name "Inventory Fixture"
+  git -C "$fixture" config user.email "inventory-fixture@example.invalid"
+  git -C "$fixture" add .
+  git -C "$fixture" commit -qm "inventory fixture"
+}
+
+for cache_name in untracked.py untracked.sh untracked.pyc; do
+  inventory_fixture="$fixture_dir/inventory-${cache_name//./-}"
+  make_inventory_fixture "$inventory_fixture"
+  mkdir -p "$inventory_fixture/scripts/probe/__pycache__"
+  printf 'untracked fixture\n' >"$inventory_fixture/scripts/probe/__pycache__/$cache_name"
+  set +e
+  inventory_output="$(cd "$inventory_fixture" && bash scripts/verify-clean-checkout.sh --inventory-only 2>&1)"
+  inventory_status=$?
+  set -e
+  [[ $inventory_status -eq 10 ]] || {
+    echo "clean-checkout accepted untracked __pycache__ input: $cache_name" >&2
+    exit 1
+  }
+  grep -Fq "scripts/probe/__pycache__/$cache_name" <<<"$inventory_output" || {
+    echo "clean-checkout did not identify untracked __pycache__ input: $cache_name" >&2
+    exit 1
+  }
+done
+
 bash "$repo_root/scripts/verify-clean-checkout.sh" --inventory-only

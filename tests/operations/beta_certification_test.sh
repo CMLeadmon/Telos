@@ -168,6 +168,7 @@ import hashlib
 import importlib.util
 import sys
 
+sys.dont_write_bytecode = True
 spec = importlib.util.spec_from_file_location("evidence", sys.argv[1])
 evidence = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(evidence)

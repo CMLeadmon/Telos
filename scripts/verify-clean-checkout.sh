@@ -162,7 +162,7 @@ run_inventory() {
 		untracked="$(git ls-files --others --exclude-standard -- \
 			backend/db/migrations config scripts \
 			docker-compose.yml docker-compose.dev.yml \
-			documentation/operations | awk '!/(^|\/)__pycache__\//')"
+			documentation/operations)"
 		if [ -n "$untracked" ]; then
 			while IFS= read -r p; do
 				fail_inventory "runtime-critical input is untracked: $p"

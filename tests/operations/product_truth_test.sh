@@ -652,7 +652,7 @@ done
 
 for wrapper in provision-jellyfin.sh provision-grimmory.sh; do
   set +e
-  wrapper_output="$(PYTHONDONTWRITEBYTECODE=1 bash "$repo_root/scripts/$wrapper" 2>&1)"
+  wrapper_output="$(bash "$repo_root/scripts/$wrapper" 2>&1)"
   wrapper_status=$?
   set -e
   if [[ $wrapper_status -ne 3 ]]; then
