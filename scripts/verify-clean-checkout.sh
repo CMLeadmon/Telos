@@ -79,15 +79,21 @@ backend/go.mod
 backend/go.sum
 backend/Dockerfile
 backend/main.go
+ci/phase-gates.json
 frontend/package.json
 frontend/package-lock.json
 frontend/next.config.ts
+documentation/product/beta-contract.json
 documentation/operations/backup-and-restore.md
 documentation/operations/repository-baseline.md
 scripts/backup.sh
+scripts/lib/evidence.py
+scripts/not-run.py
 scripts/restore.sh
+scripts/run-gates.py
 scripts/verify-clean-checkout.sh
 scripts/tests/verify-clean-checkout-test.sh
+release/evidence-envelope.schema.json
 EOF
 }
 
@@ -156,7 +162,7 @@ run_inventory() {
 		untracked="$(git ls-files --others --exclude-standard -- \
 			backend/db/migrations config scripts \
 			docker-compose.yml docker-compose.dev.yml \
-			documentation/operations)"
+			documentation/operations | awk '!/(^|\/)__pycache__\//')"
 		if [ -n "$untracked" ]; then
 			while IFS= read -r p; do
 				fail_inventory "runtime-critical input is untracked: $p"

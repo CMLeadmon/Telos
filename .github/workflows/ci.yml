@@ -92,3 +92,26 @@ jobs:
         run: |
           cd backend
           go build -o /dev/null ./cmd/telos
+
+  truth-and-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify evidence envelope contract
+        run: bash tests/operations/evidence_envelope_test.sh
+      - name: Verify fail-closed gate behavior
+        run: bash tests/operations/beta_certification_test.sh
+      - name: Verify gate catalog and runner
+        run: bash tests/operations/ci_gates_test.sh
+      - name: Verify accumulated suite behavior
+        run: bash tests/operations/accumulated_suite_test.sh
+      - name: Verify product-truth mutations
+        run: bash tests/operations/product_truth_test.sh
+      - name: Check product truth
+        run: bash scripts/check-product-truth.sh
+      - name: Check release truth
+        run: bash scripts/check-release-truth.sh
+      - name: Verify clean-checkout inventory
+        run: bash scripts/verify-clean-checkout.sh --inventory-only

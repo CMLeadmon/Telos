@@ -658,6 +658,7 @@ missing = sorted(required_external - set(ids))
 assert not missing, f"repository catalog is missing external gates: {missing}"
 
 required_current_local = {
+    "gate-catalog", "accumulated-suite", "product-truth-tests",
     "backend-headless-build", "api-contract-drift",
     "operator-cli-linux-amd64", "operator-cli-linux-arm64",
     "operator-cli-windows-amd64", "operator-cli-windows-arm64",
@@ -669,6 +670,13 @@ missing = sorted(required_current_local - set(ids))
 assert not missing, f"repository catalog is missing current local gates: {missing}"
 
 gate_by_id = {gate["id"]: gate for gate in catalog["gates"]}
+expected_operations_commands = {
+    "gate-catalog": ["bash", "tests/operations/ci_gates_test.sh"],
+    "accumulated-suite": ["bash", "tests/operations/accumulated_suite_test.sh"],
+    "product-truth-tests": ["bash", "tests/operations/product_truth_test.sh"],
+}
+for gate_id, command in expected_operations_commands.items():
+    assert gate_by_id[gate_id]["command"] == command, gate_by_id[gate_id]
 assert gate_by_id["backend-headless-build"]["command"][-5:] == [
     "go", "build", "-o", "/tmp/telos-core-headless", ".",
 ]
@@ -756,6 +764,98 @@ assert group_signals == [], (
     signal.SIGTERM,
     signal.SIGKILL,
 )
+PY
+
+python3 - "$repo_root/.github/workflows/ci.yml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+workflow_path = Path(sys.argv[1])
+lines = workflow_path.read_text(encoding="utf-8").splitlines()
+required_commands = [
+    "bash tests/operations/evidence_envelope_test.sh",
+    "bash tests/operations/beta_certification_test.sh",
+    "bash tests/operations/ci_gates_test.sh",
+    "bash tests/operations/accumulated_suite_test.sh",
+    "bash tests/operations/product_truth_test.sh",
+    "bash scripts/check-product-truth.sh",
+    "bash scripts/check-release-truth.sh",
+    "bash scripts/verify-clean-checkout.sh --inventory-only",
+]
+
+job_start = next(
+    (index for index, line in enumerate(lines) if line == "  truth-and-gates:"),
+    None,
+)
+if job_start is None:
+    job_lines = []
+else:
+    job_end = next(
+        (
+            index
+            for index in range(job_start + 1, len(lines))
+            if re.fullmatch(r"  [A-Za-z0-9_-]+:", lines[index])
+        ),
+        len(lines),
+    )
+    job_lines = lines[job_start:job_end]
+
+if job_start is not None and "    runs-on: ubuntu-latest" not in job_lines:
+    print("workflow contract: truth-and-gates must run on ubuntu-latest", file=sys.stderr)
+    raise SystemExit(1)
+if job_start is not None and "      - uses: actions/checkout@v4" not in job_lines:
+    print("workflow contract: truth-and-gates is missing the pinned checkout action", file=sys.stderr)
+    raise SystemExit(1)
+
+permissions_start = next(
+    (index for index, line in enumerate(job_lines) if line == "    permissions:"),
+    None,
+)
+if job_start is not None and (
+    permissions_start is None or "      contents: read" not in job_lines[permissions_start + 1:]
+):
+    print("workflow contract: truth-and-gates must have contents: read permissions", file=sys.stderr)
+    raise SystemExit(1)
+
+steps = []
+step_start = None
+for index, line in enumerate(job_lines):
+    if line.startswith("      - "):
+        if step_start is not None:
+            steps.append(job_lines[step_start:index])
+        step_start = index
+if step_start is not None:
+    steps.append(job_lines[step_start:])
+
+command_steps = {}
+for step in steps:
+    run_lines = [line.strip()[5:].strip() for line in step if line.strip().startswith("run:")]
+    if len(run_lines) == 1 and run_lines[0] in required_commands:
+        command_steps[run_lines[0]] = step
+
+missing = [command for command in required_commands if command not in command_steps]
+if missing:
+    if job_start is None:
+        print("workflow contract: missing truth-and-gates job", file=sys.stderr)
+    print(
+        "workflow contract: missing required commands: " + ", ".join(missing),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+for command, step in command_steps.items():
+    continue_on_error = [
+        line.strip().split(":", 1)[1].strip()
+        for line in step
+        if line.strip().startswith("continue-on-error:")
+    ]
+    if any(value != "false" for value in continue_on_error):
+        print(
+            f"workflow contract: required command is allowed to continue after error: {command}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
 PY
 
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
@@ -1093,3 +1193,7 @@ set -e
 }
 kill "$occupied_pid"
 wait "$occupied_pid" || true
+
+# The behavioral runner test invokes real Phase 1 wrappers. Their ordinary
+# Python bytecode cache is derived tool state, not a missing release input.
+bash "$repo_root/scripts/verify-clean-checkout.sh" --inventory-only
