@@ -1,10 +1,33 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "TelosEvidenceEnvelope",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "gateId", "status", "reason", "sourceCommit",
+    "candidateLockDigest", "command", "startedAt", "finishedAt",
+    "exitCode", "outputDigest", "toolVersions", "subject"
+  ],
   "properties": {
-    "candidateLockHash": { "type": "string" },
-    "status": { "type": "string" }
-  },
-  "required": ["candidateLockHash", "status"]
+    "schemaVersion": {"const": 2},
+    "gateId": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
+    "status": {"enum": ["passed", "failed", "not_run"]},
+    "reason": {"type": "string", "minLength": 1},
+    "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "candidateLockDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "finishedAt": {"type": "string", "format": "date-time"},
+    "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
+    "outputDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "toolVersions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "digest"],
+      "properties": {
+        "kind": {"enum": ["source", "artifact", "runtime", "external-host", "fixture"]},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    }
+  }
 }
