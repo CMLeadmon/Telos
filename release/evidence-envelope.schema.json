@@ -19,7 +19,22 @@
     "finishedAt": {"type": "string", "format": "date-time"},
     "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
     "outputDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "toolVersions": {"type": "object", "additionalProperties": {"type": "string"}},
+    "toolVersions": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "python": {"type": "string", "minLength": 1},
+        "bash": {"type": "string", "minLength": 1},
+        "sh": {"type": "string", "minLength": 1},
+        "python3": {"type": "string", "minLength": 1},
+        "node": {"type": "string", "minLength": 1},
+        "npm": {"type": "string", "minLength": 1},
+        "npx": {"type": "string", "minLength": 1},
+        "podman": {"type": "string", "minLength": 1},
+        "git": {"type": "string", "minLength": 1}
+      }
+    },
     "subject": {
       "type": "object",
       "additionalProperties": false,

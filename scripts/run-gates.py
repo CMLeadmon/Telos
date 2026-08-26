@@ -7,9 +7,11 @@ import json
 import os
 import platform
 import re
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -30,6 +32,10 @@ GATE_FIELDS = {
 GATE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SCOPES = {"local", "external"}
 SUBJECT_KINDS = set(evidence.SUBJECT_KINDS)
+VERSIONED_TOOLS = {"bash", "sh", "python3", "node", "npm", "npx", "podman", "git"}
+TOOL_VERSION_TIMEOUT_SECONDS = 5
+PROCESS_TERM_GRACE_SECONDS = 1
+PROCESS_KILL_GRACE_SECONDS = 2
 
 
 class GateError(Exception):
@@ -115,6 +121,16 @@ def validate_catalog(catalog):
             raise GateError(f"gate {gate_id} command entries must not contain NUL")
         if not command[0]:
             raise GateError(f"gate {gate_id} command executable must not be empty")
+        executable_name = os.path.basename(command[0])
+        if executable_name in {"bash", "sh"} and any(
+            argument.startswith("-")
+            and not argument.startswith("--")
+            and "c" in argument[1:]
+            for argument in command[1:]
+        ):
+            raise GateError(
+                f"gate {gate_id} must not use shell command strings"
+            )
         prerequisites = gate["prerequisites"]
         if not isinstance(prerequisites, list):
             raise GateError(f"gate {gate_id} prerequisites must be an array")
@@ -335,42 +351,184 @@ def normalize_exit_code(return_code):
     return min(255, return_code)
 
 
-def run_command(gate):
+def probe_tool_versions(gate):
+    versions = {"python": platform.python_version()}
+    executable = gate["command"][0]
+    tool = os.path.basename(executable)
+    if tool not in VERSIONED_TOOLS:
+        return versions, f"tool version identity is unsupported for: {tool}"
     try:
         completed = subprocess.run(
+            [executable, "--version"],
+            cwd=REPO_ROOT,
+            shell=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=TOOL_VERSION_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except FileNotFoundError:
+        return versions, f"tool version identity is unavailable for: {tool}"
+    except subprocess.TimeoutExpired:
+        return versions, f"tool version probe timed out for: {tool}"
+    except OSError as error:
+        return versions, f"tool version probe failed for {tool}: {error}"
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    if completed.returncode != 0 or not lines:
+        return versions, f"tool version identity could not be obtained for: {tool}"
+    versions[tool] = lines[0]
+    return versions, None
+
+
+def process_group_has_live_members(pgid):
+    proc_root = "/proc"
+    if os.path.isdir(proc_root):
+        for entry in os.scandir(proc_root):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(
+                    os.path.join(entry.path, "stat"), encoding="ascii"
+                ) as stat_file:
+                    stat_line = stat_file.read()
+            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+                continue
+            closing_parenthesis = stat_line.rfind(")")
+            if closing_parenthesis < 0:
+                continue
+            fields = stat_line[closing_parenthesis + 2:].split()
+            try:
+                if len(fields) >= 3 and fields[0] != "Z" and int(fields[2]) == pgid:
+                    return True
+            except ValueError:
+                continue
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def wait_for_process_group_exit(process, pgid, timeout_seconds):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        process.poll()
+        if not process_group_has_live_members(pgid):
+            return True
+        time.sleep(0.02)
+    process.poll()
+    return not process_group_has_live_members(pgid)
+
+
+def stop_process_group(process, pgid):
+    errors = []
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        errors.append(f"cannot TERM process group: {error}")
+    if not wait_for_process_group_exit(
+        process, pgid, PROCESS_TERM_GRACE_SECONDS
+    ):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        except OSError as error:
+            errors.append(f"cannot KILL process group: {error}")
+        if not wait_for_process_group_exit(
+            process, pgid, PROCESS_KILL_GRACE_SECONDS
+        ):
+            errors.append("process group remained live after KILL")
+    try:
+        process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        errors.append("command leader could not be reaped after group cleanup")
+        try:
+            process.kill()
+            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            errors.append(f"command leader reap failed: {error}")
+    return errors
+
+
+def run_command(gate):
+    try:
+        process = subprocess.Popen(
             gate["command"],
             cwd=REPO_ROOT,
             shell=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=gate["timeoutSeconds"],
-            check=False,
+            start_new_session=True,
         )
-        output = completed.stdout
-        exit_code = normalize_exit_code(completed.returncode)
-        if completed.returncode == 0:
-            return "passed", "command exited 0", exit_code, output
-        if completed.returncode == EXIT_NOT_RUN:
-            return (
-                "not_run",
-                "command reported not_run; inspect the gate log for corrective action",
-                EXIT_NOT_RUN,
-                output,
-            )
-        return "failed", f"command exited {exit_code}", exit_code, output
     except FileNotFoundError:
         executable = gate["command"][0]
         output = f"not_run: executable is unavailable: {executable}\n".encode("utf-8")
         return "not_run", f"executable is unavailable: {executable}", EXIT_NOT_RUN, output
-    except subprocess.TimeoutExpired as error:
-        output = error.stdout or b""
-        if isinstance(output, str):
-            output = output.encode("utf-8", errors="replace")
-        output += f"gate timed out after {gate['timeoutSeconds']} seconds\n".encode("utf-8")
-        return "failed", "command timed out", 124, output
     except OSError as error:
         output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
         return "failed", "command could not be executed", 126, output
+
+    pgid = process.pid
+    try:
+        output, _ = process.communicate(timeout=gate["timeoutSeconds"])
+    except subprocess.TimeoutExpired:
+        leader_exited = process.poll() is not None
+        cleanup_errors = stop_process_group(process, pgid)
+        try:
+            output, _ = process.communicate(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired as error:
+            output = error.output or b""
+            if isinstance(output, str):
+                output = output.encode("utf-8", errors="replace")
+            if process.stdout is not None:
+                process.stdout.close()
+            cleanup_errors.append("capture pipe remained open after process-group cleanup")
+        if leader_exited:
+            reason = "command output capture timed out after command leader exit"
+        else:
+            reason = "command timed out"
+        output += f"gate timed out after {gate['timeoutSeconds']} seconds\n".encode("utf-8")
+        if cleanup_errors:
+            output += (
+                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
+            ).encode("utf-8", errors="replace")
+        return "failed", reason, 124, output
+    except OSError as error:
+        cleanup_errors = stop_process_group(process, pgid)
+        output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
+        if cleanup_errors:
+            output += (
+                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
+            ).encode("utf-8", errors="replace")
+        return "failed", "command could not be captured", 126, output
+
+    if process_group_has_live_members(pgid):
+        cleanup_errors = stop_process_group(process, pgid)
+        output += b"gate left an ordinary descendant running after command exit\n"
+        if cleanup_errors:
+            output += (
+                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
+            ).encode("utf-8", errors="replace")
+        return "failed", "command left descendants running", 125, output
+
+    exit_code = normalize_exit_code(process.returncode)
+    if process.returncode == 0:
+        return "passed", "command exited 0", exit_code, output
+    if process.returncode == EXIT_NOT_RUN:
+        return (
+            "not_run",
+            "command reported not_run; inspect the gate log for corrective action",
+            EXIT_NOT_RUN,
+            output,
+        )
+    return "failed", f"command exited {exit_code}", exit_code, output
 
 
 def subject_digest(gate, candidate_digest, source_commit, status):
@@ -406,7 +564,7 @@ def subject_digest(gate, candidate_digest, source_commit, status):
 
 def write_envelope(
     gate, envelope_path, status, reason, source_commit, candidate_digest,
-    started_at, finished_at, exit_code, output,
+    started_at, finished_at, exit_code, output, tool_versions,
 ):
     envelope_args = argparse.Namespace(
         output=envelope_path,
@@ -420,7 +578,7 @@ def write_envelope(
         finished_at=finished_at,
         exit_code=exit_code,
         output_digest=evidence.digest_bytes(output),
-        tool_versions_json=json.dumps({"python": platform.python_version()}),
+        tool_versions_json=json.dumps(tool_versions, separators=(",", ":")),
         subject_json=json.dumps(
             {
                 "kind": gate["subjectKind"],
@@ -441,6 +599,7 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
     statuses = {}
     for gate in gates:
         started_at = timestamp()
+        tool_versions = {"python": platform.python_version()}
         blocked = [
             prerequisite
             for prerequisite in gate["prerequisites"]
@@ -468,20 +627,27 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
                 exit_code = EXIT_FAILED
                 output = f"failed: {reason}\n".encode("utf-8")
             else:
-                status, reason, exit_code, output = run_command(gate)
-                if gate["subjectKind"] == "source":
-                    source_problem = source_checkout_problem(source_commit)
-                if source_problem:
-                    status = "failed"
-                    if source_problem.startswith("tree is dirty"):
-                        reason = "source gate dirtied the checkout during execution"
-                    else:
-                        reason = (
-                            "source gate violated candidate identity during execution: "
-                            f"{source_problem}"
-                        )
-                    exit_code = EXIT_FAILED
-                    output += f"failed: {reason}\n".encode("utf-8")
+                tool_versions, tool_problem = probe_tool_versions(gate)
+                if tool_problem:
+                    status = "not_run"
+                    reason = tool_problem
+                    exit_code = EXIT_NOT_RUN
+                    output = f"not_run: {reason}\n".encode("utf-8")
+                else:
+                    status, reason, exit_code, output = run_command(gate)
+                    if gate["subjectKind"] == "source":
+                        source_problem = source_checkout_problem(source_commit)
+                    if source_problem:
+                        status = "failed"
+                        if source_problem.startswith("tree is dirty"):
+                            reason = "source gate dirtied the checkout during execution"
+                        else:
+                            reason = (
+                                "source gate violated candidate identity during execution: "
+                                f"{source_problem}"
+                            )
+                        exit_code = EXIT_FAILED
+                        output += f"failed: {reason}\n".encode("utf-8")
         if gate["subjectKind"] == "artifact":
             if status == "passed":
                 status = "failed"
@@ -499,7 +665,7 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
         write_log(log_path, output)
         write_envelope(
             gate, envelope_path, status, reason, source_commit, candidate_digest,
-            started_at, finished_at, exit_code, output,
+            started_at, finished_at, exit_code, output, tool_versions,
         )
         statuses[gate["id"]] = status
         print(f"{gate['id']}: {status}")

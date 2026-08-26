@@ -21,6 +21,9 @@ REQUIRED_FIELDS = (
 )
 STATUSES = ("passed", "failed", "not_run")
 SUBJECT_KINDS = ("source", "artifact", "runtime", "external-host", "fixture")
+TOOL_VERSION_KEYS = (
+    "python", "bash", "sh", "python3", "node", "npm", "npx", "podman", "git",
+)
 SHA256_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 GATE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}\Z")
@@ -73,7 +76,7 @@ def reject_forbidden_keys(value, path="$"):
             reject_forbidden_keys(child, f"{path}[{index}]")
 
 
-def validate_envelope(envelope, candidate_digest=None):
+def validate_envelope(envelope, candidate_digest=None, candidate_source_commit=None):
     if not isinstance(envelope, dict):
         fail("envelope must be an object")
     reject_forbidden_keys(envelope)
@@ -118,10 +121,13 @@ def validate_envelope(envelope, candidate_digest=None):
 
     require_pattern(envelope["outputDigest"], "outputDigest", SHA256_PATTERN)
     tool_versions = envelope["toolVersions"]
-    if not isinstance(tool_versions, dict):
-        fail("toolVersions must be an object")
-    if any(not isinstance(value, str) for value in tool_versions.values()):
-        fail("toolVersions values must be strings")
+    if not isinstance(tool_versions, dict) or not tool_versions:
+        fail("toolVersions must be a non-empty object")
+    unknown_tools = set(tool_versions) - set(TOOL_VERSION_KEYS)
+    if unknown_tools:
+        fail(f"toolVersions has unknown tool: {sorted(unknown_tools)[0]}")
+    if any(not isinstance(value, str) or not value for value in tool_versions.values()):
+        fail("toolVersions values must be non-empty strings")
 
     subject = envelope["subject"]
     if not isinstance(subject, dict):
@@ -135,9 +141,18 @@ def validate_envelope(envelope, candidate_digest=None):
     if subject["kind"] not in SUBJECT_KINDS:
         fail("subject.kind is invalid")
     require_pattern(subject["digest"], "subject.digest", SHA256_PATTERN)
+    if subject["kind"] == "source":
+        expected_source_digest = digest_bytes(envelope["sourceCommit"].encode("ascii"))
+        if subject["digest"] != expected_source_digest:
+            fail("source subject digest does not match sourceCommit")
 
     if candidate_digest is not None and envelope["candidateLockDigest"] != candidate_digest:
         fail("candidateLockDigest does not match candidate lock")
+    if (
+        candidate_source_commit is not None
+        and envelope["sourceCommit"] != candidate_source_commit
+    ):
+        fail("sourceCommit does not match candidate lock")
 
 
 def load_schema(path):
@@ -169,7 +184,15 @@ def load_schema(path):
         "finishedAt": {"type": "string", "format": "date-time"},
         "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
         "outputDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-        "toolVersions": {"type": "object", "additionalProperties": {"type": "string"}},
+        "toolVersions": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": False,
+            "properties": {
+                key: {"type": "string", "minLength": 1}
+                for key in TOOL_VERSION_KEYS
+            },
+        },
         "subject": {
             "type": "object",
             "additionalProperties": False,
@@ -201,6 +224,19 @@ def digest_path(path):
     except OSError as error:
         fail(f"cannot read {path}: {error}")
     return f"sha256:{digest.hexdigest()}"
+
+
+def read_candidate_snapshot(path):
+    try:
+        with open(path, "rb") as candidate_file:
+            candidate_bytes = candidate_file.read()
+        candidate = json.loads(candidate_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"cannot read candidate lock: {error}")
+    source_commit = candidate.get("sourceCommit") if isinstance(candidate, dict) else None
+    if not isinstance(source_commit, str) or not COMMIT_PATTERN.fullmatch(source_commit):
+        fail("candidate lock must contain a lowercase hexadecimal sourceCommit")
+    return source_commit, digest_bytes(candidate_bytes)
 
 
 def load_envelope(path):
@@ -236,33 +272,55 @@ def write_envelope(args):
     }
     validate_envelope(envelope)
     output_dir = os.path.dirname(os.path.abspath(args.output))
+    output_path = os.path.abspath(args.output)
+    directory_descriptor = None
+    descriptor = None
+    temporary_path = None
     try:
+        directory_descriptor = os.open(
+            output_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
         descriptor, temporary_path = tempfile.mkstemp(
             dir=output_dir, prefix=".evidence-", suffix=".tmp"
         )
         try:
             payload = json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            with os.fdopen(descriptor, "wb") as temporary_file:
+            os.fchmod(descriptor, 0o600)
+            temporary_file = os.fdopen(descriptor, "wb")
+            descriptor = None
+            with temporary_file:
                 temporary_file.write(payload)
                 temporary_file.flush()
                 os.fsync(temporary_file.fileno())
-            os.chmod(temporary_path, 0o600)
-            os.replace(temporary_path, args.output)
-        except Exception:
+            os.link(temporary_path, output_path, follow_symlinks=False)
+        finally:
             try:
-                os.unlink(temporary_path)
-            except FileNotFoundError:
-                pass
-            raise
+                if descriptor is not None:
+                    os.close(descriptor)
+            finally:
+                try:
+                    try:
+                        os.unlink(temporary_path)
+                    except FileNotFoundError:
+                        pass
+                finally:
+                    os.fsync(directory_descriptor)
+    except FileExistsError as error:
+        fail(f"cannot write envelope: output already exists: {error.filename}")
     except OSError as error:
         fail(f"cannot write envelope: {error}")
+    finally:
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
 
 
 def verify_envelopes(args):
     load_schema(args.schema)
-    candidate_digest = digest_path(args.candidate_lock)
+    source_commit, candidate_digest = read_candidate_snapshot(args.candidate_lock)
     for envelope_path in args.envelopes:
-        validate_envelope(load_envelope(envelope_path), candidate_digest)
+        validate_envelope(
+            load_envelope(envelope_path), candidate_digest, source_commit
+        )
 
 
 def build_parser():

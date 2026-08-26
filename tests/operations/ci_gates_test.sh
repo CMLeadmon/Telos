@@ -68,6 +68,14 @@ elif mutation == "empty-command":
     catalog["gates"][1]["command"] = []
 elif mutation == "nul-command":
     catalog["gates"][1]["command"][1] = "bad\0argument"
+elif mutation == "bash-command-string":
+    catalog["gates"][1]["command"] = ["bash", "-c", "printf unsafe"]
+elif mutation == "path-bash-command-string":
+    catalog["gates"][1]["command"] = ["/bin/bash", "-c", "printf unsafe"]
+elif mutation == "sh-command-string":
+    catalog["gates"][1]["command"] = ["sh", "-c", "printf unsafe"]
+elif mutation == "path-sh-command-string":
+    catalog["gates"][1]["command"] = ["/bin/sh", "-c", "printf unsafe"]
 elif mutation == "invalid-scope":
     catalog["gates"][1]["scope"] = "remote"
 elif mutation == "non-string-scope":
@@ -127,6 +135,10 @@ assert_catalog_rejected_before_execution unknown-gate-key "unknown field"
 assert_catalog_rejected_before_execution string-command "command"
 assert_catalog_rejected_before_execution empty-command "command"
 assert_catalog_rejected_before_execution nul-command "NUL"
+assert_catalog_rejected_before_execution bash-command-string "shell command strings"
+assert_catalog_rejected_before_execution path-bash-command-string "shell command strings"
+assert_catalog_rejected_before_execution sh-command-string "shell command strings"
+assert_catalog_rejected_before_execution path-sh-command-string "shell command strings"
 assert_catalog_rejected_before_execution invalid-scope "scope"
 assert_catalog_rejected_before_execution non-string-scope "scope"
 assert_catalog_rejected_before_execution zero-timeout "timeoutSeconds"
@@ -549,6 +561,114 @@ assert envelope["exitCode"] == 7, envelope
 PY
 grep -Fq "assertion failed" "$fixture_dir/failed-evidence/required-failure.log"
 
+version_bin="$fixture_dir/version-bin"
+mkdir "$version_bin"
+for tool in bash node npm npx podman; do
+  cp "$repo_root/tests/fixtures/gates/versioned_tool.py" "$version_bin/$tool"
+  chmod 700 "$version_bin/$tool"
+done
+python3 - "$fixture_dir/version-tools.json" <<'PY'
+import json
+import sys
+
+tools = ("bash", "python3", "node", "npm", "npx", "podman")
+catalog = {"schemaVersion": 1, "gates": [
+    {
+        "id": f"version-{tool}",
+        "phase": 1,
+        "scope": "local",
+        "required": True,
+        "timeoutSeconds": 10,
+        "command": (
+            ["python3", "-c", "print('python3 fixture gate ran')"]
+            if tool == "python3" else [tool]
+        ),
+        "prerequisites": [],
+        "subjectKind": "fixture",
+    }
+    for tool in tools
+]}
+with open(sys.argv[1], "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+real_python="$(command -v python3)"
+env PATH="$version_bin:$PATH" "$real_python" "$repo_root/scripts/run-gates.py" \
+  --catalog "$fixture_dir/version-tools.json" --scope local \
+  --candidate-lock "$fixture_dir/candidate.json" \
+  --evidence-dir "$fixture_dir/version-tools-evidence"
+"$real_python" - "$fixture_dir/version-tools-evidence" <<'PY'
+import json
+import pathlib
+import platform
+import subprocess
+import sys
+
+evidence_dir = pathlib.Path(sys.argv[1])
+expected = {
+    "bash": "GNU bash, fixture version 5.2",
+    "python3": subprocess.run(
+        [sys.executable, "--version"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    ).stdout.strip().splitlines()[0],
+    "node": "v24.18.0-fixture",
+    "npm": "11.6.2-fixture",
+    "npx": "11.6.2-fixture",
+    "podman": "podman version 5.0.0-fixture",
+}
+for tool, expected_version in expected.items():
+    envelope = json.loads(
+        (evidence_dir / f"version-{tool}.json").read_text(encoding="utf-8")
+    )
+    assert envelope["status"] == "passed", envelope
+    assert envelope["toolVersions"]["python"] == platform.python_version(), envelope
+    assert envelope["toolVersions"][tool] == expected_version, envelope
+    assert set(envelope["toolVersions"]) == {"python", tool}, envelope
+PY
+
+version_failure_marker="$fixture_dir/version-failure-ran"
+python3 - "$fixture_dir/version-failure.json" <<'PY'
+import json
+import sys
+
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": "version-failure", "phase": 1, "scope": "local", "required": True,
+    "timeoutSeconds": 10, "command": ["node"], "prerequisites": [],
+    "subjectKind": "fixture",
+}]}
+with open(sys.argv[1], "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+set +e
+env \
+  PATH="$version_bin:$PATH" \
+  TELOS_VERSION_FIXTURE_FAIL=node \
+  TELOS_VERSION_FIXTURE_MARKER="$version_failure_marker" \
+  "$real_python" "$repo_root/scripts/run-gates.py" \
+    --catalog "$fixture_dir/version-failure.json" --scope local \
+    --candidate-lock "$fixture_dir/candidate.json" \
+    --evidence-dir "$fixture_dir/version-failure-evidence"
+status=$?
+set -e
+[[ $status -ne 0 ]] || { echo "gate with unavailable tool identity returned success" >&2; exit 1; }
+[[ ! -e "$version_failure_marker" ]] || {
+  echo "gate ran despite an unavailable primary tool identity" >&2
+  exit 1
+}
+python3 - "$fixture_dir/version-failure-evidence/version-failure.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as input_file:
+    envelope = json.load(input_file)
+assert envelope["status"] == "not_run", envelope
+assert envelope["exitCode"] == 3, envelope
+assert "tool version" in envelope["reason"], envelope
+assert set(envelope["toolVersions"]) == {"python"}, envelope
+PY
+
 write_dependency_catalog() {
   local prerequisite_mode="$1"
   local catalog="$2"
@@ -689,6 +809,12 @@ assert playwright_gate["command"] == [
     "--playwright-timeout-seconds", "1650",
 ]
 assert int(playwright_gate["command"][-1]) < playwright_gate["timeoutSeconds"]
+accessibility_gate = gate_by_id["frontend-accessibility"]
+assert accessibility_gate["command"] == [
+    "npm", "--prefix", "frontend", "run", "check:a11y-evidence",
+]
+assert "frontend-accessibility" in gate_by_id["frontend-quality"]["prerequisites"]
+assert "frontend-accessibility" in gate_by_id["beta-certification"]["prerequisites"]
 for platform in ("linux", "windows", "darwin"):
     for architecture in ("amd64", "arm64"):
         command = gate_by_id[f"operator-cli-{platform}-{architecture}"]["command"]
@@ -1245,6 +1371,64 @@ raise SystemExit(f"fixture processes still alive: {live}")
 PY
 }
 
+run_ordinary_process_fixture() {
+  local mode="$1"
+  local state_dir="$fixture_dir/process-ordinary-$mode"
+  local catalog="$fixture_dir/ordinary-$mode.json"
+  local evidence_dir="$fixture_dir/ordinary-$mode-evidence"
+  mkdir "$state_dir"
+  python3 - "$catalog" "$repo_root/tests/fixtures/gates/ordinary_process_tree.py" \
+    "$mode" "$state_dir" <<'PY'
+import json
+import sys
+
+catalog_path, fixture, mode, state_dir = sys.argv[1:]
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": f"ordinary-{mode}",
+    "phase": 1,
+    "scope": "local",
+    "required": True,
+    "timeoutSeconds": 1,
+    "command": ["python3", fixture, mode, state_dir],
+    "prerequisites": [],
+    "subjectKind": "fixture",
+}]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+  set +e
+  timeout 12s env TELOS_GATE_FIXTURE_STATE="$state_dir" \
+    python3 "$repo_root/scripts/run-gates.py" \
+      --catalog "$catalog" --scope local \
+      --candidate-lock "$fixture_dir/candidate.json" \
+      --evidence-dir "$evidence_dir"
+  status=$?
+  set -e
+  [[ $status -ne 124 ]] || {
+    echo "ordinary $mode gate exceeded its bounded runner cleanup" >&2
+    exit 1
+  }
+  [[ $status -ne 0 ]] || { echo "ordinary $mode gate returned success" >&2; exit 1; }
+  assert_fixture_processes_dead "$state_dir"
+  python3 - "$evidence_dir/ordinary-$mode.json" "$evidence_dir/ordinary-$mode.log" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+envelope_path, log_path = map(pathlib.Path, sys.argv[1:])
+envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+output = log_path.read_bytes()
+assert envelope["status"] == "failed", envelope
+assert envelope["exitCode"] == 124, envelope
+assert "timed out" in envelope["reason"], envelope
+assert envelope["outputDigest"] == "sha256:" + hashlib.sha256(output).hexdigest(), envelope
+PY
+}
+
+run_ordinary_process_fixture timeout
+run_ordinary_process_fixture pipe-hang
+
 run_playwright_fixture() {
   local state_dir="$1"
   local npm_mode="$2"
@@ -1436,6 +1620,12 @@ set -e
 }
 kill "$occupied_pid"
 wait "$occupied_pid" || true
+
+required_inventory="$(bash "$repo_root/scripts/verify-clean-checkout.sh" --list-required)"
+[[ "$(grep -Fxc 'scripts/verify-evidence.sh' <<<"$required_inventory")" -eq 1 ]] || {
+  echo "clean-checkout inventory must include scripts/verify-evidence.sh exactly once" >&2
+  exit 1
+}
 
 make_inventory_fixture() {
   local fixture="$1"

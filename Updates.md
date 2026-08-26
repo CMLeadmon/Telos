@@ -1,4 +1,11 @@
-# Updates.md — Secure Multi-User Backend Implementation Plan
+# Updates.md — SUPERSEDED / HISTORICAL — DO NOT IMPLEMENT
+
+> **Warning:** This pre-redesign plan is retained only as historical context.
+> Do not follow or implement any LiveKit direction in this file.
+> Its voice-room, TURN, Watch Party, and embedded-frontend instructions conflict
+> with the current standalone beta plan and must not be revived.
+
+## Historical title: Secure Multi-User Backend Implementation Plan
 
 ## Summary
 
@@ -165,4 +172,3 @@ This section provides strict, step-by-step technical blueprints for Gemini 3.5 F
 
 ### 7. Secret Injection Verification
 - Validate at startup that mandatory variables (`DATABASE_URL`, `REDIS_URL`, `TELOS_DOMAIN`, `TELOS_BOOTSTRAP_TOKEN`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `JELLYFIN_ADMIN_TOKEN`, `GRIMMORY_API_TOKEN`) do not match placeholders (e.g. `your-secret-here`, `change-me`, `temp-token`). Fail fast if any are missing or placeholder-like.
-

@@ -1,5 +1,20 @@
 import assert from "node:assert/strict";
-import { createDevServer } from "../../frontend/dev-server.mjs";
+import { cpSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const cleanCopy = mkdtempSync(join(tmpdir(), "telos-dev-proxy-"));
+const copiedModule = join(cleanCopy, "dev-server.mjs");
+cpSync(new URL("../../frontend/dev-server.mjs", import.meta.url), copiedModule);
+assert.equal(existsSync(join(cleanCopy, "node_modules")), false);
+
+let createDevServer;
+try {
+  ({ createDevServer } = await import(pathToFileURL(copiedModule)));
+} finally {
+  rmSync(cleanCopy, { recursive: true, force: true });
+}
 
 let requestListener;
 const upgradeListeners = new Map();
@@ -54,3 +69,5 @@ dispatchHttp("/api/v1/health?probe=1", "http://gateway.test:8080");
 dispatchWebSocket("/api/v1/chat/ws?channel=general", "http://gateway.test:8080");
 dispatchHttp("/stream/?page=2", "http://next.test:3001");
 dispatchHttp("/livekit?legacy=1", "http://next.test:3001");
+dispatchWebSocket("/stream/socket?ordinary=1", "http://next.test:3001");
+dispatchWebSocket("/livekit?legacy=1", "http://next.test:3001");

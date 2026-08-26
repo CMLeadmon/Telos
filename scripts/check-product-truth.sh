@@ -491,6 +491,71 @@ scan("absolute local-only privacy claim", r"nothing (ever )?leaves|never leaves 
 scan("inert advertised control", r'aria-label="oracle"', frontend)
 scan("removed feature surface reappeared", r"livekit|watch.?party|voice.?dock|useVoiceSession|useWatchParty|useNotificationStore|useMyListStore|/media-list", frontend + [path for path in backend if path.suffix == ".go"], test_file)
 
+bundle_budget = document("frontend/bundle-budget.json", "removedFeatures")
+if isinstance(bundle_budget, dict):
+    heavy_modules = bundle_budget.get("heavyModules")
+    if not isinstance(heavy_modules, list) or not all(isinstance(item, str) for item in heavy_modules):
+        fail("removedFeatures", "frontend/bundle-budget.json heavyModules must be a string array")
+    elif any("livekit" in item.casefold() for item in heavy_modules):
+        fail("removedFeatures", "frontend/bundle-budget.json retains LiveKit as an active heavy module")
+
+compose_fixture = text("tests/fixtures/compose.env")
+if re.search(r"^\s*LIVEKIT_API_(?:KEY|SECRET)\s*=", compose_fixture, re.M):
+    fail("removedFeatures", "tests/fixtures/compose.env retains LiveKit credentials")
+
+active_load_tests = shipped_files("tests/load")
+removed_load_pattern = re.compile(r"livekit|watch[ _-]?part(?:y|ies)|voice[ _-]?rooms?", re.I)
+for path in active_load_tests:
+    relative = str(path.relative_to(root))
+    body = path.read_text(encoding="utf-8", errors="replace")
+    if removed_load_pattern.search(relative) or removed_load_pattern.search(body):
+        fail("removedFeatures", f"active load-test inventory retains a removed feature: {relative}")
+
+updates = text("Updates.md")
+if not updates.startswith("# Updates.md — SUPERSEDED / HISTORICAL — DO NOT IMPLEMENT\n"):
+    fail("historicalPlan", "Updates.md lacks the prominent superseded/historical warning")
+if "Do not follow or implement any LiveKit direction in this file.\n" not in updates:
+    fail("historicalPlan", "Updates.md does not prohibit following its LiveKit direction")
+
+guide_requirements = {
+    "AGENTS.md": [
+        "currently through `0023`",
+        "The default backend build is headless and does not require `backend/out/` or a build tag.",
+        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+    ],
+    "CLAUDE.md": [
+        "currently through `0023`",
+        "The default backend build is headless and does not require `backend/out/` or a build tag.",
+        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+    ],
+    "frontend/AGENTS.md": [
+        "The default backend build is headless and does not require `backend/out/` or a build tag.",
+        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+    ],
+}
+stale_guide_claim = re.compile(
+    r"local `go build` fails unless|building headless requires|"
+    r"production serves the static export from that gateway directly|"
+    r"static export to out/ \(embedded by the Go gateway\)",
+    re.I,
+)
+for relative, required in guide_requirements.items():
+    guide = text(relative)
+    for marker in required:
+        if marker not in guide:
+            fail("currentGuides", f"{relative} is missing current Phase 1 marker: {marker}")
+    if stale_guide_claim.search(guide):
+        fail("currentGuides", f"{relative} retains an embedded-production or tagged-headless claim")
+
+retention = text("documentation/operations/data-retention.md")
+retention_requirements = [
+    "Account deletion enqueues `asset_deletion_jobs` in the deletion transaction; execution begins only after that transaction commits.",
+    "The current transactional outbox dispatcher publishes the event after commit; Phase 5 certifies candidate behavior rather than materializing an administrator feature.",
+]
+for marker in retention_requirements:
+    if marker not in retention:
+        fail("dataRetention", f"data-retention.md is missing current behavior: {marker}")
+
 if errors:
     for field, message in errors:
         print(f"product-truth: VIOLATION ({field}):", file=sys.stderr)

@@ -70,6 +70,7 @@ resources/logos/Telos_black.png
 resources/logos/Telos_vaporwave_transparent.png
 scripts/tests/verify-clean-checkout-test.sh
 scripts/verify-clean-checkout.sh
+scripts/verify-evidence.sh
 documentation/operations/release-inputs.pathspec
 documentation/operations/clean-checkout-verification.md
 documentation/operations/dependency-security-baseline.md

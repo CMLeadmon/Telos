@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import httpProxy from "http-proxy";
 
 const publicHost = process.env.TELOS_DEV_HOST ?? "0.0.0.0";
 const publicPort = Number.parseInt(process.env.PORT ?? "3000", 10);
@@ -50,7 +49,8 @@ export function createDevServer({
   return server;
 }
 
-function startDevServer() {
+async function startDevServer() {
+  const { default: httpProxy } = await import("http-proxy");
   const proxy = httpProxy.createProxyServer({
     changeOrigin: false,
     proxyTimeout: 30_000,
@@ -115,4 +115,9 @@ function startDevServer() {
 
 const invokedDirectly =
   process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (invokedDirectly) startDevServer();
+if (invokedDirectly) {
+  startDevServer().catch((error) => {
+    console.error(`[dev proxy] startup failed: ${error.message}`);
+    process.exitCode = 1;
+  });
+}

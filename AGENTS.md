@@ -6,6 +6,8 @@ This repository contains the Telos platform: the Go core gateway (`backend/`), t
 
 > **Start with `CLAUDE.md`.** It is maintained against the running code and describes the repository layout, the `telos` CLI, the migration engine, and what is already built. This file covers the durable constraints and the verification suite.
 
+> **Standalone beta Phase 1:** Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`. The default backend build is headless and does not require `backend/out/` or a build tag.
+
 ---
 
 ## 1. Read This First
@@ -49,7 +51,7 @@ core rules. They are ordered by how expensive the violation is to undo.
 - **Applied migrations are immutable.** `backend/migrations.go` verifies a checksum for every
   row in `schema_migrations`. Editing an already-applied file in `backend/db/migrations/`
   breaks every existing deployment. Schema changes are always a **new** numbered file
-  (`NNNN_description.sql`, currently through `0022`), written idempotently with
+  (`NNNN_description.sql`, currently through `0023`), written idempotently with
   `IF NOT EXISTS` / `ON CONFLICT`. There is no `schema.sql`.
 - **Never run `telos init --force` on an existing node.** `telos doctor` suggests it to clear
   `change-me` placeholders, but it regenerates every secret and desynchronizes them from the
@@ -122,10 +124,10 @@ Things that are not obvious from the tree and that cost real time to rediscover.
   work lives in siblings named for their concern (`auth.go`, `chat.go`, `realtime.go`,
   `media.go`, `library.go`, `annotations.go`, `files.go`, `security.go`, …). Extend the
   matching sibling rather than growing `main.go`.
-- **A local `go build` of the backend fails unless `backend/out/` exists.** `main.go` carries
-  `//go:embed all:out` for the frontend static export. The Dockerfile populates it from the
-  frontend build stage (build context is the repo root, dockerfile `backend/Dockerfile`).
-  Building headless requires the build tag introduced by sub-project S1.
+- **The default backend build is headless.** It does not require `backend/out/` or a build
+  tag. The opt-in `embedfrontend` variant embeds a prepared static export, but it is not the
+  Phase 1 production delivery path. Production hosted-browser delivery is blocked until
+  Phase 2 adds `telos-client`.
 - **`podman-compose up -d --build` does not recreate containers when only the image changed.**
   Verify image IDs and use `--force-recreate` when needed. Prefer a full `down`/`up` over a
   single-service `--force-recreate`, which breaks `telos-backend` DNS resolution.
@@ -144,4 +146,3 @@ Things that are not obvious from the tree and that cost real time to rediscover.
 
 - Canonical logo renders are located at [`resources/logos/Telos_sun_ink.svg`](./resources/logos/Telos_sun_ink.svg).
 - The custom vaporwave logo variant is located at [`resources/logos/Telos_sun_synthwave.svg`](./resources/logos/Telos_sun_synthwave.svg).
-

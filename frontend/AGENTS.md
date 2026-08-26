@@ -8,19 +8,21 @@ Two themes, toggled by `data-theme` on `<html>`: `synthwave` (dark, default) and
 ## Next.js
 This Next.js version is newer than model training data — consult `node_modules/next/dist/docs/` before nontrivial Next.js work. Static export (`output: "export"`, `trailingSlash: true`); no server components at runtime, no API routes, no dynamic routes without `generateStaticParams`.
 
+Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`. The default backend build is headless and does not require `backend/out/` or a build tag. The static export remains a client build artifact, not an embedded Phase 1 production surface.
+
 ## Layout
 - Routes: `/` (landing), `/login`, and the `(shell)/` group — `/chat`, `/stream`, `/library`, `/files`, `/settings` — sharing `AppShell` (topbar · rail · arena · tabbar).
 - The four capability-gated top-level modules are the `MODULES` array in `src/components/AppShell.tsx`: Chat, Stream, Library, Files. Settings hangs off the topbar, not the module rail. `/library?view=files` is a legacy deep link that redirects to `/files`.
 - Stores (`src/stores/`), all Zustand:
   - **Session/shell:** `useAuthStore` (cookie session via `/api/v1/auth/*`), `useThemeStore` (persisted), `usePreferencesStore`, `useSettingsStore`, `useMobileNavStore`
   - **Per-module:** `useChatSessionStore` (channels, chat WS, threads), `useMediaStore`, `useLibraryStore`, `useFilesStore`, `useAnnotationStore` (commentary on any target)
-- `src/lib/api.ts` is always single-origin. The development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway; production serves the static export from that gateway directly.
+- `src/lib/api.ts` is always single-origin. The development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway. Phase 2 will place the separate `telos-client` browser service and API gateway behind the production origin.
 - Mount-time data loaders must be **sync** `useCallback`s using promise chains — `api<T>(...).then(setX).catch(() => setX(fallback))`. The React Compiler lint rule `react-hooks/set-state-in-effect` traces from an effect into an async callback and rejects `setState(await ...)`. See `components/settings/SecuritySection.tsx` for the sanctioned pattern.
 
 ## Commands
 ```bash
 npm run dev        # public dev server on :3000; proxies /api/* to the loopback gateway
-npm run build      # static export to out/ (embedded by the Go gateway)
+npm run build      # static export to out/ (future telos-client build input)
 npm run lint
 npx tsc --noEmit
 npm run test:unit  # vitest + node:test

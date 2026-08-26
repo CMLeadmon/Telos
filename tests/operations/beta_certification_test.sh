@@ -31,8 +31,10 @@ scripts=(
 
 assert_not_run() {
   local script="$1"
-  local output status evidence_path
+  local output status evidence_path stdout_path stderr_path
   evidence_path="$tmp/${script//\//-}.json"
+  stdout_path="$tmp/${script//\//-}.stdout"
+  stderr_path="$tmp/${script//\//-}.stderr"
 
   set +e
   output="$(bash "$repo_root/scripts/$script" 2>&1)"
@@ -45,10 +47,11 @@ assert_not_run() {
   }
 
   set +e
-  output="$(bash "$repo_root/scripts/$script" --candidate-lock "$tmp/candidate.json" \
-    --evidence-out "$evidence_path" 2>&1)"
+  bash "$repo_root/scripts/$script" --candidate-lock "$tmp/candidate.json" \
+    --evidence-out "$evidence_path" >"$stdout_path" 2>"$stderr_path"
   status=$?
   set -e
+  output="$(cat "$stdout_path" "$stderr_path")"
   [[ $status -eq 3 ]] || { echo "$script with evidence returned $status" >&2; exit 1; }
   ! grep -Eqi 'certified successfully|complete\.|passed\.' <<<"$output" || {
     echo "$script claimed success while writing evidence" >&2
@@ -79,6 +82,26 @@ PY
     echo "$script did not write mode-0600 evidence" >&2
     exit 1
   }
+  python3 - "$evidence_path" "$stdout_path" "$stderr_path" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+envelope_path, stdout_path, stderr_path = map(pathlib.Path, sys.argv[1:])
+envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+stdout = stdout_path.read_bytes()
+stderr = stderr_path.read_bytes()
+if stdout:
+    raise SystemExit("direct not_run wrapper emitted unexpected stdout bytes")
+if not stderr.startswith(b"not_run: ") or not stderr.endswith(b"\n"):
+    raise SystemExit(f"direct not_run wrapper emitted malformed stderr: {stderr!r}")
+actual_digest = "sha256:" + hashlib.sha256(stderr).hexdigest()
+if envelope["outputDigest"] != actual_digest:
+    raise SystemExit(
+        f"outputDigest {envelope['outputDigest']} does not bind raw stderr {actual_digest}"
+    )
+PY
 
   set +e
   (
@@ -211,12 +234,13 @@ import sys
 with open(sys.argv[1], encoding="utf-8") as evidence_file:
     envelope = json.load(evidence_file)
 expected_digest = "sha256:" + hashlib.sha256(sys.argv[2].encode()).hexdigest()
+expected_subject = "sha256:" + hashlib.sha256(sys.argv[3].encode("ascii")).hexdigest()
 if envelope["sourceCommit"] != sys.argv[3]:
     raise SystemExit("evidence sourceCommit was not read from the candidate snapshot")
 if envelope["candidateLockDigest"] != expected_digest:
     raise SystemExit("evidence candidate digest was not computed from the candidate snapshot")
-if envelope["subject"]["digest"] != expected_digest:
-    raise SystemExit("evidence subject digest was not computed from the candidate snapshot")
+if envelope["subject"] != {"kind": "source", "digest": expected_subject}:
+    raise SystemExit("evidence subject was not bound to the candidate source commit")
 PY
 stop_producer
 

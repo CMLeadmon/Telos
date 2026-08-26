@@ -92,6 +92,7 @@ scripts/not-run.py
 scripts/restore.sh
 scripts/run-gates.py
 scripts/verify-clean-checkout.sh
+scripts/verify-evidence.sh
 scripts/tests/verify-clean-checkout-test.sh
 release/evidence-envelope.schema.json
 EOF

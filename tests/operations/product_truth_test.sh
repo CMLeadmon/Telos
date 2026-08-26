@@ -15,16 +15,23 @@ copy_fixture() {
   local fixture="$1"
   local relative
   local -a files=(
+    AGENTS.md
+    CLAUDE.md
+    Updates.md
     backend/main.go
     ci/phase-gates.json
     config/dynamic/routes.yaml
     docker-compose.yml
+    documentation/operations/data-retention.md
     documentation/product/beta-feature-status.md
+    frontend/AGENTS.md
+    frontend/bundle-budget.json
     frontend/package.json
     frontend/package-lock.json
     frontend/src/components/AppShell.tsx
     backend/go.mod
     backend/go.sum
+    tests/fixtures/compose.env
   )
 
   rm -rf "$fixture"
@@ -126,6 +133,95 @@ with open(path, "w", encoding="utf-8") as destination:
     destination.write("\n")
 PY
 assert_rejected "livekit-dependency" "removedFeatures" "$livekit_dependency"
+
+livekit_bundle_budget="$fixture_root/livekit-bundle-budget"
+copy_fixture "$livekit_bundle_budget"
+python3 - "$livekit_bundle_budget/frontend/bundle-budget.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    budget = json.load(source)
+if "livekit-client" not in budget["heavyModules"]:
+    budget["heavyModules"].append("livekit-client")
+with open(path, "w", encoding="utf-8") as destination:
+    json.dump(budget, destination, indent=2)
+    destination.write("\n")
+PY
+assert_rejected "livekit-bundle-budget" "removedFeatures" "$livekit_bundle_budget"
+
+livekit_compose_fixture="$fixture_root/livekit-compose-fixture"
+copy_fixture "$livekit_compose_fixture"
+printf '\nLIVEKIT_API_KEY=fixture-key\nLIVEKIT_API_SECRET=fixture-secret\n' \
+  >>"$livekit_compose_fixture/tests/fixtures/compose.env"
+assert_rejected "livekit-compose-fixture" "removedFeatures" "$livekit_compose_fixture"
+
+watch_party_load="$fixture_root/watch-party-load"
+copy_fixture "$watch_party_load"
+mkdir -p "$watch_party_load/tests/load"
+printf '%s\n' '// active Watch Party load test' 'export default function () {}' \
+  >"$watch_party_load/tests/load/watch-parties.js"
+assert_rejected "watch-party-load" "removedFeatures" "$watch_party_load"
+
+historical_updates="$fixture_root/historical-updates"
+copy_fixture "$historical_updates"
+python3 - "$historical_updates/Updates.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+text = text.replace("# Updates.md — SUPERSEDED / HISTORICAL — DO NOT IMPLEMENT\n", "", 1)
+text = text.replace("Do not follow or implement any LiveKit direction in this file.\n", "", 1)
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text)
+PY
+assert_rejected "historical-updates" "historicalPlan" "$historical_updates"
+
+stale_guides="$fixture_root/stale-guides"
+copy_fixture "$stale_guides"
+python3 - "$stale_guides/AGENTS.md" "$stale_guides/CLAUDE.md" \
+  "$stale_guides/frontend/AGENTS.md" <<'PY'
+import sys
+
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as source:
+        text = source.read()
+    text = text.replace("currently through `0023`", "currently through `0022`")
+    text = text.replace(
+        "The default backend build is headless and does not require `backend/out/` or a build tag.",
+        "The default backend build embeds the frontend and requires `backend/out/`.",
+    )
+    text = text.replace(
+        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+        "Production hosted-browser delivery is provided by the embedded gateway.",
+    )
+    with open(path, "w", encoding="utf-8") as destination:
+        destination.write(text)
+PY
+assert_rejected "stale-guides" "currentGuides" "$stale_guides"
+
+stale_retention="$fixture_root/stale-retention"
+copy_fixture "$stale_retention"
+python3 - "$stale_retention/documentation/operations/data-retention.md" <<'PY'
+import sys
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as source:
+    text = source.read()
+text = text.replace(
+    "Account deletion enqueues `asset_deletion_jobs` in the deletion transaction; execution begins only after that transaction commits.",
+    "Account deletion records `asset_deletion_jobs` after the transaction.",
+)
+text = text.replace(
+    "The current transactional outbox dispatcher publishes the event after commit; Phase 5 certifies candidate behavior rather than materializing an administrator feature.",
+    "Phase 5 materializes the event for administrators.",
+)
+with open(path, "w", encoding="utf-8") as destination:
+    destination.write(text)
+PY
+assert_rejected "stale-retention" "dataRetention" "$stale_retention"
 
 browser_shipping="$fixture_root/browser-shipping"
 copy_fixture "$browser_shipping"

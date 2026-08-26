@@ -2,6 +2,7 @@
 """Create a single deliberately invalid evidence-envelope fixture."""
 
 import argparse
+import hashlib
 import json
 
 
@@ -14,6 +15,16 @@ def mutate(envelope, name):
         envelope["candidateLockDigest"] = (
             "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         )
+    elif name == "mismatched-source-commit":
+        source_commit = "b" * 40
+        envelope["sourceCommit"] = source_commit
+        envelope["subject"] = {
+            "kind": "source",
+            "digest": "sha256:"
+            + hashlib.sha256(source_commit.encode("ascii")).hexdigest(),
+        }
+    elif name == "mismatched-source-subject":
+        envelope["subject"]["digest"] = "sha256:" + ("b" * 64)
     elif name == "string-command":
         envelope["command"] = "printf passed"
     elif name == "negative-exit":
@@ -24,6 +35,14 @@ def mutate(envelope, name):
         envelope["outputDigest"] = "sha256:bad"
     elif name == "secret-field":
         envelope["toolVersions"]["tokenSource"] = "fixture"
+    elif name == "empty-tool-versions":
+        envelope["toolVersions"] = {}
+    elif name == "non-string-tool-version":
+        envelope["toolVersions"]["python"] = 3
+    elif name == "empty-tool-version":
+        envelope["toolVersions"]["python"] = ""
+    elif name == "unknown-tool-version":
+        envelope["toolVersions"]["ruby"] = "3"
     else:
         raise ValueError(f"unknown mutation: {name}")
     return envelope
@@ -37,11 +56,17 @@ def main():
             "missing-gate",
             "unknown-status",
             "mismatched-candidate",
+            "mismatched-source-commit",
+            "mismatched-source-subject",
             "string-command",
             "negative-exit",
             "reversed-time",
             "bad-digest",
             "secret-field",
+            "empty-tool-versions",
+            "non-string-tool-version",
+            "empty-tool-version",
+            "unknown-tool-version",
         ),
     )
     parser.add_argument("input")

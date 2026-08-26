@@ -35,18 +35,16 @@ preserves both.
 
 ## Physical asset deletion status
 
-Account deletion records `asset_deletion_jobs` after the transaction. In the
-current production wiring, `noopAssetRemover` succeeds without removing the
-physical asset, so the asynchronous job is marked `done`; it does not remain
-pending and it is not evidence of physical deletion. Physical asset deletion
-and reconciliation are blocked until Phase 4 supplies a real remover and its
-operational evidence.
+Account deletion enqueues `asset_deletion_jobs` in the deletion transaction; execution begins only after that transaction commits. In the current production
+wiring, `noopAssetRemover` succeeds without removing the physical asset, so the
+asynchronous job is marked `done`; it does not remain pending and it is not
+evidence of physical deletion. Physical asset deletion and reconciliation are
+blocked until Phase 4 supplies a real remover and its operational evidence.
 
 ## Durable event
 
 Account deletion enqueues an `account_deleted` security event in the same
-transaction (transactional outbox), which Phase 5 materializes for
-administrators.
+transaction. The current transactional outbox dispatcher publishes the event after commit; Phase 5 certifies candidate behavior rather than materializing an administrator feature.
 
 ## Channel change log
 
