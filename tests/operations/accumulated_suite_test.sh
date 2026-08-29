@@ -37,6 +37,7 @@ mkdir -p "$accumulated_repo/scripts/lib" "$accumulated_repo/ci"
 cp "$repo_root/scripts/verify-accumulated-suite.sh" "$accumulated_repo/scripts/verify-accumulated-suite.sh"
 cp "$repo_root/scripts/run-gates.py" "$accumulated_repo/scripts/run-gates.py"
 cp "$repo_root/scripts/lib/evidence.py" "$accumulated_repo/scripts/lib/evidence.py"
+cp "$repo_root/scripts/lib/process_supervisor.py" "$accumulated_repo/scripts/lib/process_supervisor.py"
 printf '__pycache__/\n' >"$accumulated_repo/.gitignore"
 python3 - "$accumulated_repo/ci/phase-gates.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
 import json

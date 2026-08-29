@@ -88,6 +88,7 @@ documentation/operations/backup-and-restore.md
 documentation/operations/repository-baseline.md
 scripts/backup.sh
 scripts/lib/evidence.py
+scripts/lib/process_supervisor.py
 scripts/not-run.py
 scripts/restore.sh
 scripts/run-gates.py

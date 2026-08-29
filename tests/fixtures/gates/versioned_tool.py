@@ -3,7 +3,9 @@
 
 import os
 import pathlib
+import signal
 import sys
+import time
 
 
 VERSIONS = {
@@ -15,6 +17,34 @@ VERSIONS = {
 }
 
 
+def spawn_stubborn_child(state_dir, redirect_streams):
+    child_pid_path = state_dir / "probe-child.pid"
+    child_pid = os.fork()
+    if child_pid != 0:
+        deadline = time.monotonic() + 2
+        while not child_pid_path.exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("version fixture child did not record its PID")
+            time.sleep(0.01)
+        return child_pid
+
+    os.setsid()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if redirect_streams:
+        devnull = os.open(os.devnull, os.O_RDWR)
+        for descriptor in (
+            sys.stdin.fileno(),
+            sys.stdout.fileno(),
+            sys.stderr.fileno(),
+        ):
+            os.dup2(devnull, descriptor)
+        if devnull > sys.stderr.fileno():
+            os.close(devnull)
+    child_pid_path.write_text(str(os.getpid()), encoding="ascii")
+    while True:
+        time.sleep(60)
+
+
 def main():
     tool = pathlib.Path(sys.argv[0]).name
     if tool not in VERSIONS:
@@ -23,6 +53,18 @@ def main():
         if os.environ.get("TELOS_VERSION_FIXTURE_FAIL") == tool:
             print(f"{tool} fixture version unavailable", file=sys.stderr)
             return 9
+        mode = os.environ.get("TELOS_VERSION_FIXTURE_MODE")
+        if mode in {"hang-with-child", "success-with-child"}:
+            state_dir = pathlib.Path(os.environ["TELOS_VERSION_FIXTURE_STATE"])
+            (state_dir / "probe-leader.pid").write_text(
+                str(os.getpid()), encoding="ascii"
+            )
+            spawn_stubborn_child(
+                state_dir, redirect_streams=mode == "success-with-child"
+            )
+            if mode == "hang-with-child":
+                while True:
+                    time.sleep(60)
         print(VERSIONS[tool])
         return 0
     marker = os.environ.get("TELOS_VERSION_FIXTURE_MARKER")

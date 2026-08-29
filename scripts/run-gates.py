@@ -19,23 +19,29 @@ REPO_ROOT = os.path.dirname(SCRIPT_DIR)
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "lib"))
 import evidence
+import process_supervisor
 
 
 EXIT_FAILED = 1
 EXIT_USAGE = 2
 EXIT_NOT_RUN = 3
 CATALOG_FIELDS = {"schemaVersion", "gates"}
-GATE_FIELDS = {
+REQUIRED_GATE_FIELDS = {
     "id", "phase", "scope", "required", "timeoutSeconds", "command",
     "prerequisites", "subjectKind",
 }
+OPTIONAL_GATE_FIELDS = {"terminationGraceSeconds"}
+GATE_FIELDS = REQUIRED_GATE_FIELDS | OPTIONAL_GATE_FIELDS
 GATE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 SCOPES = {"local", "external"}
 SUBJECT_KINDS = set(evidence.SUBJECT_KINDS)
-VERSIONED_TOOLS = {"bash", "sh", "python3", "node", "npm", "npx", "podman", "git"}
+VERSIONED_TOOLS = {"bash", "python3", "node", "npm", "npx", "podman", "git"}
 TOOL_VERSION_TIMEOUT_SECONDS = 5
 PROCESS_TERM_GRACE_SECONDS = 1
 PROCESS_KILL_GRACE_SECONDS = 2
+SHELL_OPTIONS_WITH_ARGUMENT = {
+    "-O", "+O", "-o", "+o", "--init-file", "--rcfile",
+}
 
 
 class GateError(Exception):
@@ -44,6 +50,39 @@ class GateError(Exception):
 
 def is_integer(value):
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def shell_uses_command_string(command: list[str]) -> bool:
+    if os.path.basename(command[0]) not in {"bash", "sh"}:
+        return False
+
+    index = 1
+    while index < len(command):
+        argument = command[index]
+        if argument == "--":
+            return False
+        if argument in SHELL_OPTIONS_WITH_ARGUMENT:
+            index += 2
+            continue
+        if any(
+            argument.startswith(option) and argument != option
+            for option in ("-O", "+O", "-o", "+o")
+        ):
+            index += 1
+            continue
+        if argument.startswith("--"):
+            index += 1
+            continue
+        if argument.startswith("-") and argument != "-":
+            if "c" in argument[1:]:
+                return True
+            index += 1
+            continue
+        if argument.startswith("+") and argument != "+":
+            index += 1
+            continue
+        return False
+    return False
 
 
 def timestamp():
@@ -92,7 +131,7 @@ def validate_catalog(catalog):
         unknown = set(gate) - GATE_FIELDS
         if unknown:
             raise GateError(f"{prefix} has unknown field: {sorted(unknown)[0]}")
-        missing = GATE_FIELDS - set(gate)
+        missing = REQUIRED_GATE_FIELDS - set(gate)
         if missing:
             raise GateError(f"{prefix} is missing field: {sorted(missing)[0]}")
 
@@ -121,16 +160,17 @@ def validate_catalog(catalog):
             raise GateError(f"gate {gate_id} command entries must not contain NUL")
         if not command[0]:
             raise GateError(f"gate {gate_id} command executable must not be empty")
-        executable_name = os.path.basename(command[0])
-        if executable_name in {"bash", "sh"} and any(
-            argument.startswith("-")
-            and not argument.startswith("--")
-            and "c" in argument[1:]
-            for argument in command[1:]
-        ):
+        if shell_uses_command_string(command):
             raise GateError(
                 f"gate {gate_id} must not use shell command strings"
             )
+        if "terminationGraceSeconds" in gate:
+            grace = gate["terminationGraceSeconds"]
+            if not is_integer(grace) or grace < 0:
+                raise GateError(
+                    f"gate {gate_id} terminationGraceSeconds must be "
+                    "a non-negative integer"
+                )
         prerequisites = gate["prerequisites"]
         if not isinstance(prerequisites, list):
             raise GateError(f"gate {gate_id} prerequisites must be an array")
@@ -351,34 +391,51 @@ def normalize_exit_code(return_code):
     return min(255, return_code)
 
 
-def probe_tool_versions(gate):
+def probe_tool_versions(gate, signals=None):
     versions = {"python": platform.python_version()}
     executable = gate["command"][0]
     tool = os.path.basename(executable)
     if tool not in VERSIONED_TOOLS:
-        return versions, f"tool version identity is unsupported for: {tool}"
+        return versions, f"tool version identity is unsupported for: {tool}", None
+    if signals is None:
+        signals = process_supervisor.SignalState()
     try:
-        completed = subprocess.run(
+        result = process_supervisor.run(
             [executable, "--version"],
             cwd=REPO_ROOT,
-            shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=TOOL_VERSION_TIMEOUT_SECONDS,
-            check=False,
+            timeout_seconds=TOOL_VERSION_TIMEOUT_SECONDS,
+            cooperative_grace_seconds=1,
+            signals=signals,
         )
     except FileNotFoundError:
-        return versions, f"tool version identity is unavailable for: {tool}"
-    except subprocess.TimeoutExpired:
-        return versions, f"tool version probe timed out for: {tool}"
-    except OSError as error:
-        return versions, f"tool version probe failed for {tool}: {error}"
-    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
-    if completed.returncode != 0 or not lines:
-        return versions, f"tool version identity could not be obtained for: {tool}"
+        return versions, f"tool version identity is unavailable for: {tool}", None
+    except (OSError, process_supervisor.SupervisionError) as error:
+        return versions, f"tool version probe failed for {tool}: {error}", None
+
+    if result.cause == "timeout":
+        return versions, f"tool version probe timed out for: {tool}", None
+    if result.cause == "descendants":
+        return (
+            versions,
+            f"tool version probe left descendants running for: {tool}",
+            None,
+        )
+    if result.cause == "capture_error":
+        detail = "; ".join(result.cleanup_errors) or "output capture failed"
+        return versions, f"tool version probe failed for {tool}: {detail}", None
+    if result.cause == "interrupted":
+        return versions, None, result.interrupted_signal
+
+    decoded_output = result.output.decode("utf-8", errors="replace")
+    lines = [line.strip() for line in decoded_output.splitlines() if line.strip()]
+    if result.return_code != 0 or not lines:
+        return (
+            versions,
+            f"tool version identity could not be obtained for: {tool}",
+            None,
+        )
     versions[tool] = lines[0]
-    return versions, None
+    return versions, None, None
 
 
 def process_group_has_live_members(pgid):
@@ -627,7 +684,11 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
                 exit_code = EXIT_FAILED
                 output = f"failed: {reason}\n".encode("utf-8")
             else:
-                tool_versions, tool_problem = probe_tool_versions(gate)
+                tool_versions, tool_problem, interrupted_signal = (
+                    probe_tool_versions(gate)
+                )
+                if interrupted_signal is not None:
+                    return False
                 if tool_problem:
                     status = "not_run"
                     reason = tool_problem
@@ -698,6 +759,11 @@ def main(argv=None):
         gates = select_gates(catalog, args.scope, args.gate, args.phase)
         source_commit, candidate_digest = read_candidate_lock(candidate_lock)
         validate_subject_bindings(gates, source_commit)
+        try:
+            process_supervisor.require_support()
+            process_supervisor.enable_child_subreaper()
+        except process_supervisor.SupervisionError as error:
+            raise GateError(str(error)) from error
         evidence_dir = create_evidence_directory(args.evidence_dir)
         passed = execute_gates(
             gates, source_commit, candidate_digest, evidence_dir

@@ -13,6 +13,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
+python3 -B "$repo_root/tests/operations/process_supervisor_test.py"
+
 if [[ -e "$sentinel" ]]; then
   echo "refusing to overwrite pre-existing injection sentinel: $sentinel" >&2
   exit 1
@@ -70,12 +72,31 @@ elif mutation == "nul-command":
     catalog["gates"][1]["command"][1] = "bad\0argument"
 elif mutation == "bash-command-string":
     catalog["gates"][1]["command"] = ["bash", "-c", "printf unsafe"]
+elif mutation == "bash-cluster-command-string":
+    catalog["gates"][1]["command"] = ["bash", "-eu", "-c", "printf unsafe"]
+elif mutation == "bash-option-argument-command-string":
+    catalog["gates"][1]["command"] = ["bash", "-O", "extglob", "-c", "printf bad"]
 elif mutation == "path-bash-command-string":
     catalog["gates"][1]["command"] = ["/bin/bash", "-c", "printf unsafe"]
 elif mutation == "sh-command-string":
     catalog["gates"][1]["command"] = ["sh", "-c", "printf unsafe"]
 elif mutation == "path-sh-command-string":
     catalog["gates"][1]["command"] = ["/bin/sh", "-c", "printf unsafe"]
+elif mutation == "bash-script-c":
+    catalog["gates"][0]["command"] = ["python3", "-c", "print('setup gate ran')"]
+    catalog["gates"][1]["command"] = ["bash", marker + ".sh", "-c", marker]
+elif mutation == "bash-double-dash-script-c":
+    catalog["gates"][0]["command"] = ["python3", "-c", "print('setup gate ran')"]
+    catalog["gates"][1]["command"] = ["bash", "--", marker + ".sh", "-c", marker]
+elif mutation == "sh-script-c":
+    catalog["gates"][0]["command"] = ["python3", "-c", "print('setup gate ran')"]
+    catalog["gates"][1]["command"] = ["sh", marker + ".sh", "-c", marker]
+elif mutation == "negative-termination-grace":
+    catalog["gates"][1]["terminationGraceSeconds"] = -1
+elif mutation == "float-termination-grace":
+    catalog["gates"][1]["terminationGraceSeconds"] = 1.0
+elif mutation == "zero-termination-grace":
+    catalog["gates"][1]["terminationGraceSeconds"] = 0
 elif mutation == "invalid-scope":
     catalog["gates"][1]["scope"] = "remote"
 elif mutation == "non-string-scope":
@@ -136,6 +157,8 @@ assert_catalog_rejected_before_execution string-command "command"
 assert_catalog_rejected_before_execution empty-command "command"
 assert_catalog_rejected_before_execution nul-command "NUL"
 assert_catalog_rejected_before_execution bash-command-string "shell command strings"
+assert_catalog_rejected_before_execution bash-cluster-command-string "shell command strings"
+assert_catalog_rejected_before_execution bash-option-argument-command-string "shell command strings"
 assert_catalog_rejected_before_execution path-bash-command-string "shell command strings"
 assert_catalog_rejected_before_execution sh-command-string "shell command strings"
 assert_catalog_rejected_before_execution path-sh-command-string "shell command strings"
@@ -147,11 +170,68 @@ assert_catalog_rejected_before_execution missing-prerequisite "unknown prerequis
 assert_catalog_rejected_before_execution prerequisite-cycle "cycle"
 assert_catalog_rejected_before_execution path-id "id"
 assert_catalog_rejected_before_execution non-string-subject "subjectKind"
+assert_catalog_rejected_before_execution negative-termination-grace "terminationGraceSeconds"
+assert_catalog_rejected_before_execution float-termination-grace "terminationGraceSeconds"
+
+assert_script_argv_accepted() {
+  local mutation="$1"
+  local expected_status="$2"
+  local catalog="$fixture_dir/$mutation.json"
+  local marker="$fixture_dir/$mutation-ran"
+  local evidence_dir="$fixture_dir/$mutation-evidence"
+  local output status
+  write_catalog "$mutation" "$catalog" "$marker"
+  printf 'printf ran >"$2"\n' >"$marker.sh"
+  set +e
+  output="$(python3 "$repo_root/scripts/run-gates.py" \
+    --catalog "$catalog" --scope local \
+    --candidate-lock "$fixture_dir/candidate.json" \
+    --evidence-dir "$evidence_dir" 2>&1)"
+  status=$?
+  set -e
+  [[ $status -eq "$expected_status" ]] || {
+    echo "$mutation returned $status instead of $expected_status: $output" >&2
+    exit 1
+  }
+  [[ -e "$evidence_dir/second-gate.json" ]] || {
+    echo "$mutation did not reach gate evaluation: $output" >&2
+    exit 1
+  }
+  if [[ "$mutation" == sh-script-c ]]; then
+    [[ ! -e "$marker" ]] || { echo "$mutation unexpectedly executed the gate" >&2; exit 1; }
+    python3 - "$evidence_dir/second-gate.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as input_file:
+    envelope = json.load(input_file)
+assert envelope["status"] == "not_run", envelope
+assert envelope["exitCode"] == 3, envelope
+assert envelope["reason"] == "tool version identity is unsupported for: sh", envelope
+PY
+  else
+    [[ -e "$marker" ]] || { echo "$mutation did not preserve the script argv boundary" >&2; exit 1; }
+  fi
+}
+
+assert_script_argv_accepted bash-script-c 0
+assert_script_argv_accepted bash-double-dash-script-c 0
+assert_script_argv_accepted sh-script-c 1
+
+zero_grace_catalog="$fixture_dir/zero-termination-grace.json"
+zero_grace_marker="$fixture_dir/zero-termination-grace-ran"
+write_catalog zero-termination-grace "$zero_grace_catalog" "$zero_grace_marker"
+python3 "$repo_root/scripts/run-gates.py" \
+  --catalog "$zero_grace_catalog" --scope local \
+  --candidate-lock "$fixture_dir/candidate.json" \
+  --evidence-dir "$fixture_dir/zero-termination-grace-evidence"
+[[ -e "$zero_grace_marker" ]] || { echo "zero termination grace did not reach gate execution" >&2; exit 1; }
 
 source_repo="$fixture_dir/source-repo"
 mkdir -p "$source_repo/scripts/lib"
 cp "$repo_root/scripts/run-gates.py" "$source_repo/scripts/run-gates.py"
 cp "$repo_root/scripts/lib/evidence.py" "$source_repo/scripts/lib/evidence.py"
+cp "$repo_root/scripts/lib/process_supervisor.py" "$source_repo/scripts/lib/process_supervisor.py"
 printf '__pycache__/\nignored-build/\n' >"$source_repo/.gitignore"
 printf 'tracked fixture\n' >"$source_repo/tracked.txt"
 git -C "$source_repo" init -q
@@ -809,6 +889,10 @@ assert playwright_gate["command"] == [
     "--playwright-timeout-seconds", "1650",
 ]
 assert int(playwright_gate["command"][-1]) < playwright_gate["timeoutSeconds"]
+assert playwright_gate["terminationGraceSeconds"] == 25, playwright_gate
+assert [
+    gate["id"] for gate in catalog["gates"] if "terminationGraceSeconds" in gate
+] == ["frontend-playwright"], catalog
 accessibility_gate = gate_by_id["frontend-accessibility"]
 assert accessibility_gate["command"] == [
     "npm", "--prefix", "frontend", "run", "check:a11y-evidence",
@@ -1333,7 +1417,7 @@ import sys
 
 fixture_root = pathlib.Path(sys.argv[1])
 state_prefix = f"TELOS_GATE_FIXTURE_STATE={fixture_root}".encode()
-for pid_path in fixture_root.glob("process-*/**/*.pid"):
+for pid_path in fixture_root.glob("**/*.pid"):
     try:
         pid = int(pid_path.read_text(encoding="ascii"))
         environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
@@ -1370,6 +1454,68 @@ while time.monotonic() < deadline:
 raise SystemExit(f"fixture processes still alive: {live}")
 PY
 }
+
+run_version_probe_process_fixture() {
+  local mode="$1"
+  local expected_reason="$2"
+  local state_dir="$fixture_dir/version-probe-$mode"
+  local catalog="$fixture_dir/version-probe-$mode.json"
+  local evidence_dir="$fixture_dir/version-probe-$mode-evidence"
+  local marker="$fixture_dir/version-probe-$mode-ran"
+  local started_at elapsed status
+  mkdir "$state_dir"
+  python3 - "$catalog" <<'PY'
+import json
+import sys
+
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": "version-probe", "phase": 1, "scope": "local", "required": True,
+    "timeoutSeconds": 10, "command": ["node"], "prerequisites": [],
+    "subjectKind": "fixture",
+}]}
+with open(sys.argv[1], "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+  started_at="$(date +%s)"
+  set +e
+  timeout 9s env \
+    PATH="$version_bin:$PATH" \
+    TELOS_VERSION_FIXTURE_MODE="$mode" \
+    TELOS_VERSION_FIXTURE_STATE="$state_dir" \
+    TELOS_VERSION_FIXTURE_MARKER="$marker" \
+    "$real_python" "$repo_root/scripts/run-gates.py" \
+      --catalog "$catalog" --scope local \
+      --candidate-lock "$fixture_dir/candidate.json" \
+      --evidence-dir "$evidence_dir"
+  status=$?
+  set -e
+  elapsed=$(( $(date +%s) - started_at ))
+  [[ $status -ne 124 && $elapsed -lt 10 ]] || {
+    echo "$mode version probe exceeded its bounded runner cleanup" >&2
+    exit 1
+  }
+  [[ $status -ne 0 ]] || { echo "$mode version probe returned success" >&2; exit 1; }
+  [[ ! -e "$marker" ]] || { echo "$mode version probe launched the gate command" >&2; exit 1; }
+  [[ -e "$state_dir/probe-leader.pid" && -e "$state_dir/probe-child.pid" ]] || {
+    echo "$mode version probe did not record both owned processes" >&2
+    exit 1
+  }
+  assert_fixture_processes_dead "$state_dir"
+  python3 - "$evidence_dir/version-probe.json" "$expected_reason" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as input_file:
+    envelope = json.load(input_file)
+assert envelope["status"] == "not_run", envelope
+assert envelope["exitCode"] == 3, envelope
+assert sys.argv[2] in envelope["reason"], envelope
+assert set(envelope["toolVersions"]) == {"python"}, envelope
+PY
+}
+
+run_version_probe_process_fixture hang-with-child "timed out"
+run_version_probe_process_fixture success-with-child "left descendants running"
 
 run_ordinary_process_fixture() {
   local mode="$1"
@@ -1624,6 +1770,10 @@ wait "$occupied_pid" || true
 required_inventory="$(bash "$repo_root/scripts/verify-clean-checkout.sh" --list-required)"
 [[ "$(grep -Fxc 'scripts/verify-evidence.sh' <<<"$required_inventory")" -eq 1 ]] || {
   echo "clean-checkout inventory must include scripts/verify-evidence.sh exactly once" >&2
+  exit 1
+}
+[[ "$(grep -Fxc 'scripts/lib/process_supervisor.py' <<<"$required_inventory")" -eq 1 ]] || {
+  echo "clean-checkout inventory must include scripts/lib/process_supervisor.py exactly once" >&2
   exit 1
 }
 
