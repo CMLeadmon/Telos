@@ -7,11 +7,9 @@ import json
 import os
 import platform
 import re
-import signal
 import stat
 import subprocess
 import sys
-import time
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +35,6 @@ SCOPES = {"local", "external"}
 SUBJECT_KINDS = set(evidence.SUBJECT_KINDS)
 VERSIONED_TOOLS = {"bash", "python3", "node", "npm", "npx", "podman", "git"}
 TOOL_VERSION_TIMEOUT_SECONDS = 5
-PROCESS_TERM_GRACE_SECONDS = 1
-PROCESS_KILL_GRACE_SECONDS = 2
 SHELL_OPTIONS_WITH_ARGUMENT = {
     "-O", "+O", "-o", "+o", "--init-file", "--rcfile",
 }
@@ -438,154 +434,82 @@ def probe_tool_versions(gate, signals=None):
     return versions, None, None
 
 
-def process_group_has_live_members(pgid):
-    proc_root = "/proc"
-    if os.path.isdir(proc_root):
-        for entry in os.scandir(proc_root):
-            if not entry.name.isdigit():
-                continue
-            try:
-                with open(
-                    os.path.join(entry.path, "stat"), encoding="ascii"
-                ) as stat_file:
-                    stat_line = stat_file.read()
-            except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
-                continue
-            closing_parenthesis = stat_line.rfind(")")
-            if closing_parenthesis < 0:
-                continue
-            fields = stat_line[closing_parenthesis + 2:].split()
-            try:
-                if len(fields) >= 3 and fields[0] != "Z" and int(fields[2]) == pgid:
-                    return True
-            except ValueError:
-                continue
-        return False
+def run_command(gate, signals=None):
+    if signals is None:
+        signals = process_supervisor.SignalState()
     try:
-        os.killpg(pgid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def wait_for_process_group_exit(process, pgid, timeout_seconds):
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        process.poll()
-        if not process_group_has_live_members(pgid):
-            return True
-        time.sleep(0.02)
-    process.poll()
-    return not process_group_has_live_members(pgid)
-
-
-def stop_process_group(process, pgid):
-    errors = []
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    except OSError as error:
-        errors.append(f"cannot TERM process group: {error}")
-    if not wait_for_process_group_exit(
-        process, pgid, PROCESS_TERM_GRACE_SECONDS
-    ):
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as error:
-            errors.append(f"cannot KILL process group: {error}")
-        if not wait_for_process_group_exit(
-            process, pgid, PROCESS_KILL_GRACE_SECONDS
-        ):
-            errors.append("process group remained live after KILL")
-    try:
-        process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
-    except subprocess.TimeoutExpired:
-        errors.append("command leader could not be reaped after group cleanup")
-        try:
-            process.kill()
-            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
-        except (OSError, subprocess.TimeoutExpired) as error:
-            errors.append(f"command leader reap failed: {error}")
-    return errors
-
-
-def run_command(gate):
-    try:
-        process = subprocess.Popen(
+        result = process_supervisor.run(
             gate["command"],
             cwd=REPO_ROOT,
-            shell=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
+            timeout_seconds=gate["timeoutSeconds"],
+            cooperative_grace_seconds=gate.get("terminationGraceSeconds", 1),
+            signals=signals,
         )
     except FileNotFoundError:
         executable = gate["command"][0]
         output = f"not_run: executable is unavailable: {executable}\n".encode("utf-8")
-        return "not_run", f"executable is unavailable: {executable}", EXIT_NOT_RUN, output
-    except OSError as error:
-        output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
-        return "failed", "command could not be executed", 126, output
-
-    pgid = process.pid
-    try:
-        output, _ = process.communicate(timeout=gate["timeoutSeconds"])
-    except subprocess.TimeoutExpired:
-        leader_exited = process.poll() is not None
-        cleanup_errors = stop_process_group(process, pgid)
-        try:
-            output, _ = process.communicate(timeout=PROCESS_KILL_GRACE_SECONDS)
-        except subprocess.TimeoutExpired as error:
-            output = error.output or b""
-            if isinstance(output, str):
-                output = output.encode("utf-8", errors="replace")
-            if process.stdout is not None:
-                process.stdout.close()
-            cleanup_errors.append("capture pipe remained open after process-group cleanup")
-        if leader_exited:
-            reason = "command output capture timed out after command leader exit"
-        else:
-            reason = "command timed out"
-        output += f"gate timed out after {gate['timeoutSeconds']} seconds\n".encode("utf-8")
-        if cleanup_errors:
-            output += (
-                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
-            ).encode("utf-8", errors="replace")
-        return "failed", reason, 124, output
-    except OSError as error:
-        cleanup_errors = stop_process_group(process, pgid)
-        output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
-        if cleanup_errors:
-            output += (
-                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
-            ).encode("utf-8", errors="replace")
-        return "failed", "command could not be captured", 126, output
-
-    if process_group_has_live_members(pgid):
-        cleanup_errors = stop_process_group(process, pgid)
-        output += b"gate left an ordinary descendant running after command exit\n"
-        if cleanup_errors:
-            output += (
-                "process-group cleanup failed: " + "; ".join(cleanup_errors) + "\n"
-            ).encode("utf-8", errors="replace")
-        return "failed", "command left descendants running", 125, output
-
-    exit_code = normalize_exit_code(process.returncode)
-    if process.returncode == 0:
-        return "passed", "command exited 0", exit_code, output
-    if process.returncode == EXIT_NOT_RUN:
         return (
             "not_run",
-            "command reported not_run; inspect the gate log for corrective action",
+            f"executable is unavailable: {executable}",
             EXIT_NOT_RUN,
             output,
+            None,
         )
-    return "failed", f"command exited {exit_code}", exit_code, output
+    except OSError as error:
+        output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
+        return "failed", "command could not be executed", 126, output, None
+    except process_supervisor.SupervisionError as error:
+        output = f"gate execution failed: {error}\n".encode("utf-8", errors="replace")
+        return "failed", "command could not be captured", 126, output, None
+
+    output = result.output
+    if result.cause == "timeout":
+        output += f"gate timed out after {gate['timeoutSeconds']} seconds\n".encode("utf-8")
+        status = "failed"
+        reason = "command timed out"
+        exit_code = 124
+    elif result.cause == "descendants":
+        output += b"gate left an ordinary descendant running after command exit\n"
+        status = "failed"
+        reason = "command left descendants running"
+        exit_code = 125
+    elif result.cause == "capture_error":
+        output += b"gate execution failed: command output capture failed\n"
+        status = "failed"
+        reason = "command could not be captured"
+        exit_code = 126
+    elif result.cause == "interrupted":
+        interruption_signal = result.interrupted_signal
+        exit_code = min(255, 128 + (interruption_signal or 0))
+        output += f"gate interrupted by signal {interruption_signal}\n".encode("utf-8")
+        status = "failed"
+        reason = f"command interrupted by signal {interruption_signal}"
+    elif result.cause != "exited" or result.return_code is None:
+        output += f"gate execution failed: unknown supervisor result {result.cause}\n".encode(
+            "utf-8", errors="replace"
+        )
+        status = "failed"
+        reason = "command could not be captured"
+        exit_code = 126
+    else:
+        exit_code = normalize_exit_code(result.return_code)
+        if result.return_code == 0:
+            status = "passed"
+            reason = "command exited 0"
+        elif result.return_code == EXIT_NOT_RUN:
+            status = "not_run"
+            reason = (
+                "command reported not_run; inspect the gate log for corrective action"
+            )
+        else:
+            status = "failed"
+            reason = f"command exited {exit_code}"
+
+    if result.cleanup_errors:
+        output += (
+            "process cleanup failed: " + "; ".join(result.cleanup_errors) + "\n"
+        ).encode("utf-8", errors="replace")
+    return status, reason, exit_code, output, result.interrupted_signal
 
 
 def subject_digest(gate, candidate_digest, source_commit, status):
@@ -695,7 +619,15 @@ def execute_gates(gates, source_commit, candidate_digest, evidence_dir):
                     exit_code = EXIT_NOT_RUN
                     output = f"not_run: {reason}\n".encode("utf-8")
                 else:
-                    status, reason, exit_code, output = run_command(gate)
+                    (
+                        status,
+                        reason,
+                        exit_code,
+                        output,
+                        interrupted_signal,
+                    ) = run_command(gate)
+                    if interrupted_signal is not None:
+                        return False
                     if gate["subjectKind"] == "source":
                         source_problem = source_checkout_problem(source_commit)
                     if source_problem:

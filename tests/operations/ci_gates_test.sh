@@ -1582,6 +1582,8 @@ run_version_probe_process_fixture success-with-child "left descendants running"
 
 run_ordinary_process_fixture() {
   local mode="$1"
+  local expected_exit_code="$2"
+  local expected_status="$3"
   local state_dir="$fixture_dir/process-ordinary-$mode"
   local catalog="$fixture_dir/ordinary-$mode.json"
   local evidence_dir="$fixture_dir/ordinary-$mode-evidence"
@@ -1617,9 +1619,87 @@ PY
     echo "ordinary $mode gate exceeded its bounded runner cleanup" >&2
     exit 1
   }
-  [[ $status -ne 0 ]] || { echo "ordinary $mode gate returned success" >&2; exit 1; }
+  [[ $status -eq "$expected_status" ]] || {
+    echo "ordinary $mode runner returned $status instead of $expected_status" >&2
+    exit 1
+  }
   assert_fixture_processes_dead "$state_dir"
-  python3 - "$evidence_dir/ordinary-$mode.json" "$evidence_dir/ordinary-$mode.log" <<'PY'
+  python3 - "$evidence_dir/ordinary-$mode.json" \
+    "$evidence_dir/ordinary-$mode.log" "$expected_exit_code" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+envelope_path = pathlib.Path(sys.argv[1])
+log_path = pathlib.Path(sys.argv[2])
+expected_exit_code = int(sys.argv[3])
+envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+output = log_path.read_bytes()
+expected_status = "passed" if expected_exit_code == 0 else "failed"
+assert envelope["status"] == expected_status, envelope
+assert envelope["exitCode"] == expected_exit_code, envelope
+if expected_exit_code == 124:
+    assert "timed out" in envelope["reason"], envelope
+    assert b"gate timed out after 1 seconds" in output, output
+elif expected_exit_code == 125:
+    assert "descendants" in envelope["reason"], envelope
+    assert b"descendant" in output, output
+else:
+    assert envelope["reason"] == "command exited 0", envelope
+    assert b"descendant" not in output, output
+assert envelope["outputDigest"] == "sha256:" + hashlib.sha256(output).hexdigest(), envelope
+PY
+}
+
+run_ordinary_process_fixture timeout 124 1
+run_ordinary_process_fixture setsid-timeout 124 1
+[[ -e "$fixture_dir/process-ordinary-setsid-timeout/detached-child-term.pid" ]] || {
+  echo "separately sessioned child never received supervised TERM" >&2
+  exit 1
+}
+run_ordinary_process_fixture pipe-hang 125 1
+run_ordinary_process_fixture double-fork-timeout 124 1
+run_ordinary_process_fixture double-fork-leak 125 1
+run_ordinary_process_fixture leader-exit-leak 125 1
+run_ordinary_process_fixture clean-zero 0 0
+
+write_nested_playwright_catalog() {
+  local catalog="$1"
+  local state_dir="$2"
+  local grace="$3"
+  python3 - "$catalog" "$repo_root/scripts/run-playwright-gate.py" \
+    "$state_dir" "$grace" <<'PY'
+import json
+import sys
+
+catalog_path, wrapper, state_dir, grace = sys.argv[1:]
+gate_id = "nested-playwright" if grace == "8" else "nested-playwright-forced"
+catalog = {"schemaVersion": 1, "gates": [{
+    "id": gate_id,
+    "phase": 1,
+    "scope": "local",
+    "required": True,
+    "timeoutSeconds": 1,
+    "terminationGraceSeconds": int(grace),
+    "command": [
+        "python3", wrapper,
+        "--ready-timeout-seconds", "5",
+        "--playwright-timeout-seconds", "20",
+        "--shutdown-timeout-seconds", "1",
+    ],
+    "prerequisites": [],
+    "subjectKind": "fixture",
+}]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+}
+
+assert_nested_playwright_evidence() {
+  local envelope_path="$1"
+  local log_path="$2"
+  python3 - "$envelope_path" "$log_path" <<'PY'
 import hashlib
 import json
 import pathlib
@@ -1631,12 +1711,90 @@ output = log_path.read_bytes()
 assert envelope["status"] == "failed", envelope
 assert envelope["exitCode"] == 124, envelope
 assert "timed out" in envelope["reason"], envelope
+assert b"gate timed out after 1 seconds" in output, output
 assert envelope["outputDigest"] == "sha256:" + hashlib.sha256(output).hexdigest(), envelope
 PY
 }
 
-run_ordinary_process_fixture timeout
-run_ordinary_process_fixture pipe-hang
+nested_state="$fixture_dir/process-nested-playwright"
+nested_catalog="$fixture_dir/nested-playwright.json"
+nested_evidence="$fixture_dir/nested-playwright-evidence"
+mkdir "$nested_state"
+write_nested_playwright_catalog "$nested_catalog" "$nested_state" 8
+set +e
+env \
+  PATH="$fixture_bin:$PATH" \
+  TELOS_GATE_FIXTURE_STATE="$nested_state" \
+  TELOS_GATE_FIXTURE_NPM_MODE=normal \
+  TELOS_GATE_FIXTURE_NPX_MODE=hang \
+  TELOS_GATE_FIXTURE_CHILD_MODE=cleanup-marker \
+  python3 "$repo_root/scripts/run-gates.py" \
+    --catalog "$nested_catalog" --scope local \
+    --candidate-lock "$fixture_dir/candidate.json" \
+    --evidence-dir "$nested_evidence" &
+nested_runner_pid=$!
+set -e
+for _ in {1..200}; do
+  [[ -e "$nested_state/playwright-cleanup-term.pid" ]] && break
+  kill -0 "$nested_runner_pid" 2>/dev/null || break
+  sleep 0.05
+done
+[[ -e "$nested_state/playwright-cleanup-term.pid" ]] || {
+  echo "nested Playwright cleanup marker was absent before the outer runner returned" >&2
+  exit 1
+}
+kill -0 "$nested_runner_pid" 2>/dev/null || {
+  echo "outer runner returned before nested Playwright cleanup was observed" >&2
+  exit 1
+}
+for _ in {1..200}; do
+  kill -0 "$nested_runner_pid" 2>/dev/null || break
+  sleep 0.05
+done
+if kill -0 "$nested_runner_pid" 2>/dev/null; then
+  kill -s TERM "$nested_runner_pid" 2>/dev/null || true
+  wait "$nested_runner_pid" 2>/dev/null || true
+  echo "nested Playwright runner exceeded its bounded cleanup" >&2
+  exit 1
+fi
+set +e
+wait "$nested_runner_pid"
+status=$?
+set -e
+[[ $status -eq 1 ]] || { echo "nested Playwright runner returned $status" >&2; exit 1; }
+assert_fixture_processes_dead "$nested_state"
+assert_nested_playwright_evidence \
+  "$nested_evidence/nested-playwright.json" \
+  "$nested_evidence/nested-playwright.log"
+
+forced_state="$fixture_dir/process-nested-playwright-forced"
+forced_catalog="$fixture_dir/nested-playwright-forced.json"
+forced_evidence="$fixture_dir/nested-playwright-forced-evidence"
+mkdir "$forced_state"
+write_nested_playwright_catalog "$forced_catalog" "$forced_state" 0
+started_at="$(date +%s)"
+set +e
+timeout 8s env \
+  PATH="$fixture_bin:$PATH" \
+  TELOS_GATE_FIXTURE_STATE="$forced_state" \
+  TELOS_GATE_FIXTURE_NPM_MODE=normal \
+  TELOS_GATE_FIXTURE_NPX_MODE=hang \
+  TELOS_GATE_FIXTURE_CHILD_MODE=cleanup-marker \
+  python3 "$repo_root/scripts/run-gates.py" \
+    --catalog "$forced_catalog" --scope local \
+    --candidate-lock "$fixture_dir/candidate.json" \
+    --evidence-dir "$forced_evidence"
+status=$?
+set -e
+elapsed=$(( $(date +%s) - started_at ))
+[[ $status -eq 1 && $elapsed -lt 8 ]] || {
+  echo "forced nested Playwright cleanup returned $status after ${elapsed}s" >&2
+  exit 1
+}
+assert_fixture_processes_dead "$forced_state"
+assert_nested_playwright_evidence \
+  "$forced_evidence/nested-playwright-forced.json" \
+  "$forced_evidence/nested-playwright-forced.log"
 
 run_playwright_fixture() {
   local state_dir="$1"
