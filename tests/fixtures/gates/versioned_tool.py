@@ -67,6 +67,12 @@ def main():
                 state_dir, redirect_streams=mode == "success-with-child"
             )
             if mode == "signal-wait-with-child":
+                def exit_on_signal(_signum, _frame):
+                    raise SystemExit(0)
+
+                signal.signal(signal.SIGINT, exit_on_signal)
+                signal.signal(signal.SIGTERM, exit_on_signal)
+                print("version probe partial output", flush=True)
                 (state_dir / "probe-ready").write_text(
                     "ready\n", encoding="utf-8"
                 )

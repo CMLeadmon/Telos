@@ -393,7 +393,12 @@ def probe_tool_versions(gate, signals=None):
     executable = gate["command"][0]
     tool = os.path.basename(executable)
     if tool not in VERSIONED_TOOLS:
-        return versions, f"tool version identity is unsupported for: {tool}", None
+        return (
+            versions,
+            f"tool version identity is unsupported for: {tool}",
+            None,
+            None,
+        )
     if signals is None:
         signals = process_supervisor.SignalState()
     try:
@@ -405,23 +410,39 @@ def probe_tool_versions(gate, signals=None):
             signals=signals,
         )
     except FileNotFoundError:
-        return versions, f"tool version identity is unavailable for: {tool}", None
+        return (
+            versions,
+            f"tool version identity is unavailable for: {tool}",
+            None,
+            None,
+        )
     except (OSError, process_supervisor.SupervisionError) as error:
-        return versions, f"tool version probe failed for {tool}: {error}", None
+        return (
+            versions,
+            f"tool version probe failed for {tool}: {error}",
+            None,
+            None,
+        )
 
     if result.cause == "timeout":
-        return versions, f"tool version probe timed out for: {tool}", None
+        return versions, f"tool version probe timed out for: {tool}", None, None
     if result.cause == "descendants":
         return (
             versions,
             f"tool version probe left descendants running for: {tool}",
             None,
+            None,
         )
     if result.cause == "capture_error":
         detail = "; ".join(result.cleanup_errors) or "output capture failed"
-        return versions, f"tool version probe failed for {tool}: {detail}", None
+        return (
+            versions,
+            f"tool version probe failed for {tool}: {detail}",
+            None,
+            None,
+        )
     if result.cause == "interrupted":
-        return versions, None, result.interrupted_signal
+        return versions, None, result.interrupted_signal, result.output
 
     decoded_output = result.output.decode("utf-8", errors="replace")
     lines = [line.strip() for line in decoded_output.splitlines() if line.strip()]
@@ -430,9 +451,10 @@ def probe_tool_versions(gate, signals=None):
             versions,
             f"tool version identity could not be obtained for: {tool}",
             None,
+            None,
         )
     versions[tool] = lines[0]
-    return versions, None, None
+    return versions, None, None, None
 
 
 def run_command(gate, signals=None):
@@ -646,9 +668,12 @@ def execute_gates(
                 exit_code = EXIT_FAILED
                 output = f"failed: {reason}\n".encode("utf-8")
             else:
-                tool_versions, tool_problem, interrupted_signal = (
-                    probe_tool_versions(gate, signals)
-                )
+                (
+                    tool_versions,
+                    tool_problem,
+                    interrupted_signal,
+                    interrupted_output,
+                ) = probe_tool_versions(gate, signals)
                 if interrupted_signal is not None:
                     status = "failed"
                     reason = (
@@ -656,7 +681,9 @@ def execute_gates(
                         "during tool version probe"
                     )
                     exit_code = min(255, 128 + interrupted_signal)
-                    output = f"{reason}\n".encode("utf-8")
+                    output = (interrupted_output or b"") + f"{reason}\n".encode(
+                        "utf-8"
+                    )
                 elif tool_problem:
                     status = "not_run"
                     reason = tool_problem

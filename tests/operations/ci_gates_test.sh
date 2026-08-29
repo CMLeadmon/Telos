@@ -1876,7 +1876,11 @@ assert active["status"] == "failed", active
 assert active["exitCode"] == expected_exit, active
 assert active["reason"] == expected_reason, active
 interruption_line = (expected_reason + "\n").encode("utf-8")
-assert active_output.endswith(interruption_line), active_output
+if stage == "probe":
+    expected_active_output = b"version probe partial output\n" + interruption_line
+else:
+    expected_active_output = b"cooperative gate ready\n" + interruption_line
+assert active_output == expected_active_output, active_output
 assert active_output.count(interruption_line) == 1, active_output
 assert active["outputDigest"] == "sha256:" + hashlib.sha256(active_output).hexdigest(), active
 assert active["command"] == gates[active_id]["command"], active
