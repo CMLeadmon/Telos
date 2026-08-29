@@ -1664,6 +1664,366 @@ run_ordinary_process_fixture double-fork-leak 125 1
 run_ordinary_process_fixture leader-exit-leak 125 1
 run_ordinary_process_fixture clean-zero 0 0
 
+write_cancellation_catalog() {
+  local stage="$1"
+  local catalog="$2"
+  local state_dir="$3"
+  local later_marker="$4"
+  python3 - "$stage" "$catalog" "$state_dir" "$later_marker" \
+    "$repo_root/tests/fixtures/gates/ordinary_process_tree.py" <<'PY'
+import json
+import sys
+
+stage, catalog_path, state_dir, later_marker, command_fixture = sys.argv[1:]
+if stage == "probe":
+    active_id = "active-probe"
+    active_command = ["node"]
+    active_grace = 1
+elif stage == "command":
+    active_id = "active-command"
+    active_command = [
+        "python3", command_fixture, "cooperative-signal", state_dir,
+    ]
+    active_grace = 2
+else:
+    raise SystemExit(f"unknown cancellation stage: {stage}")
+
+catalog = {"schemaVersion": 1, "gates": [
+    {
+        "id": active_id,
+        "phase": 1,
+        "scope": "local",
+        "required": True,
+        "timeoutSeconds": 20,
+        "terminationGraceSeconds": active_grace,
+        "command": active_command,
+        "prerequisites": [],
+        "subjectKind": "fixture",
+    },
+    {
+        "id": "later-gate",
+        "phase": 1,
+        "scope": "local",
+        "required": True,
+        "timeoutSeconds": 10,
+        "command": [
+            "python3", "-c",
+            (
+                "import pathlib,sys; "
+                "pathlib.Path(sys.argv[1]).write_text('ran\\n', encoding='utf-8')"
+            ),
+            later_marker,
+        ],
+        "prerequisites": [],
+        "subjectKind": "fixture",
+    },
+]}
+with open(catalog_path, "w", encoding="utf-8") as output_file:
+    json.dump(catalog, output_file, sort_keys=True)
+PY
+}
+
+wait_for_cancellation_marker() {
+  local marker="$1"
+  local runner_pid="$2"
+  local description="$3"
+  for _ in {1..400}; do
+    [[ -e "$marker" ]] && return 0
+    kill -0 "$runner_pid" 2>/dev/null || break
+    sleep 0.01
+  done
+  echo "$description marker was absent" >&2
+  return 1
+}
+
+observe_fixture_exit_before_runner() {
+  local runner_pid="$1"
+  local state_dir="$2"
+  local observation="$3"
+  python3 - "$runner_pid" "$state_dir" "$observation" <<'PY'
+import pathlib
+import time
+import sys
+
+runner_pid = int(sys.argv[1])
+state_dir = pathlib.Path(sys.argv[2])
+observation = pathlib.Path(sys.argv[3])
+
+
+def process_state(pid):
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_bytes()
+    except FileNotFoundError:
+        return None
+    command_end = stat.rfind(b")")
+    if command_end < 0:
+        return "?"
+    fields = stat[command_end + 1:].split()
+    return fields[0].decode("ascii") if fields else "?"
+
+
+while process_state(runner_pid) not in {None, "Z"}:
+    fixture_pids = []
+    for pid_path in state_dir.glob("*.pid"):
+        try:
+            fixture_pids.append(int(pid_path.read_text(encoding="ascii")))
+        except (FileNotFoundError, ValueError):
+            pass
+    if fixture_pids and all(
+        process_state(pid) in {None, "Z"} for pid in fixture_pids
+    ):
+        observation.write_text("fixture processes exited first\n", encoding="utf-8")
+        raise SystemExit(0)
+    time.sleep(0.001)
+raise SystemExit("runner exited before fixture processes were observed gone")
+PY
+}
+
+start_cancellation_runner() {
+  local stage="$1"
+  local catalog="$2"
+  local evidence_dir="$3"
+  local state_dir="$4"
+  local runner_output="$5"
+  "$real_python" - "$real_python" "$repo_root/scripts/run-gates.py" \
+    "$catalog" "$fixture_dir/candidate.json" "$evidence_dir" \
+    "$version_bin" "$state_dir" "$stage" >"$runner_output" 2>&1 <<'PY' &
+import os
+import signal
+import sys
+
+python, runner, catalog, candidate, evidence_dir, version_bin, state_dir, stage = (
+    sys.argv[1:]
+)
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGTERM, signal.SIG_DFL)
+environment = os.environ.copy()
+environment["PATH"] = version_bin + os.pathsep + environment["PATH"]
+if stage == "probe":
+    environment["TELOS_VERSION_FIXTURE_MODE"] = "signal-wait-with-child"
+    environment["TELOS_VERSION_FIXTURE_STATE"] = state_dir
+else:
+    environment["TELOS_GATE_FIXTURE_STATE"] = state_dir
+os.execve(python, [
+    python, runner,
+    "--catalog", catalog,
+    "--scope", "local",
+    "--candidate-lock", candidate,
+    "--evidence-dir", evidence_dir,
+], environment)
+PY
+  cancellation_runner_pid=$!
+}
+
+assert_cancellation_evidence() {
+  local stage="$1"
+  local signal_name="$2"
+  local expected_exit="$3"
+  local catalog="$4"
+  local evidence_dir="$5"
+  local later_marker="$6"
+  local active_id="active-$stage"
+  [[ ! -e "$later_marker" ]] || {
+    echo "$stage $signal_name executed the later gate" >&2
+    return 1
+  }
+  [[ -f "$evidence_dir/$active_id.json" \
+      && -f "$evidence_dir/$active_id.log" \
+      && -f "$evidence_dir/later-gate.json" \
+      && -f "$evidence_dir/later-gate.log" ]] || {
+    echo "$stage $signal_name did not finalize both gate envelopes and logs" >&2
+    return 1
+  }
+  python3 - "$stage" "$signal_name" "$expected_exit" "$catalog" \
+    "$fixture_dir/candidate.json" "$evidence_dir" <<'PY'
+import hashlib
+import json
+import pathlib
+import platform
+import subprocess
+import sys
+
+stage, signal_name, expected_exit, catalog_path, candidate_path, evidence_path = (
+    sys.argv[1:]
+)
+expected_exit = int(expected_exit)
+catalog = json.loads(pathlib.Path(catalog_path).read_text(encoding="utf-8"))
+gates = {gate["id"]: gate for gate in catalog["gates"]}
+candidate_bytes = pathlib.Path(candidate_path).read_bytes()
+candidate = json.loads(candidate_bytes.decode("utf-8"))
+candidate_digest = "sha256:" + hashlib.sha256(candidate_bytes).hexdigest()
+evidence_dir = pathlib.Path(evidence_path)
+active_id = f"active-{stage}"
+expected_stage = "tool version probe" if stage == "probe" else "gate execution"
+expected_reason = f"runner interrupted by SIG{signal_name} during {expected_stage}"
+
+
+def expected_subject(gate):
+    declaration = json.dumps({
+        "candidateLockDigest": candidate_digest,
+        "kind": gate["subjectKind"],
+        "command": gate["command"],
+    }, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(declaration).hexdigest()
+
+
+active = json.loads((evidence_dir / f"{active_id}.json").read_text(encoding="utf-8"))
+active_output = (evidence_dir / f"{active_id}.log").read_bytes()
+later = json.loads((evidence_dir / "later-gate.json").read_text(encoding="utf-8"))
+later_output = (evidence_dir / "later-gate.log").read_bytes()
+
+assert active["status"] == "failed", active
+assert active["exitCode"] == expected_exit, active
+assert active["reason"] == expected_reason, active
+interruption_line = (expected_reason + "\n").encode("utf-8")
+assert active_output.endswith(interruption_line), active_output
+assert active_output.count(interruption_line) == 1, active_output
+assert active["outputDigest"] == "sha256:" + hashlib.sha256(active_output).hexdigest(), active
+assert active["command"] == gates[active_id]["command"], active
+assert active["sourceCommit"] == candidate["sourceCommit"], active
+assert active["candidateLockDigest"] == candidate_digest, active
+assert active["subject"] == {
+    "kind": "fixture", "digest": expected_subject(gates[active_id]),
+}, active
+assert active["toolVersions"]["python"] == platform.python_version(), active
+if stage == "probe":
+    assert set(active["toolVersions"]) == {"python"}, active
+else:
+    expected_python = subprocess.run(
+        [sys.executable, "--version"],
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    ).stdout.strip().splitlines()[0]
+    assert active["toolVersions"]["python3"] == expected_python, active
+    assert set(active["toolVersions"]) == {"python", "python3"}, active
+
+assert later["status"] == "not_run", later
+assert later["exitCode"] == 3, later
+assert later["reason"] == "runner interrupted before execution", later
+assert later_output == b"not_run: runner interrupted before execution\n", later_output
+assert later["outputDigest"] == "sha256:" + hashlib.sha256(later_output).hexdigest(), later
+assert later["command"] == gates["later-gate"]["command"], later
+assert later["sourceCommit"] == candidate["sourceCommit"], later
+assert later["candidateLockDigest"] == candidate_digest, later
+assert later["subject"] == {
+    "kind": "fixture", "digest": expected_subject(gates["later-gate"]),
+}, later
+assert later["toolVersions"] == {"python": platform.python_version()}, later
+PY
+  local assertion_status=$?
+  [[ $assertion_status -eq 0 ]] || return "$assertion_status"
+  bash "$repo_root/scripts/verify-evidence.sh" \
+    --candidate-lock "$fixture_dir/candidate.json" \
+    --evidence-dir "$evidence_dir" || return 1
+}
+
+run_cancellation_case() {
+  local stage="$1"
+  local signal_name="$2"
+  local expected_exit="$3"
+  local second_signal="${4:-}"
+  local suffix="${stage}-${signal_name,,}"
+  [[ -z "$second_signal" ]] || suffix+="-then-${second_signal,,}"
+  local state_dir="$fixture_dir/cancellation-state-$suffix"
+  local catalog="$fixture_dir/cancellation-$suffix.json"
+  local evidence_dir="$fixture_dir/cancellation-$suffix-evidence"
+  local later_marker="$fixture_dir/cancellation-$suffix-later-ran"
+  local runner_output="$fixture_dir/cancellation-$suffix-runner.out"
+  local observation="$fixture_dir/cancellation-$suffix-fixtures-exited-first"
+  local ready_marker observer_pid runner_status observer_status=0
+  mkdir "$state_dir"
+  write_cancellation_catalog "$stage" "$catalog" "$state_dir" "$later_marker" || return 1
+  start_cancellation_runner \
+    "$stage" "$catalog" "$evidence_dir" "$state_dir" "$runner_output"
+  local runner_pid="$cancellation_runner_pid"
+  if [[ "$stage" == probe ]]; then
+    ready_marker="$state_dir/probe-ready"
+  else
+    ready_marker="$state_dir/command-ready"
+  fi
+  if ! wait_for_cancellation_marker \
+      "$ready_marker" "$runner_pid" "$stage $signal_name ready"; then
+    wait "$runner_pid" 2>/dev/null || true
+    cleanup_fixture_processes
+    return 1
+  fi
+  observe_fixture_exit_before_runner "$runner_pid" "$state_dir" "$observation" &
+  observer_pid=$!
+  kill -s "$signal_name" "$runner_pid" || {
+    wait "$runner_pid" 2>/dev/null || true
+    wait "$observer_pid" 2>/dev/null || true
+    cleanup_fixture_processes
+    return 1
+  }
+  if [[ -n "$second_signal" ]]; then
+    if ! wait_for_cancellation_marker \
+        "$state_dir/command-signal-received.pid" "$runner_pid" \
+        "$stage first-signal cleanup"; then
+      wait "$runner_pid" 2>/dev/null || true
+      wait "$observer_pid" 2>/dev/null || true
+      cleanup_fixture_processes
+      return 1
+    fi
+    kill -s "$second_signal" "$runner_pid" || {
+      wait "$runner_pid" 2>/dev/null || true
+      wait "$observer_pid" 2>/dev/null || true
+      cleanup_fixture_processes
+      return 1
+    }
+  fi
+  set +e
+  wait "$runner_pid"
+  runner_status=$?
+  wait "$observer_pid"
+  observer_status=$?
+  set -e
+  if [[ $runner_status -ne $expected_exit ]]; then
+    echo "$stage $signal_name runner returned $runner_status instead of $expected_exit" >&2
+    sed -n '1,120p' "$runner_output" >&2
+    cleanup_fixture_processes
+    return 1
+  fi
+  if [[ $observer_status -ne 0 || ! -e "$observation" ]]; then
+    echo "$stage $signal_name fixture processes were not gone before runner exit" >&2
+    cleanup_fixture_processes
+    return 1
+  fi
+  if [[ "$stage" == command \
+      && ! -e "$state_dir/command-cleanup-complete.pid" ]]; then
+    echo "$stage $signal_name cleanup marker was absent before evidence inspection" >&2
+    cleanup_fixture_processes
+    return 1
+  fi
+  assert_fixture_processes_dead "$state_dir" || {
+    cleanup_fixture_processes
+    return 1
+  }
+  assert_cancellation_evidence \
+    "$stage" "$signal_name" "$expected_exit" "$catalog" \
+    "$evidence_dir" "$later_marker"
+}
+
+cancellation_failures=0
+for cancellation_stage in probe command; do
+  for cancellation_signal in INT TERM; do
+    cancellation_exit=130
+    [[ "$cancellation_signal" == TERM ]] && cancellation_exit=143
+    if ! run_cancellation_case \
+        "$cancellation_stage" "$cancellation_signal" "$cancellation_exit"; then
+      cancellation_failures=$((cancellation_failures + 1))
+    fi
+  done
+done
+if ! run_cancellation_case command INT 130 TERM; then
+  cancellation_failures=$((cancellation_failures + 1))
+fi
+if ((cancellation_failures)); then
+  echo "$cancellation_failures cancellation evidence case(s) failed" >&2
+  exit 1
+fi
+
 write_nested_playwright_catalog() {
   local catalog="$1"
   local state_dir="$2"

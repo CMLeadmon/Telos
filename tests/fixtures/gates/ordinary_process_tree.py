@@ -59,6 +59,49 @@ def run_double_fork(state_dir):
     remain_live(state_dir, "grandchild", close_streams=True)
 
 
+def run_signal_child(state_dir):
+    def exit_on_signal(_signum, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, exit_on_signal)
+    signal.signal(signal.SIGTERM, exit_on_signal)
+    record_pid(state_dir, "command-child")
+    while True:
+        time.sleep(1)
+
+
+def run_cooperative_signal_gate(state_dir):
+    state_dir.mkdir(parents=True, exist_ok=True)
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            os.path.abspath(__file__),
+            "signal-child",
+            str(state_dir),
+        ],
+        close_fds=True,
+    )
+    if not wait_for(state_dir / "command-child.pid"):
+        child.kill()
+        return 2
+
+    def cleanup_after_signal(signum, _frame):
+        record_pid(state_dir, "command-signal-received")
+        time.sleep(0.3)
+        child.send_signal(signum)
+        child.wait(timeout=2)
+        record_pid(state_dir, "command-cleanup-complete")
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, cleanup_after_signal)
+    signal.signal(signal.SIGTERM, cleanup_after_signal)
+    record_pid(state_dir, "command-leader")
+    (state_dir / "command-ready").write_text("ready\n", encoding="utf-8")
+    print("cooperative gate ready", flush=True)
+    while True:
+        time.sleep(1)
+
+
 def run_leader(mode, state_dir):
     state_dir.mkdir(parents=True, exist_ok=True)
     if mode == "clean-zero":
@@ -105,6 +148,10 @@ def main():
         )
     if mode == "double-fork-child":
         return run_double_fork(state_dir)
+    if mode == "signal-child":
+        return run_signal_child(state_dir)
+    if mode == "cooperative-signal":
+        return run_cooperative_signal_gate(state_dir)
     return run_leader(mode, state_dir)
 
 

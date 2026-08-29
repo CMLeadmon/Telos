@@ -54,7 +54,11 @@ def main():
             print(f"{tool} fixture version unavailable", file=sys.stderr)
             return 9
         mode = os.environ.get("TELOS_VERSION_FIXTURE_MODE")
-        if mode in {"hang-with-child", "success-with-child"}:
+        if mode in {
+            "hang-with-child",
+            "signal-wait-with-child",
+            "success-with-child",
+        }:
             state_dir = pathlib.Path(os.environ["TELOS_VERSION_FIXTURE_STATE"])
             (state_dir / "probe-leader.pid").write_text(
                 str(os.getpid()), encoding="ascii"
@@ -62,7 +66,11 @@ def main():
             spawn_stubborn_child(
                 state_dir, redirect_streams=mode == "success-with-child"
             )
-            if mode == "hang-with-child":
+            if mode == "signal-wait-with-child":
+                (state_dir / "probe-ready").write_text(
+                    "ready\n", encoding="utf-8"
+                )
+            if mode in {"hang-with-child", "signal-wait-with-child"}:
                 while True:
                     time.sleep(60)
         print(VERSIONS[tool])
