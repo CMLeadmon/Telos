@@ -1417,11 +1417,15 @@ import sys
 
 fixture_root = pathlib.Path(sys.argv[1])
 state_prefix = f"TELOS_GATE_FIXTURE_STATE={fixture_root}".encode()
+version_state_prefix = f"TELOS_VERSION_FIXTURE_STATE={fixture_root}".encode()
 for pid_path in fixture_root.glob("**/*.pid"):
     try:
         pid = int(pid_path.read_text(encoding="ascii"))
         environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
-        if not any(value.startswith(state_prefix) for value in environment):
+        if not any(
+            value.startswith(state_prefix) or value.startswith(version_state_prefix)
+            for value in environment
+        ):
             continue
         os.kill(pid, signal.SIGKILL)
     except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
@@ -1454,6 +1458,65 @@ while time.monotonic() < deadline:
 raise SystemExit(f"fixture processes still alive: {live}")
 PY
 }
+
+force_cleanup_version_probe_fixture() {
+  python3 - "$1" <<'PY'
+import os
+import pathlib
+import signal
+import sys
+
+state_dir = pathlib.Path(sys.argv[1])
+ownership = f"TELOS_VERSION_FIXTURE_STATE={state_dir}".encode()
+for pid_path in state_dir.glob("*.pid"):
+    try:
+        pid = int(pid_path.read_text(encoding="ascii"))
+        environment = pathlib.Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
+        if ownership not in environment:
+            raise SystemExit(f"refusing fallback cleanup for unowned process {pid}")
+        os.kill(pid, signal.SIGKILL)
+    except (FileNotFoundError, ProcessLookupError):
+        pass
+PY
+}
+
+assert_exit_cleanup_owns_version_probes() {
+  # Mutation caught: EXIT cleanup recognizes only ordinary gate fixture state.
+  local state_dir="$fixture_dir/version-probe-exit-cleanup"
+  local leader_pid cleanup_status
+  mkdir "$state_dir"
+  env \
+    PATH="$version_bin:$PATH" \
+    TELOS_VERSION_FIXTURE_MODE=hang-with-child \
+    TELOS_VERSION_FIXTURE_STATE="$state_dir" \
+    "$version_bin/node" --version >/dev/null 2>&1 &
+  leader_pid=$!
+  for _ in {1..100}; do
+    [[ -e "$state_dir/probe-leader.pid" && -e "$state_dir/probe-child.pid" ]] && break
+    sleep 0.02
+  done
+  [[ -e "$state_dir/probe-leader.pid" && -e "$state_dir/probe-child.pid" ]] || {
+    force_cleanup_version_probe_fixture "$state_dir"
+    wait "$leader_pid" 2>/dev/null || true
+    echo "version probe cleanup fixture did not record both owned processes" >&2
+    return 1
+  }
+
+  cleanup_fixture_processes
+  set +e
+  assert_fixture_processes_dead "$state_dir"
+  cleanup_status=$?
+  set -e
+  if [[ $cleanup_status -ne 0 ]]; then
+    force_cleanup_version_probe_fixture "$state_dir"
+    wait "$leader_pid" 2>/dev/null || true
+    echo "EXIT cleanup did not terminate TELOS_VERSION_FIXTURE_STATE processes" >&2
+    return 1
+  fi
+  wait "$leader_pid" 2>/dev/null || true
+}
+
+assert_exit_cleanup_owns_version_probes
 
 run_version_probe_process_fixture() {
   local mode="$1"
