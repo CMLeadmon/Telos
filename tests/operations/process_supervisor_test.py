@@ -2,12 +2,15 @@
 """Behavioral contract for the Linux gate-process supervisor."""
 
 import signal
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+from collections import Counter
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +31,43 @@ def process_is_dead(pid):
         return False
     fields = stat_bytes[command_end + 1 :].split()
     return bool(fields) and fields[0] in {b"X", b"Z"}
+
+
+def wait_for_files(paths, timeout_seconds=2):
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if all(path.exists() for path in paths):
+            return
+        time.sleep(0.01)
+
+
+def emergency_stop_recorded_processes(state_dir):
+    wait_for_files([state_dir / "leader.pid", state_dir / "child.pid"])
+    pids = []
+    for pid_file in state_dir.glob("*.pid"):
+        pid = int(pid_file.read_text(encoding="ascii"))
+        pids.append(pid)
+        try:
+            pidfd = supervisor.os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            continue
+        try:
+            supervisor.signal.pidfd_send_signal(pidfd, signal.SIGKILL, None, 0)
+        except ProcessLookupError:
+            pass
+        finally:
+            supervisor.os.close(pidfd)
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and any(
+        not process_is_dead(pid) for pid in pids
+    ):
+        time.sleep(0.01)
+    for pid in pids:
+        try:
+            supervisor.os.waitpid(pid, supervisor.os.WNOHANG)
+        except ChildProcessError:
+            pass
 
 
 class ProcessSupervisorTest(unittest.TestCase):
@@ -150,6 +190,169 @@ class ProcessSupervisorTest(unittest.TestCase):
             self.assertEqual(result.interrupted_signal, signal.SIGTERM)
             self.assertTrue((state_dir / "cleanup").exists())
             self.assert_recorded_processes_dead(state_dir)
+
+    def test_capture_setup_failure_still_contains_tree_and_closes_resources(self):
+        # Mutation caught: acquiring post-spawn resources before the cleanup boundary.
+        class FailingSelector:
+            def __init__(self, state_dir):
+                self.state_dir = state_dir
+                self.closed = False
+
+            def register(self, _stream, _events):
+                wait_for_files(
+                    [self.state_dir / "leader.pid", self.state_dir / "child.pid"]
+                )
+                raise OSError("forced selector registration failure")
+
+            def close(self):
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            state_dir = Path(temporary_dir)
+            selector = FailingSelector(state_dir)
+            opened_pidfds = []
+            closed_descriptors = []
+            real_pidfd_open = supervisor.os.pidfd_open
+            real_close = supervisor.os.close
+
+            def tracking_pidfd_open(pid, flags):
+                descriptor = real_pidfd_open(pid, flags)
+                opened_pidfds.append(descriptor)
+                return descriptor
+
+            def tracking_close(descriptor):
+                closed_descriptors.append(descriptor)
+                return real_close(descriptor)
+
+            escaped_error = None
+            result = None
+            try:
+                with mock.patch.object(
+                    supervisor.selectors,
+                    "DefaultSelector",
+                    return_value=selector,
+                ), mock.patch.object(
+                    supervisor.os, "pidfd_open", side_effect=tracking_pidfd_open
+                ), mock.patch.object(
+                    supervisor.os, "close", side_effect=tracking_close
+                ):
+                    try:
+                        result = self.run_fixture(
+                            "timeout", state_dir, timeout_seconds=5
+                        )
+                    except OSError as error:
+                        escaped_error = error
+            finally:
+                emergency_stop_recorded_processes(state_dir)
+                opened_counts = Counter(opened_pidfds)
+                closed_counts = Counter(closed_descriptors)
+                for descriptor, count in opened_counts.items():
+                    for _index in range(max(0, count - closed_counts[descriptor])):
+                        try:
+                            real_close(descriptor)
+                        except OSError:
+                            pass
+
+            self.assertIsNone(
+                escaped_error,
+                f"post-spawn setup error escaped cleanup: {escaped_error}",
+            )
+            self.assertIsNotNone(result)
+            self.assertEqual(result.cause, "capture_error")
+            self.assertIn("forced selector registration failure", result.cleanup_errors)
+            self.assertTrue(selector.closed)
+            for descriptor, count in Counter(opened_pidfds).items():
+                self.assertGreaterEqual(Counter(closed_descriptors)[descriptor], count)
+            self.assert_recorded_processes_dead(state_dir)
+
+    def test_leader_exit_before_binding_cleans_only_adopted_identity(self):
+        # Mutation caught: requiring a leader pidfd before discovering adopted children.
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            state_dir = Path(temporary_dir)
+            opened_pids = {}
+            signaled_pids = []
+            real_pidfd_open = supervisor.os.pidfd_open
+            real_pidfd_send_signal = supervisor.signal.pidfd_send_signal
+
+            def wait_until_leader_exits(process):
+                deadline = time.monotonic() + 2
+                while process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertIsNotNone(process.returncode)
+                return None
+
+            def tracking_pidfd_open(pid, flags):
+                descriptor = real_pidfd_open(pid, flags)
+                opened_pids[descriptor] = pid
+                return descriptor
+
+            def tracking_pidfd_send_signal(pidfd, signum, siginfo, flags):
+                signaled_pids.append(opened_pids[pidfd])
+                return real_pidfd_send_signal(pidfd, signum, siginfo, flags)
+
+            with mock.patch.object(
+                supervisor, "_wait_for_identity", side_effect=wait_until_leader_exits
+            ), mock.patch.object(
+                supervisor.os, "pidfd_open", side_effect=tracking_pidfd_open
+            ), mock.patch.object(
+                supervisor.signal,
+                "pidfd_send_signal",
+                side_effect=tracking_pidfd_send_signal,
+            ):
+                result = self.run_fixture(
+                    "leader-exit", state_dir, timeout_seconds=5
+                )
+
+            leader_pid = int((state_dir / "leader.pid").read_text(encoding="ascii"))
+            self.assertEqual(result.cause, "descendants")
+            self.assertNotIn(leader_pid, opened_pids.values())
+            self.assertNotIn(leader_pid, signaled_pids)
+            self.assert_recorded_processes_dead(state_dir)
+
+    def test_unbound_numeric_leader_is_not_promoted_or_signaled(self):
+        # Mutation caught: seeding lineage from a bare leader PID after binding failed.
+        unrelated = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            cwd=REPO_ROOT,
+            shell=False,
+            start_new_session=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        owned = None
+        real_pidfd_send_signal = supervisor.signal.pidfd_send_signal
+        try:
+            process_stat = supervisor._read_process_stat(unrelated.pid)
+            self.assertIsNotNone(process_stat)
+            baseline_children = {unrelated.pid: process_stat[2]}
+            owned = supervisor._OwnedProcesses(
+                unrelated.pid, None, baseline_children
+            )
+            sent_pidfds = []
+
+            def record_signal(pidfd, _signum, _siginfo, _flags):
+                sent_pidfds.append(pidfd)
+
+            with mock.patch.object(
+                supervisor.signal,
+                "pidfd_send_signal",
+                side_effect=record_signal,
+            ):
+                owned.discover()
+                supervisor._signal_all(owned, signal.SIGTERM, [])
+
+            self.assertNotIn(unrelated.pid, owned.identities)
+            self.assertEqual(sent_pidfds, [])
+        finally:
+            if owned is not None:
+                owned.close()
+            if unrelated.poll() is None:
+                pidfd = supervisor.os.pidfd_open(unrelated.pid, 0)
+                try:
+                    real_pidfd_send_signal(pidfd, signal.SIGKILL, None, 0)
+                finally:
+                    supervisor.os.close(pidfd)
+            unrelated.wait(timeout=2)
 
 
 if __name__ == "__main__":

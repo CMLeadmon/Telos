@@ -247,12 +247,11 @@ class _OwnedProcesses:
             for pid, start_time in self.lineage.items()
             if pid in process_stats and process_stats[pid][2] == start_time
         }
-        if self.leader_pid not in self.lineage:
-            candidate_pids.add(self.leader_pid)
         candidate_pids.update(
             pid
             for pid, process_stat in process_stats.items()
             if process_stat[1] == runner_pid
+            and pid != self.leader_pid
             and self.baseline_children.get(pid) != process_stat[2]
         )
 
@@ -324,8 +323,12 @@ class _Capture:
         self.output = bytearray()
         self.eof = False
         self.selector = selectors.DefaultSelector()
-        os.set_blocking(stream.fileno(), False)
-        self.selector.register(stream, selectors.EVENT_READ)
+        try:
+            os.set_blocking(stream.fileno(), False)
+            self.selector.register(stream, selectors.EVENT_READ)
+        except BaseException:
+            self.selector.close()
+            raise
 
     def drain(self):
         if self.eof:
@@ -349,6 +352,22 @@ class _Capture:
     def close(self):
         self.selector.close()
         self.stream.close()
+
+
+class _UnavailableCapture:
+    """Own the output stream when nonblocking capture setup has failed."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.output = bytearray()
+        self.eof = False
+
+    def drain(self):
+        return
+
+    def close(self):
+        if self.stream is not None:
+            self.stream.close()
 
 
 def _baseline_direct_children():
@@ -452,6 +471,12 @@ def run(
 
     require_support()
     baseline_children = _baseline_direct_children()
+    leader_identity = None
+    owned = None
+    capture = None
+    cleanup_errors = []
+    cause = "capture_error"
+    interrupted_signal = None
     process = subprocess.Popen(
         argv,
         cwd=cwd,
@@ -460,23 +485,50 @@ def run(
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
-    if process.stdout is None:
-        raise SupervisionError("supervised process output pipe was not created")
-
-    leader_identity = _wait_for_identity(process)
-    owned = _OwnedProcesses(process.pid, leader_identity, baseline_children)
-    capture = _Capture(process.stdout)
-    cleanup_errors = []
-    cause = "capture_error"
-    interrupted_signal = None
-    deadline = time.monotonic() + timeout_seconds
 
     try:
+        deadline = time.monotonic() + timeout_seconds
+        setup_failed = False
+        try:
+            leader_identity = _wait_for_identity(process)
+        except (OSError, SupervisionError) as error:
+            _record_error(cleanup_errors, error)
+            setup_failed = True
+
+        if leader_identity is None and process.poll() is None:
+            try:
+                # Popen still owns an unreaped direct child here, so retrying
+                # stable binding cannot be redirected through numeric PID reuse.
+                leader_identity = _open_identity(process.pid)
+            except (OSError, SupervisionError) as error:
+                _record_error(cleanup_errors, error)
+                setup_failed = True
         if leader_identity is None and process.poll() is None:
             _record_error(
                 cleanup_errors,
                 f"cannot bind stable identity for process {process.pid}",
             )
+            setup_failed = True
+
+        owned = _OwnedProcesses(
+            process.pid, leader_identity, baseline_children
+        )
+        if process.stdout is None:
+            _record_error(
+                cleanup_errors, "supervised process output pipe was not created"
+            )
+            capture = _UnavailableCapture(None)
+            setup_failed = True
+        else:
+            try:
+                capture = _Capture(process.stdout)
+            except (OSError, SupervisionError) as error:
+                _record_error(cleanup_errors, error)
+                capture = _UnavailableCapture(process.stdout)
+                setup_failed = True
+
+        if setup_failed:
+            cause = "capture_error"
         else:
             while True:
                 try:
@@ -547,6 +599,25 @@ def run(
             cleanup_errors=tuple(cleanup_errors),
             interrupted_signal=interrupted_signal,
         )
+    except BaseException:
+        if owned is None:
+            owned = _OwnedProcesses(
+                process.pid, leader_identity, baseline_children
+            )
+        if capture is None:
+            capture = _UnavailableCapture(process.stdout)
+        _forced_cleanup(process, owned, capture, cleanup_errors)
+        try:
+            owned.reap_adopted(process)
+        except SupervisionError:
+            pass
+        raise
     finally:
-        capture.close()
-        owned.close()
+        if capture is not None:
+            capture.close()
+        elif process.stdout is not None:
+            process.stdout.close()
+        if owned is not None:
+            owned.close()
+        elif leader_identity is not None:
+            leader_identity.close()
