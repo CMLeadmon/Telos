@@ -17,8 +17,36 @@ PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
 POLL_INTERVAL_SECONDS = 0.02
 IDENTITY_BIND_TIMEOUT_SECONDS = 1
+QUIESCENCE_EMPTY_SCANS = 3
+QUIESCENCE_WAIT_SECONDS = 0.2
 TERM_WAIT_SECONDS = 1
 KILL_WAIT_SECONDS = 2
+_LAUNCHER_CODE = r"""
+import errno
+import os
+import sys
+
+control_fd = int(sys.argv[1])
+error_fd = int(sys.argv[2])
+target_argv = sys.argv[3:]
+try:
+    release = os.read(control_fd, 1)
+finally:
+    os.close(control_fd)
+if release != b"1":
+    os.close(error_fd)
+    raise SystemExit(126)
+try:
+    os.set_inheritable(error_fd, False)
+    os.execvpe(target_argv[0], target_argv, os.environ)
+except OSError as error:
+    error_number = error.errno if error.errno is not None else errno.EIO
+    try:
+        os.write(error_fd, str(error_number).encode("ascii"))
+    finally:
+        os.close(error_fd)
+    raise SystemExit(127)
+"""
 
 
 class SupervisionError(RuntimeError):
@@ -113,6 +141,7 @@ def require_support() -> None:
     except OSError as error:
         raise _capability_error(f"/proc inspection failed: {error}") from error
     _get_child_subreaper(_libc_prctl())
+    _preflight_pidfd_signaling()
 
 
 def enable_child_subreaper() -> None:
@@ -152,6 +181,36 @@ def _read_process_stat(pid):
     except (UnicodeDecodeError, ValueError) as error:
         raise SupervisionError(f"cannot parse process {pid} identity") from error
     return state, parent_pid, start_time
+
+
+def _preflight_pidfd_signaling():
+    runner_pid = os.getpid()
+    first_stat = _read_process_stat(runner_pid)
+    if first_stat is None or first_stat[0] in {"X", "Z"}:
+        raise _capability_error("cannot inspect the runner identity")
+    pidfd = None
+    try:
+        try:
+            pidfd = os.pidfd_open(runner_pid, 0)
+        except OSError as error:
+            raise _capability_error(
+                f"pidfd open preflight failed: {error}"
+            ) from error
+        second_stat = _read_process_stat(runner_pid)
+        if second_stat is None or second_stat[2] != first_stat[2]:
+            raise _capability_error("runner identity changed during pidfd preflight")
+        try:
+            signal.pidfd_send_signal(pidfd, 0, None, 0)
+        except OSError as error:
+            raise _capability_error(
+                f"pidfd signaling preflight failed: {error}"
+            ) from error
+        final_stat = _read_process_stat(runner_pid)
+        if final_stat is None or final_stat[2] != first_stat[2]:
+            raise _capability_error("runner identity changed during pidfd preflight")
+    finally:
+        if pidfd is not None:
+            os.close(pidfd)
 
 
 def _scan_processes():
@@ -225,15 +284,76 @@ def _wait_for_identity(process):
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
+def _launch_inert(argv, cwd):
+    control_read, control_write = os.pipe()
+    error_read, error_write = os.pipe()
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-I",
+                "-S",
+                "-c",
+                _LAUNCHER_CODE,
+                str(control_read),
+                str(error_write),
+                *argv,
+            ],
+            cwd=cwd,
+            shell=False,
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            pass_fds=(control_read, error_write),
+        )
+    except BaseException:
+        os.close(control_write)
+        os.close(error_read)
+        raise
+    finally:
+        os.close(control_read)
+        os.close(error_write)
+    return process, control_write, error_read
+
+
+def _close_descriptor(descriptor):
+    if descriptor is not None:
+        os.close(descriptor)
+
+
+def _release_launcher(control_write):
+    try:
+        os.write(control_write, b"1")
+    finally:
+        os.close(control_write)
+
+
+def _raise_exec_error(error_read, executable):
+    try:
+        payload = os.read(error_read, 64)
+    finally:
+        os.close(error_read)
+    if not payload:
+        return
+    try:
+        error_number = int(payload.decode("ascii"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise OSError(errno.EIO, "invalid launcher execution error") from error
+    error_type = FileNotFoundError if error_number == errno.ENOENT else OSError
+    raise error_type(error_number, os.strerror(error_number), executable)
+
+
 class _OwnedProcesses:
     def __init__(self, leader_pid, leader_identity, baseline_children):
         self.leader_pid = leader_pid
         self.baseline_children = baseline_children
         self.identities = {}
         self.lineage = {}
+        self.direct_children = {}
         if leader_identity is not None:
             self.identities[leader_pid] = leader_identity
             self.lineage[leader_pid] = leader_identity.start_time
+            self.direct_children[leader_pid] = leader_identity.start_time
 
     @property
     def leader_identity(self):
@@ -267,6 +387,11 @@ class _OwnedProcesses:
             process_stat = process_stats.get(pid)
             if process_stat is not None:
                 self.lineage[pid] = process_stat[2]
+                if process_stat[1] == runner_pid and (
+                    pid == self.leader_pid
+                    or self.baseline_children.get(pid) != process_stat[2]
+                ):
+                    self.direct_children[pid] = process_stat[2]
             if pid in self.identities:
                 continue
             if process_stat is None or process_stat[0] in {"X", "Z"}:
@@ -290,11 +415,21 @@ class _OwnedProcesses:
 
     def reap_adopted(self, process):
         process.poll()
-        for pid in list(self.identities):
+        for pid, start_time in list(self.direct_children.items()):
             if pid == self.leader_pid:
                 continue
-            identity = self.identities[pid]
-            if _identity_alive(identity):
+            process_stat = _read_process_stat(pid)
+            if process_stat is None or process_stat[2] != start_time:
+                identity = self.identities.pop(pid, None)
+                if identity is not None:
+                    identity.close()
+                self.direct_children.pop(pid, None)
+                self.lineage.pop(pid, None)
+                continue
+            identity = self.identities.get(pid)
+            if process_stat[0] not in {"X", "Z"} and (
+                identity is None or _identity_alive(identity)
+            ):
                 continue
             try:
                 waited_pid, _status = os.waitpid(pid, os.WNOHANG)
@@ -308,8 +443,20 @@ class _OwnedProcesses:
                         f"cannot reap owned process {pid}: {error}"
                     ) from error
             if waited_pid == pid or _read_process_stat(pid) is None:
-                identity.close()
-                del self.identities[pid]
+                identity = self.identities.pop(pid, None)
+                if identity is not None:
+                    identity.close()
+                self.direct_children.pop(pid, None)
+                self.lineage.pop(pid, None)
+
+    def has_unreaped_adopted_children(self):
+        for pid, start_time in list(self.direct_children.items()):
+            if pid == self.leader_pid:
+                continue
+            process_stat = _read_process_stat(pid)
+            if process_stat is not None and process_stat[2] == start_time:
+                return True
+        return False
 
     def close(self):
         for identity in self.identities.values():
@@ -412,16 +559,25 @@ def _observe(process, owned, capture, cleanup_errors):
 
 def _wait_for_exit(process, owned, capture, seconds, cleanup_errors):
     deadline = time.monotonic() + max(0, seconds)
+    empty_scans = 0
     while True:
         live = _observe(process, owned, capture, cleanup_errors)
-        if not live and process.poll() is not None:
+        if (
+            not live
+            and process.poll() is not None
+            and not owned.has_unreaped_adopted_children()
+        ):
+            empty_scans += 1
+        else:
+            empty_scans = 0
+        if empty_scans >= QUIESCENCE_EMPTY_SCANS:
             try:
                 capture.drain()
             except SupervisionError as error:
                 _record_error(cleanup_errors, error)
             return True
         if time.monotonic() >= deadline:
-            return not live and process.poll() is not None
+            return False
         time.sleep(POLL_INTERVAL_SECONDS)
 
 
@@ -474,20 +630,14 @@ def run(
     leader_identity = None
     owned = None
     capture = None
+    control_write = None
+    error_read = None
     cleanup_errors = []
     cause = "capture_error"
     interrupted_signal = None
-    process = subprocess.Popen(
-        argv,
-        cwd=cwd,
-        shell=False,
-        start_new_session=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    process, control_write, error_read = _launch_inert(argv, cwd)
 
     try:
-        deadline = time.monotonic() + timeout_seconds
         setup_failed = False
         try:
             leader_identity = _wait_for_identity(process)
@@ -528,8 +678,21 @@ def run(
                 setup_failed = True
 
         if setup_failed:
+            _close_descriptor(control_write)
+            control_write = None
+            _close_descriptor(error_read)
+            error_read = None
+            process.wait()
             cause = "capture_error"
         else:
+            _release_launcher(control_write)
+            control_write = None
+            exec_error_read = error_read
+            error_read = None
+            _raise_exec_error(exec_error_read, argv[0])
+            deadline = time.monotonic() + timeout_seconds
+            exit_empty_scans = 0
+            quiescence_deadline = None
             while True:
                 try:
                     process_stats = owned.discover()
@@ -555,10 +718,34 @@ def run(
                 if return_code is not None and live_descendants:
                     cause = "descendants"
                     break
-                if return_code is not None and not live and capture.eof:
-                    cause = "exited"
+                if (
+                    return_code is not None
+                    and not live
+                    and capture.eof
+                    and not owned.has_unreaped_adopted_children()
+                ):
+                    if quiescence_deadline is None:
+                        quiescence_deadline = (
+                            time.monotonic() + QUIESCENCE_WAIT_SECONDS
+                        )
+                    exit_empty_scans += 1
+                    if exit_empty_scans >= QUIESCENCE_EMPTY_SCANS:
+                        cause = "exited"
+                        break
+                else:
+                    exit_empty_scans = 0
+                now = time.monotonic()
+                if (
+                    quiescence_deadline is not None
+                    and now >= quiescence_deadline
+                ):
+                    _record_error(
+                        cleanup_errors,
+                        "owned process set did not become quiescent after leader exit",
+                    )
+                    cause = "capture_error"
                     break
-                if time.monotonic() >= deadline:
+                if quiescence_deadline is None and now >= deadline:
                     cause = "timeout"
                     break
                 time.sleep(POLL_INTERVAL_SECONDS)
@@ -600,6 +787,13 @@ def run(
             interrupted_signal=interrupted_signal,
         )
     except BaseException:
+        if control_write is not None:
+            _close_descriptor(control_write)
+            control_write = None
+            process.wait()
+        if error_read is not None:
+            _close_descriptor(error_read)
+            error_read = None
         if owned is None:
             owned = _OwnedProcesses(
                 process.pid, leader_identity, baseline_children
@@ -613,6 +807,10 @@ def run(
             pass
         raise
     finally:
+        if control_write is not None:
+            _close_descriptor(control_write)
+        if error_read is not None:
+            _close_descriptor(error_read)
         if capture is not None:
             capture.close()
         elif process.stdout is not None:

@@ -14,6 +14,7 @@ cleanup() {
 trap cleanup EXIT
 
 python3 -B "$repo_root/tests/operations/process_supervisor_test.py"
+python3 -B "$repo_root/tests/operations/run_gates_test.py"
 
 if [[ -e "$sentinel" ]]; then
   echo "refusing to overwrite pre-existing injection sentinel: $sentinel" >&2
@@ -1447,15 +1448,14 @@ while time.monotonic() < deadline:
         pid = int(pid_path.read_text(encoding="ascii"))
         stat_path = pathlib.Path(f"/proc/{pid}/stat")
         try:
-            fields = stat_path.read_text(encoding="ascii").split()
+            stat_path.read_bytes()
         except FileNotFoundError:
             continue
-        if len(fields) > 2 and fields[2] != "Z":
-            live.append((pid_path.name, pid))
+        live.append((pid_path.name, pid))
     if not live:
         raise SystemExit(0)
     time.sleep(0.05)
-raise SystemExit(f"fixture processes still alive: {live}")
+raise SystemExit(f"fixture processes still present: {live}")
 PY
 }
 
@@ -1769,9 +1769,7 @@ while process_state(runner_pid) not in {None, "Z"}:
             fixture_pids.append(int(pid_path.read_text(encoding="ascii")))
         except (FileNotFoundError, ValueError):
             pass
-    if fixture_pids and all(
-        process_state(pid) in {None, "Z"} for pid in fixture_pids
-    ):
+    if fixture_pids and all(process_state(pid) is None for pid in fixture_pids):
         observation.write_text("fixture processes exited first\n", encoding="utf-8")
         raise SystemExit(0)
     time.sleep(0.001)

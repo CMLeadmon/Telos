@@ -388,6 +388,14 @@ def normalize_exit_code(return_code):
     return min(255, return_code)
 
 
+def cleanup_diagnostics(cleanup_errors):
+    if not cleanup_errors:
+        return b""
+    return (
+        "process cleanup failed: " + "; ".join(cleanup_errors) + "\n"
+    ).encode("utf-8", errors="replace")
+
+
 def probe_tool_versions(gate, signals=None):
     versions = {"python": platform.python_version()}
     executable = gate["command"][0]
@@ -424,14 +432,20 @@ def probe_tool_versions(gate, signals=None):
             None,
         )
 
+    probe_cleanup = cleanup_diagnostics(result.cleanup_errors)
     if result.cause == "timeout":
-        return versions, f"tool version probe timed out for: {tool}", None, None
+        return (
+            versions,
+            f"tool version probe timed out for: {tool}",
+            None,
+            probe_cleanup,
+        )
     if result.cause == "descendants":
         return (
             versions,
             f"tool version probe left descendants running for: {tool}",
             None,
-            None,
+            probe_cleanup,
         )
     if result.cause == "capture_error":
         detail = "; ".join(result.cleanup_errors) or "output capture failed"
@@ -439,10 +453,23 @@ def probe_tool_versions(gate, signals=None):
             versions,
             f"tool version probe failed for {tool}: {detail}",
             None,
-            None,
+            probe_cleanup,
         )
     if result.cause == "interrupted":
-        return versions, None, result.interrupted_signal, result.output
+        return (
+            versions,
+            None,
+            result.interrupted_signal,
+            result.output + probe_cleanup,
+        )
+    if result.cleanup_errors and result.return_code == 0:
+        detail = "; ".join(result.cleanup_errors)
+        return (
+            versions,
+            f"tool version probe failed for {tool}: {detail}",
+            None,
+            probe_cleanup,
+        )
 
     decoded_output = result.output.decode("utf-8", errors="replace")
     lines = [line.strip() for line in decoded_output.splitlines() if line.strip()]
@@ -451,7 +478,7 @@ def probe_tool_versions(gate, signals=None):
             versions,
             f"tool version identity could not be obtained for: {tool}",
             None,
-            None,
+            probe_cleanup,
         )
     versions[tool] = lines[0]
     return versions, None, None, None
@@ -527,10 +554,7 @@ def run_command(gate, signals=None):
             status = "failed"
             reason = f"command exited {exit_code}"
 
-    if result.cleanup_errors:
-        output += (
-            "process cleanup failed: " + "; ".join(result.cleanup_errors) + "\n"
-        ).encode("utf-8", errors="replace")
+    output += cleanup_diagnostics(result.cleanup_errors)
     return status, reason, exit_code, output, result.interrupted_signal
 
 
@@ -602,6 +626,16 @@ def signal_name(signum):
     return signal.Signals(signum).name
 
 
+def apply_interruption(output, signum, stage):
+    reason = f"runner interrupted by {signal_name(signum)} during {stage}"
+    return (
+        "failed",
+        reason,
+        min(255, 128 + signum),
+        output + f"{reason}\n".encode("utf-8"),
+    )
+
+
 def write_remaining_cancellation_evidence(
     gates, source_commit, candidate_digest, evidence_dir
 ):
@@ -641,6 +675,7 @@ def execute_gates(
         started_at = timestamp()
         tool_versions = {"python": platform.python_version()}
         interrupted_signal = None
+        interruption_stage = "gate execution"
         blocked = [
             prerequisite
             for prerequisite in gate["prerequisites"]
@@ -672,33 +707,32 @@ def execute_gates(
                     tool_versions,
                     tool_problem,
                     interrupted_signal,
-                    interrupted_output,
+                    probe_output,
                 ) = probe_tool_versions(gate, signals)
+                interruption_stage = "tool version probe"
+                if interrupted_signal is None:
+                    interrupted_signal = signals.signum
                 if interrupted_signal is not None:
-                    status = "failed"
-                    reason = (
-                        f"runner interrupted by {signal_name(interrupted_signal)} "
-                        "during tool version probe"
-                    )
-                    exit_code = min(255, 128 + interrupted_signal)
-                    output = (interrupted_output or b"") + f"{reason}\n".encode(
-                        "utf-8"
+                    status, reason, exit_code, output = apply_interruption(
+                        probe_output or b"",
+                        interrupted_signal,
+                        interruption_stage,
                     )
                 elif tool_problem:
                     status = "not_run"
                     reason = tool_problem
                     exit_code = EXIT_NOT_RUN
-                    output = f"not_run: {reason}\n".encode("utf-8")
+                    output = (
+                        f"not_run: {reason}\n".encode("utf-8")
+                        + (probe_output or b"")
+                    )
                 elif signals.signum is not None:
                     interrupted_signal = signals.signum
-                    status = "failed"
-                    reason = (
-                        f"runner interrupted by {signal_name(interrupted_signal)} "
-                        "during gate execution"
+                    status, reason, exit_code, output = apply_interruption(
+                        b"", interrupted_signal, interruption_stage
                     )
-                    exit_code = min(255, 128 + interrupted_signal)
-                    output = f"{reason}\n".encode("utf-8")
                 else:
+                    interruption_stage = "gate execution"
                     (
                         status,
                         reason,
@@ -706,16 +740,20 @@ def execute_gates(
                         output,
                         interrupted_signal,
                     ) = run_command(gate, signals)
+                    if interrupted_signal is None:
+                        interrupted_signal = signals.signum
                     if interrupted_signal is not None:
-                        reason = (
-                            f"runner interrupted by {signal_name(interrupted_signal)} "
-                            "during gate execution"
+                        status, reason, exit_code, output = apply_interruption(
+                            output, interrupted_signal, interruption_stage
                         )
-                        exit_code = min(255, 128 + interrupted_signal)
-                        output += f"{reason}\n".encode("utf-8")
                     elif gate["subjectKind"] == "source":
                         source_problem = source_checkout_problem(source_commit)
-                    if source_problem:
+                    if interrupted_signal is None and signals.signum is not None:
+                        interrupted_signal = signals.signum
+                        status, reason, exit_code, output = apply_interruption(
+                            output, interrupted_signal, interruption_stage
+                        )
+                    elif source_problem:
                         status = "failed"
                         if source_problem.startswith("tree is dirty"):
                             reason = "source gate dirtied the checkout during execution"
@@ -737,6 +775,11 @@ def execute_gates(
                 )
             else:
                 reason = f"artifact subject is unavailable; {reason}"
+        if interrupted_signal is None and signals.signum is not None:
+            interrupted_signal = signals.signum
+            status, reason, exit_code, output = apply_interruption(
+                output, interrupted_signal, interruption_stage
+            )
         finished_at = timestamp()
         log_path = output_path(evidence_dir, gate["id"], "log")
         envelope_path = output_path(evidence_dir, gate["id"], "json")
@@ -760,7 +803,7 @@ def execute_gates(
             not gate["required"] or statuses[gate["id"]] == "passed"
             for gate in gates
         ),
-        None,
+        signals.signum,
     )
 
 
@@ -798,13 +841,18 @@ def main(argv=None):
         previous_sigterm = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, signals.receive)
         signal.signal(signal.SIGTERM, signals.receive)
+        interrupted_signal = None
         try:
             passed, interrupted_signal = execute_gates(
                 gates, source_commit, candidate_digest, evidence_dir, signals
             )
+            if interrupted_signal is None:
+                interrupted_signal = signals.signum
         finally:
             signal.signal(signal.SIGINT, previous_sigint)
             signal.signal(signal.SIGTERM, previous_sigterm)
+            if interrupted_signal is None:
+                interrupted_signal = signals.signum
     except GateError as error:
         print(f"run-gates: {error}", file=sys.stderr)
         return EXIT_USAGE

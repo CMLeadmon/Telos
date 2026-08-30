@@ -89,6 +89,42 @@ def run_double_fork(state_dir):
     wait_forever()
 
 
+def run_late_fork_at_exit(state_dir):
+    record_pid(state_dir, "leader")
+    write_file(state_dir, "ready")
+    while not (state_dir / "release").exists():
+        time.sleep(0.001)
+
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.setsid()
+        detach_standard_streams()
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        record_pid(state_dir, "late-child")
+        wait_forever()
+        raise AssertionError("unreachable")
+
+    while not (state_dir / "late-child.pid").exists():
+        time.sleep(0.001)
+
+
+def run_zombie_at_exit(state_dir):
+    record_pid(state_dir, "leader")
+    child_pid = os.fork()
+    if child_pid == 0:
+        record_pid(state_dir, "zombie-child")
+        os._exit(0)
+    while not (state_dir / "zombie-child.pid").exists():
+        time.sleep(0.001)
+    while Path(f"/proc/{child_pid}/stat").exists():
+        stat_bytes = Path(f"/proc/{child_pid}/stat").read_bytes()
+        command_end = stat_bytes.rfind(b")")
+        fields = stat_bytes[command_end + 1 :].split()
+        if fields and fields[0] == b"Z":
+            break
+        time.sleep(0.001)
+
+
 def run_cooperative(state_dir):
     record_pid(state_dir, "leader")
     child_pid = os.fork()
@@ -120,7 +156,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "mode",
-        choices=("timeout", "leader-exit", "setsid", "double-fork", "cooperative"),
+        choices=(
+            "timeout",
+            "leader-exit",
+            "setsid",
+            "double-fork",
+            "late-fork-at-exit",
+            "zombie-at-exit",
+            "cooperative",
+        ),
     )
     parser.add_argument("state_dir", type=Path)
     args = parser.parse_args()
@@ -131,6 +175,8 @@ def main():
         "leader-exit": run_leader_exit,
         "setsid": run_setsid,
         "double-fork": run_double_fork,
+        "late-fork-at-exit": run_late_fork_at_exit,
+        "zombie-at-exit": run_zombie_at_exit,
         "cooperative": run_cooperative,
     }
     runners[args.mode](args.state_dir)
