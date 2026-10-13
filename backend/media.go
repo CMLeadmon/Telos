@@ -168,6 +168,13 @@ func (a *JellyfinAuthorizer) Invalidate() {
 
 // jellyfinAPIResolver resolves item ancestry via the Jellyfin Items API,
 // injecting the admin token server-side.
+//
+// Jellyfin 10.11 answers /Items/{id}/Ancestors with the physical folders only
+// (the library's own directory, then the aggregate root); the library itself (the
+// CollectionFolder whose ItemId is what JELLYFIN_LIBRARY_IDS records) is not in
+// the chain, so matching on ancestor IDs alone authorizes nothing and the whole
+// catalog comes back empty. An ancestor whose path is one of a library's
+// configured locations is therefore also reported as that library's ID.
 type jellyfinAPIResolver struct{}
 
 func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (map[string]resolvedItem, error) {
@@ -194,17 +201,97 @@ func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (
 			ID   string `json:"Id"`
 			Name string `json:"Name"`
 			Type string `json:"Type"`
+			Path string `json:"Path"`
 		}
 		json.NewDecoder(resp.Body).Decode(&ancestors)
 		resp.Body.Close()
 		cancel()
 		ri := resolvedItem{}
+		var libraryIDs []string
 		for _, anc := range ancestors {
 			ri.AncestorIDs = append(ri.AncestorIDs, anc.ID)
+			if anc.Path != "" {
+				libraryIDs = append(libraryIDs, jellyfinLibraryLocations.libraryIDsForPath(ctx, token, anc.Path)...)
+			}
 		}
+		ri.AncestorIDs = append(ri.AncestorIDs, libraryIDs...)
 		out[id] = ri
 	}
 	return out, nil
+}
+
+// libraryLocationIndex maps each Jellyfin library's directories to its ItemId. It
+// is refreshed at most once a minute; a failed refresh keeps the last good map.
+type libraryLocationIndex struct {
+	mu      sync.Mutex
+	fetched time.Time
+	byPath  map[string][]string
+}
+
+const libraryLocationTTL = time.Minute
+
+var jellyfinLibraryLocations = &libraryLocationIndex{}
+
+func cleanLibraryPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	return strings.TrimRight(p, "/")
+}
+
+func (x *libraryLocationIndex) libraryIDsForPath(ctx context.Context, token, path string) []string {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.byPath == nil || time.Since(x.fetched) > libraryLocationTTL {
+		if fresh, ok := fetchLibraryLocations(ctx, token); ok {
+			x.byPath, x.fetched = fresh, time.Now()
+		}
+	}
+	return x.byPath[cleanLibraryPath(path)]
+}
+
+func (x *libraryLocationIndex) reset() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.byPath, x.fetched = nil, time.Time{}
+}
+
+func fetchLibraryLocations(ctx context.Context, token string) (map[string][]string, bool) {
+	reqCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, jellyfinBaseURL+"/Library/VirtualFolders", nil)
+	if err != nil {
+		return nil, false
+	}
+	req.Header.Set("X-Emby-Token", token)
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		return nil, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	var folders []struct {
+		ItemID    string   `json:"ItemId"`
+		Locations []string `json:"Locations"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&folders); err != nil {
+		return nil, false
+	}
+	index := map[string][]string{}
+	for _, folder := range folders {
+		if folder.ItemID == "" {
+			continue
+		}
+		for _, location := range folder.Locations {
+			if key := cleanLibraryPath(location); key != "" {
+				index[key] = append(index[key], folder.ItemID)
+			}
+		}
+	}
+	return index, true
 }
 
 var jellyfinAuthorizer *JellyfinAuthorizer

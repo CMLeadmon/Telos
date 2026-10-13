@@ -2973,7 +2973,10 @@ func handleMediaItems(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if redisClient != nil {
+	// An empty listing is never cached: right after a library is created or Jellyfin
+	// restarts its scan has not finished, and remembering "nothing here" would hide
+	// the media for the whole TTL.
+	if redisClient != nil && len(items) > 0 {
 		_ = redisClient.Set(ctx, cacheKey, string(respJSON), 5*time.Minute).Err()
 	}
 
