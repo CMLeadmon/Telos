@@ -171,6 +171,11 @@ stub "$busy" ss 'case "$*" in *"sport = :80"*) echo "LISTEN 0 511 0.0.0.0:80 0.0
 expect_fail "port 80 in use" "port 80 is already in use" "$busy"
 last_has 'does not fall back to alternate public ports' || fail "the public-port remedy is missing"
 last_has 'port 443 is free' || fail "port 443 was not reported independently"
+own_traefik="$work/own-traefik"; variant "$own_traefik"
+stub "$own_traefik" ss 'case "$*" in *"sport = :80"*|*"sport = :443"*) echo "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*" ;; esac'
+stub "$own_traefik" podman 'case "$1" in --version) echo "podman version 5.0.0" ;; info) echo false ;; ps) echo abc123def456 ;; esac'
+expect_pass "ports held by the node's own running Traefik" "$own_traefik"
+last_has 'held by the running telos-traefik' || fail "a running node's own Traefik was not recognized"
 observe "port 80 busy on a development node" "$busy" TELOS_DEV=1
 last_lacks 'port 80 is already in use' || fail "a development node was held to the public ports"
 

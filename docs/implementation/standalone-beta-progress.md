@@ -126,3 +126,55 @@ suites, product-truth mutations, inventory. Logs: `telos-review/beta-evidence/in
 **Known gaps carried forward:** Task 1b real trust enrollment (needs operator public keys); OCI HTTP smoke is only exercised
 with a fake `podman`; installed-receipt cross-check of runtime descriptors belongs to the Phase 4 collector.
 **Next task and first command:** Phase 2 Task 1 — `bash tests/operations/static_client_test.sh` (red: no `frontend/Dockerfile`).
+
+---
+
+## P2 — clean Linux deployment (Tasks 1–7)
+
+**Task/subpart:** P2-T1 static-client image, T2 Compose/Traefik route split, T3 node configuration CLI, T4 integration discovery,
+T5 guided Jellyfin/Grimmory setup, T6 hosted-browser probe and outage rehearsal, T7 host policy, clean-install drill, runbooks and
+catalog wiring. All locally verified except where "not run" is stated. Nothing is rehearsed on a real host.
+**Baseline commits:** `264f934` → `6574070` (T1/T2) → `80c75bc` (T3) → `924c0b7` (T4) → `6c63c59` (T5) → `d720652` (T6) → `f3d6f5d`
+(preflight policy) → the T7 commit that carries this entry.
+**Implemented files and interface:**
+- T1 `frontend/{Dockerfile,.dockerignore,nginx.conf}`: unprivileged nginx static export, no Node/source/secrets in the runtime stage.
+- T2 `docker-compose.yml` `telos-client` (ingress network only, no ports/volumes/secrets); Traefik `telos-api` (priority 100, `/api/v1`)
+  vs `telos-web` (priority 1) with CSP/HSTS middleware; `scripts/validate-compose.sh` checks `standalone-client`, `route-split`,
+  `setup-overlay`; hermetic renderer `tests/helpers/compose_double/`. Product-truth checker moved to the post-transition wording.
+- T3 `cli/lib/{config.sh,node_config.py}`, `init` (one-way; no `--force`; `--import-env`; `.config.lock`; orphan refusal; signal
+  cleanup), `start` refuses before Compose, `doctor` per-defect repairs, `common.sh` Podman-only `compose` with an absolute pinned
+  provider. Core runs `10001:10001`; `${TELOS_CONFIG_PATH}` mounts read-only at `/run/telos`. Values containing `${` are refused.
+- T4 `backend/integration_config.go` — `validate-integrations`, fixed error vocabulary, no redirects/proxies.
+- T5 `docker-compose.setup.yml` (loopback-only), `telos configure integrations [--setup]` (hidden prompts, stdin-only validation,
+  atomic `set-many`, guaranteed teardown), `documentation/operations/guided-integrations.md`.
+- T6 `scripts/smoke-browser-node.sh` + `scripts/lib/browser_node_smoke.py`, `scripts/rehearse-browser-node.sh`, fixture node
+  `tests/helpers/fake_node_server.py`, `frontend/e2e/{hosted-node,module-outage}.spec.ts`.
+- T7 `cli/lib/preflight.sh` — single host policy for `install.sh` and `telos doctor`: Ubuntu ≥ 24.04 (newer = pass + "not yet a
+  verified combination"), x86-64, kernel ≥ 5.6, Podman ≥ 5.0.0 (rootful in production), podman-compose pin 1.6.0 (dev may warn),
+  public 80/443 free or held by this node's own Traefik; derivatives/other distros/WSL/ARM/Docker-only refused with no best-effort
+  path. `scripts/migrate-audiobooks.sh` uses the shared compose helper. New `scripts/lib/{drill_common,node_observe,clean_install_drill}.py`
+  and a real `scripts/drills/clean-node-install.sh` (no target ⇒ `not_run`; legacy `--candidate-lock/--evidence-out` placeholder
+  behavior preserved for the fail-closed-scripts gate). The collector is a fixed, read-only program piped over strict-host-key SSH;
+  it reduces `node.env` to key names, placeholder flags and an explicit non-secret allowlist. 19 assertions listed in
+  `documentation/operations/clean-install-evidence.md`. `documentation/operations/install.md` rewritten.
+  Bytecode that earlier commits tracked by mistake is untracked and ignored.
+**Checks (exit 0, logs in `telos-review/beta-evidence/index.jsonl`, ids `p2t*`):** `install_test.sh` (mutation-checked: 9/9 policy
+mutations killed), `clean_install_drill_test.py` 25 tests (per-assertion mutation matrix, identity-before-action, verifier≠node,
+ssh argv + stdin delivery through a shim, candidate/rehearsal modes), `node_config_test.sh`, `configure_integrations_test.sh`,
+`runtime_hardening_test.sh` (also with real podman-compose 1.6.0 through a labeled local shim), `browser_node_fixtures_test.sh`
+(with nginx 1.28.3), `static_client_config_test.sh`, `check-product-truth.sh`, inventory.
+**Not run here (no Podman on this host):** `static_client_test.sh` (image build/run), `validate-compose.sh` against real Podman,
+backend checks inside the pinned Go image (host Go 1.26.5 used instead), live Playwright specs (180 skipped), the hosted-node
+spec (`E2E_REQUIRE_LIVE=1`), and every real-host drill.
+**External status:** `clean-install` **not_run** — missing: Ubuntu 24.04 host with verified Podman 5+, public DNS + inbound 80/443,
+a second (verifier) machine, legal media fixtures. **Candidate status:** none.
+**Known gaps and risks:**
+- No verified Podman 5 source for Ubuntu 24.04 is recorded (`install.md` says so); the podman-compose 1.6.0 wheel hash
+  (`98e48af2…`, PyPI) is recorded, the venv recipe is unverified on 24.04.
+- Grimmory `/api/v1/libraries` response shape is the plan's contract, not a live capture (the fixture is labeled SYNTHETIC).
+- `node_observe.py` parses `podman inspect`/`volume ls`/`ss` as documented but was never run against Podman 5; a parse failure
+  fails closed.
+- `npm run check:a11y-evidence` is an intentional fail-closed stub with no owning task, so `frontend-accessibility` and
+  `frontend-quality` cannot pass until an owner decides (Phase 5 guided-record validator is the candidate home).
+**Next task and first command:** Phase 3 — read `docs/superpowers/plans/2026-08-20-standalone-beta-phase-3-desktop-client.md`; first
+red test: device registration reachable without a prior session (`bash scripts/test-backend.sh auth`).

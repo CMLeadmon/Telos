@@ -171,6 +171,12 @@ check_public_ports() {
   preflight_is_production || return 0
   command -v ss >/dev/null 2>&1 || return 0
   local port listeners
+  # On a running node the listener is our own Traefik; that is not a conflict.
+  if command -v podman >/dev/null 2>&1 \
+     && [ -n "$(podman ps --filter name='^telos-traefik$' --filter status=running --format '{{.ID}}' 2>/dev/null)" ]; then
+    pf_ok "public ports 80/443 are held by the running telos-traefik"
+    return 0
+  fi
   for port in 80 443; do
     listeners="$(ss -Hltn "sport = :$port" 2>/dev/null | awk '{print $4}' | sort -u | tr '\n' ' ')"
     if [ -n "$listeners" ]; then
