@@ -53,10 +53,22 @@ cfg_teardown() {
   # Directly through the runtime, by the exact container names this command
   # started: podman-compose 1.6.0 has no `rm` subcommand, so a compose-level removal
   # silently left the loopback ports open. Volumes are never touched.
-  if ! "$runtime" rm -f --ignore -t 10 "${CFG_SETUP_CONTAINERS[@]}" >/dev/null 2>&1; then
+  # A container that is mid-stop (Jellyfin can take longer than the grace period
+  # after its settings change) makes a single attempt fail, so retry, and show the
+  # runtime's own reason if every attempt does.
+  local attempt removal_error
+  removal_error="$(mktemp)"
+  for attempt in 1 2 3; do
+    if "$runtime" rm -f --ignore -t 10 "${CFG_SETUP_CONTAINERS[@]}" >/dev/null 2>"$removal_error"; then
+      status=0
+      break
+    fi
     status=1
-    warn "could not remove the setup containers; run: podman rm -f ${CFG_SETUP_CONTAINERS[*]}"
+  done
+  if [ "$status" -ne 0 ]; then
+    warn "could not remove the setup containers ($(tail -c 300 "$removal_error" | tr '\n' ' ')); run: podman rm -f ${CFG_SETUP_CONTAINERS[*]}"
   fi
+  rm -f "$removal_error"
   "$runtime" network rm -f telos-setup >/dev/null 2>&1 || true
   local port
   for port in "$CFG_JELLYFIN_PORT" "$CFG_GRIMMORY_PORT"; do

@@ -53,6 +53,18 @@ def wait(url, label, seconds=240):
     raise SystemExit(f"{label} did not become reachable")
 
 
+def locate_jellyfin():
+    """A node set up before (guided setup stores Base URL /jellyfin) answers under the prefix."""
+    for base in (JELLYFIN, JELLYFIN + "/jellyfin"):
+        try:
+            with urllib.request.urlopen(base + "/System/Info/Public", timeout=10) as response:
+                if response.read().lstrip()[:1] == b"{":
+                    return base
+        except Exception:
+            continue
+    raise SystemExit("Jellyfin answers neither at / nor under /jellyfin")
+
+
 def jellyfin_session(password):
     reply = call(f"{JELLYFIN}/Users/AuthenticateByName", "POST", {"Username": "rehearsal", "Pw": password}, {"X-Emby-Authorization": AUTH})
     return {"X-Emby-Authorization": AUTH + f', Token="{reply["AccessToken"]}"'}
@@ -85,7 +97,9 @@ def main():
             env[match.group(1)] = match.group(2).strip("'")
     password = "rehearsal-" + os.urandom(8).hex()
 
+    global JELLYFIN
     wait(f"{JELLYFIN}/System/Info/Public", "Jellyfin")
+    JELLYFIN = locate_jellyfin()
     info = call(f"{JELLYFIN}/System/Info/Public")
     key_path = os.path.join(args.out, "jellyfin-key")
     if info.get("StartupWizardCompleted"):
