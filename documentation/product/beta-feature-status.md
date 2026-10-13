@@ -24,13 +24,13 @@ separate account and administration surface.
 
 The beta target is a standalone client/server deployment: headless
 `telos-core` provides the API and internal services, while a hosted browser is
-served by `telos-client` on the same public origin. Hosted-browser delivery is blocked until Phase 2.
-Hosted-browser delivery remains unavailable until that service and the Traefik
-route split exist.
+served by `telos-client` on the same public origin. The static client container
+and the Traefik route split are implemented; evidence from a clean Ubuntu 24.04
+installation is still pending, so this is not yet a certified deployment.
 
 | Delivery boundary | Status |
 |---|---|
-| Hosted-browser delivery | Blocked until Phase 2 |
+| Hosted-browser delivery | implemented-awaiting-evidence |
 | Desktop distribution | Unsigned invite-only beta packages; blocked until Phase 3 evidence |
 | HTTPS trust | Platform-trusted HTTPS only |
 | Browser matrix | Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome |

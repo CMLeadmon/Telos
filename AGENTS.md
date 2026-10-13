@@ -10,7 +10,7 @@ This repository contains the Telos platform: the Go core gateway (`backend/`), t
 
 > **Start with `CLAUDE.md`.** It is maintained against the running code and describes the repository layout, the `telos` CLI, the migration engine, and what is already built. This file covers the durable constraints and the verification suite.
 
-> **Standalone beta Phase 1:** Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`. The default backend build is headless and does not require `backend/out/` or a build tag.
+> **Standalone beta Phase 2:** Production hosted-browser delivery is served by the separate `telos-client` static container; clean-host certification is still pending. The default backend build is headless and does not require `backend/out/` or a build tag.
 
 ---
 

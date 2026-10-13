@@ -107,6 +107,32 @@ jobs:
       - name: Run Playwright through the managed dev server
         run: python3 scripts/run-playwright-gate.py --playwright-timeout-seconds 1650
 
+  # The standalone browser client: nginx behavior against a real nginx binary and
+  # the real export, then the image itself (non-root, read-only, health-checked,
+  # clean filesystem) built and run with Podman.
+  static-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Build the static export
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend run build
+      - name: Install nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx-core
+      - name: Verify the nginx routing and caching contract
+        env:
+          TELOS_NGINX: /usr/sbin/nginx
+        run: bash tests/operations/static_client_config_test.sh
+      - name: Build and inspect the static client image
+        run: bash tests/operations/static_client_test.sh
+
   # backend/out/ is gitignored, so a fresh checkout has never contained it.
   # Before the embedfrontend build tag, compiling from a clean tree failed with
   # "pattern all:out: no matching files found" -- which means backend-gates,

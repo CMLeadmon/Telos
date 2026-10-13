@@ -566,20 +566,27 @@ if not updates.startswith("# Updates.md — SUPERSEDED / HISTORICAL — DO NOT I
 if "Do not follow or implement any LiveKit direction in this file.\n" not in updates:
     fail("historicalPlan", "Updates.md does not prohibit following its LiveKit direction")
 
+browser_realized = isinstance(contract, dict) and contract.get("browserService") in compose_services
+transitional_marker = "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`."
+realized_marker = (
+    "Production hosted-browser delivery is served by the separate `telos-client` static container; "
+    "clean-host certification is still pending."
+)
+browser_marker = realized_marker if browser_realized else transitional_marker
 guide_requirements = {
     "AGENTS.md": [
         "currently through `0023`",
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
-        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+        browser_marker,
     ],
     "CLAUDE.md": [
         "currently through `0023`",
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
-        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+        browser_marker,
     ],
     "frontend/AGENTS.md": [
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
-        "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`.",
+        browser_marker,
     ],
 }
 stale_guide_claim = re.compile(
@@ -595,6 +602,9 @@ for relative, required in guide_requirements.items():
             fail("currentGuides", f"{relative} is missing current Phase 1 marker: {marker}")
     if stale_guide_claim.search(guide):
         fail("currentGuides", f"{relative} retains an embedded-production or tagged-headless claim")
+    stale_marker = transitional_marker if browser_realized else realized_marker
+    if stale_marker in guide:
+        fail("currentGuides", f"{relative} states the browser-delivery state of the other side of the Phase 2 transition")
 
 retention = text("documentation/operations/data-retention.md")
 retention_requirements = [

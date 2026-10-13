@@ -80,6 +80,16 @@ EXPECTED_JOBS = {
             run("python3 scripts/run-playwright-gate.py --playwright-timeout-seconds 1650"),
         ],
     },
+    "static-client": {
+        "min_timeout_minutes": 20,
+        "steps": [
+            CHECKOUT, NODE,
+            run("npm --prefix frontend ci", "npm --prefix frontend run build"),
+            run("sudo apt-get update", "sudo apt-get install -y nginx-core"),
+            {"run": ["bash tests/operations/static_client_config_test.sh"], "env": {"TELOS_NGINX": "/usr/sbin/nginx"}},
+            run("bash tests/operations/static_client_test.sh"),
+        ],
+    },
     "check-headless-build": {
         "steps": [
             CHECKOUT, GO,

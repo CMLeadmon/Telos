@@ -52,12 +52,13 @@ http:
       tls:
         certResolver: letsencrypt
 
-    # Default: other JSON API and the static frontend, 64 KiB edge limit.
-    telos-core:
-      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/`)'
+    # Every other JSON API path, 64 KiB edge limit. Outranks the browser catch-all,
+    # so an unknown /api/ path reaches the gateway's own 404, never the client.
+    telos-api:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/api/v1`)'
       entryPoints:
         - websecure
-      priority: 1
+      priority: 100
       middlewares:
         - telos-inflight
         - telos-json-body
@@ -65,7 +66,35 @@ http:
       tls:
         certResolver: letsencrypt
 
+    # Browser catch-all: the static client container. The only router that does
+    # not target the gateway.
+    telos-web:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/`)'
+      entryPoints:
+        - websecure
+      priority: 1
+      middlewares:
+        - telos-inflight
+        - telos-web-headers
+      service: telos-client
+      tls:
+        certResolver: letsencrypt
+
   middlewares:
+    # Response headers for the static client. The gateway adds these to API
+    # responses itself; the client container is configuration-free, so Traefik
+    # (which knows the public domain) supplies them, including the node's own
+    # wss origin in connect-src for browsers that do not match 'self' to wss.
+    telos-web-headers:
+      headers:
+        contentTypeNosniff: true
+        frameDeny: true
+        referrerPolicy: strict-origin-when-cross-origin
+        permissionsPolicy: "camera=(), geolocation=(), payment=(), usb=(), microphone=()"
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        contentSecurityPolicy: >-
+          default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' wss://{{ env "TELOS_DOMAIN" }}; font-src 'self'; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; upgrade-insecure-requests
     # Edge in-flight ceiling matching the gateway's 128-request admission cap.
     telos-inflight:
       inFlightReq:
@@ -96,3 +125,7 @@ http:
       loadBalancer:
         servers:
           - url: http://telos-core:8080
+    telos-client:
+      loadBalancer:
+        servers:
+          - url: http://telos-client:8080

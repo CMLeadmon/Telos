@@ -1,0 +1,14 @@
+.next
+out
+node_modules
+src-tauri/target
+.env
+.env.*
+*.local
+test-results
+playwright-report
+coverage
+.DS_Store
+*.swp
+.idea
+.vscode

@@ -167,6 +167,32 @@ services:
       retries: 3
       start_period: 20s
 
+  # Static browser client: the exported Next.js app behind unprivileged nginx. It
+  # joins only the ingress network, publishes nothing, mounts nothing and carries
+  # no secret or runtime configuration; every API call stays same-origin through
+  # Traefik to telos-core. Deliberately no depends_on: it has no API dependency.
+  telos-client:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: telos-client
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:size=16m,mode=0750,uid=101,gid=101
+      - /var/run:size=1m,mode=0750,uid=101,gid=101
+    networks:
+      - telos-ingress
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
   postgres:
     image: postgres:16.14-alpine
     container_name: telos-postgres

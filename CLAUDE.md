@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A self-hosted, single-origin "digital sovereignty" platform: a community library for commentary on and storage of media. Four modules — **Chat**, **Stream** (Jellyfin media), **Library** (Grimmory e-books + audiobooks), and **Files** — plus Settings. The canonical list is `MODULES` in `frontend/src/components/AppShell.tsx`; each entry is capability-gated (`view_channel` / `view_media` / `view_library` / `view_files`). Commentary (private-by-default, community-shareable, with replies) attaches to any book, media item, or file. The Go gateway (`backend/`) fronts the bundled API services; the Next.js static export (`frontend/`) is the client artifact for the separate browser service planned in the standalone architecture.
 
-Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`. The default backend build is headless and does not require `backend/out/` or a build tag.
+Production hosted-browser delivery is served by the separate `telos-client` static container; clean-host certification is still pending. The default backend build is headless and does not require `backend/out/` or a build tag.
 
 The **less-is-more redesign (2026-07)** removed voice rooms, LiveKit, Watch Parties, the notification inbox, and My List, and generalized annotations to any media target. That redesign also folded Files into Library behind `?view=`, but **Files has since graduated back to its own top-level module** — `/library?view=files` now redirects *to* `/files`, not the other way around (`frontend/src/app/(shell)/library/page.tsx`). Docs describing voice, Watch Parties, the inbox, My List, or Files-under-Library are historical.
 

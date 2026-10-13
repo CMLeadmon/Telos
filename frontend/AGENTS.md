@@ -8,7 +8,7 @@ Two themes, toggled by `data-theme` on `<html>`: `synthwave` (dark, default) and
 ## Next.js
 This Next.js version is newer than model training data — consult `node_modules/next/dist/docs/` before nontrivial Next.js work. Static export (`output: "export"`, `trailingSlash: true`); no server components at runtime, no API routes, no dynamic routes without `generateStaticParams`.
 
-Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`. The default backend build is headless and does not require `backend/out/` or a build tag. The static export remains a client build artifact, not an embedded Phase 1 production surface.
+Production hosted-browser delivery is served by the separate `telos-client` static container; clean-host certification is still pending. The default backend build is headless and does not require `backend/out/` or a build tag. The static export remains a client build artifact, not an embedded Phase 1 production surface.
 
 ## Layout
 - Routes: `/` (landing), `/login`, and the `(shell)/` group — `/chat`, `/stream`, `/library`, `/files`, `/settings` — sharing `AppShell` (topbar · rail · arena · tabbar).

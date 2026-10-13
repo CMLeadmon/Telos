@@ -1,0 +1,98 @@
+http:
+  routers:
+    # Login: edge rate limit (10/min per IP, burst 5) plus the auth-body class.
+    telos-login:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && Path(`/api/v1/auth/login`)'
+      entryPoints:
+        - websecure
+      priority: 260
+      middlewares:
+        - telos-inflight
+        - telos-login-rate
+        - telos-auth-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Auth JSON: strict 16 KiB edge limit before the gateway.
+    telos-auth:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/api/v1/auth`)'
+      entryPoints:
+        - websecure
+      priority: 250
+      middlewares:
+        - telos-inflight
+        - telos-auth-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Streaming media and uploads: never spool a request body at the edge —
+    # the gateway authorizes and admits first, then bounds the stream itself.
+    telos-streaming:
+      # Every line must stay at this exact indentation: YAML only folds newlines
+      # into spaces for lines level with the first one, and Traefik's rule
+      # parser rejects an embedded newline ("expected ')', found newline").
+      rule: >-
+        Host(`{{ env "TELOS_DOMAIN" }}`) &&
+        (
+        PathPrefix(`/api/v1/stream`) ||
+        PathPrefix(`/api/v1/media`) ||
+        PathPrefix(`/api/v1/files`) ||
+        PathRegexp(`^/api/v1/users/[^/]+/avatar$`) ||
+        Path(`/api/v1/users/me/avatar`) ||
+        PathRegexp(`^/api/v1/library/books/[^/]+/(content|cover)$`)
+        )
+      entryPoints:
+        - websecure
+      priority: 200
+      middlewares:
+        - telos-inflight
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+    # Default: other JSON API and the static frontend, 64 KiB edge limit.
+    telos-core:
+      rule: 'Host(`{{ env "TELOS_DOMAIN" }}`) && PathPrefix(`/`)'
+      entryPoints:
+        - websecure
+      priority: 1
+      middlewares:
+        - telos-inflight
+        - telos-json-body
+      service: telos-core
+      tls:
+        certResolver: letsencrypt
+
+  middlewares:
+    # Edge in-flight ceiling matching the gateway's 128-request admission cap.
+    telos-inflight:
+      inFlightReq:
+        amount: 128
+    # Login throttle at the edge: 10 requests/minute per source IP, burst 5.
+    # The gateway's atomic Redis limiter is the authoritative second layer.
+    telos-login-rate:
+      rateLimit:
+        average: 10
+        period: 1m
+        burst: 5
+        sourceCriterion:
+          ipStrategy:
+            depth: 1
+    # 16 KiB auth JSON, held in memory (no disk spool).
+    telos-auth-body:
+      buffering:
+        maxRequestBodyBytes: 16384
+        memRequestBodyBytes: 16384
+    # 64 KiB other JSON, held in memory.
+    telos-json-body:
+      buffering:
+        maxRequestBodyBytes: 65536
+        memRequestBodyBytes: 65536
+
+  services:
+    telos-core:
+      loadBalancer:
+        servers:
+          - url: http://telos-core:8080

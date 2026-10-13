@@ -20,7 +20,7 @@ done
 
 node "$repo_root/tests/operations/dev_server_proxy_test.mjs"
 
-copy_fixture() {
+copy_fixture_raw() {
   local fixture="$1"
   local relative
   local -a files=(
@@ -54,6 +54,50 @@ copy_fixture() {
   mkdir -p "$fixture/documentation/product"
   cp "$repo_root/documentation/product/beta-contract.json" \
     "$fixture/documentation/product/beta-contract.json"
+}
+
+# The repository is past the Phase 2 transition: telos-client exists, the route
+# split is in place and the guides/status matrix say so. Most mutations below are
+# written against the earlier transitional state (client absent, blocked markers),
+# which realize_client() builds on top of. copy_fixture therefore starts from the
+# live files and rolls the client topology and wording back; copy_realized_fixture
+# keeps the live state for tests of the real post-transition contract.
+unrealize_client() {
+  local fixture="$1"
+  python3 - "$fixture" "$repo_root/tests/fixtures/product-truth/transitional-routes.yaml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+fixture, transitional_routes = Path(sys.argv[1]), Path(sys.argv[2])
+compose = (fixture / "docker-compose.yml").read_text(encoding="utf-8")
+compose = re.sub(r"  # Static browser client:.*?(?=^  postgres:\n)", "", compose, flags=re.S | re.M)
+(fixture / "docker-compose.yml").write_text(compose, encoding="utf-8")
+(fixture / "config/dynamic/routes.yaml").write_text(transitional_routes.read_text(encoding="utf-8"), encoding="utf-8")
+realized = ("Production hosted-browser delivery is served by the separate `telos-client` static container; "
+            "clean-host certification is still pending.")
+blocked = "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`."
+for relative in ("AGENTS.md", "CLAUDE.md", "frontend/AGENTS.md"):
+    path = fixture / relative
+    path.write_text(path.read_text(encoding="utf-8").replace(realized, blocked), encoding="utf-8")
+status_path = fixture / "documentation/product/beta-feature-status.md"
+status = status_path.read_text(encoding="utf-8")
+status = status.replace(
+    "served by `telos-client` on the same public origin. The static client container\nand the Traefik route split are implemented; evidence from a clean Ubuntu 24.04\ninstallation is still pending, so this is not yet a certified deployment.\n",
+    "served by `telos-client` on the same public origin. Hosted-browser delivery is blocked until Phase 2.\nHosted-browser delivery remains unavailable until that service and the Traefik\nroute split exist.\n",
+)
+status = status.replace("| Hosted-browser delivery | implemented-awaiting-evidence |", "| Hosted-browser delivery | Blocked until Phase 2 |")
+status_path.write_text(status, encoding="utf-8")
+PY
+}
+
+copy_fixture() {
+  copy_fixture_raw "$1"
+  unrealize_client "$1"
+}
+
+copy_realized_fixture() {
+  copy_fixture_raw "$1"
 }
 
 assert_rejected() {
@@ -336,6 +380,15 @@ routes = routes.replace(
 routes += "\n    telos-client:\n      loadBalancer:\n        servers:\n          - url: http://telos-client:8080\n"
 with open(routes_path, "w", encoding="utf-8") as destination:
     destination.write(routes)
+from pathlib import Path
+
+fixture_root = Path(compose_path).parent
+blocked_guide = "Production hosted-browser delivery is blocked until Phase 2 adds `telos-client`."
+realized_guide = ("Production hosted-browser delivery is served by the separate `telos-client` static container; "
+                  "clean-host certification is still pending.")
+for relative in ("AGENTS.md", "CLAUDE.md", "frontend/AGENTS.md"):
+    guide = fixture_root / relative
+    guide.write_text(guide.read_text(encoding="utf-8").replace(blocked_guide, realized_guide), encoding="utf-8")
 with open(status_path, encoding="utf-8") as source:
     status = source.read()
 with open(status_path, "w", encoding="utf-8") as destination:
@@ -364,6 +417,49 @@ realized_client="$fixture_root/realized-client"
 copy_fixture "$realized_client"
 realize_client "$realized_client"
 assert_accepted "$realized_client"
+
+# The live post-transition repository state, without any rewriting.
+live_realized="$fixture_root/live-realized"
+copy_realized_fixture "$live_realized"
+assert_accepted "$live_realized"
+
+live_missing_status="$fixture_root/live-missing-status"
+copy_realized_fixture "$live_missing_status"
+sed -i 's/| implemented-awaiting-evidence |/| Blocked until Phase 2 |/' "$live_missing_status/documentation/product/beta-feature-status.md"
+assert_rejected "live-missing-status" "browserService" "$live_missing_status"
+
+live_stale_guide="$fixture_root/live-stale-guide"
+copy_realized_fixture "$live_stale_guide"
+sed -i 's/is served by the separate `telos-client` static container; clean-host certification is still pending\./is blocked until Phase 2 adds `telos-client`./' "$live_stale_guide/CLAUDE.md"
+assert_rejected "live-stale-guide" "currentGuides" "$live_stale_guide"
+
+live_no_client="$fixture_root/live-no-client"
+copy_realized_fixture "$live_no_client"
+python3 - "$live_no_client/docker-compose.yml" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+open(path, "w", encoding="utf-8").write(re.sub(r"  # Static browser client:.*?(?=^  postgres:\n)", "", text, flags=re.S | re.M))
+PY
+assert_rejected "live-no-client" "browserService" "$live_no_client"
+
+live_catch_all_core="$fixture_root/live-catch-all-core"
+copy_realized_fixture "$live_catch_all_core"
+python3 - "$live_catch_all_core/config/dynamic/routes.yaml" <<'PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+open(path, "w", encoding="utf-8").write(text.replace("      service: telos-client\n      tls:", "      service: telos-core\n      tls:", 1))
+PY
+assert_rejected "live-catch-all-core" "browserService" "$live_catch_all_core"
+
+live_wrong_client_url="$fixture_root/live-wrong-client-url"
+copy_realized_fixture "$live_wrong_client_url"
+sed -i 's#http://telos-client:8080#http://telos-client:9090#' "$live_wrong_client_url/config/dynamic/routes.yaml"
+assert_rejected "live-wrong-client-url" "browserService" "$live_wrong_client_url"
 
 client_double_quoted_api_rule="$fixture_root/client-double-quoted-api-rule"
 copy_fixture "$client_double_quoted_api_rule"
