@@ -1,0 +1,118 @@
+{
+  "$defs": {
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "fileRef": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256Hex"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "natural": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "safePath": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._@+=-]+(?:/[A-Za-z0-9._@+=-]+)*$",
+      "type": "string"
+    },
+    "sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[1-9][0-9]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactIndexSubset": {
+      "items": {
+        "$ref": "#/$defs/fileRef"
+      },
+      "type": "array"
+    },
+    "images": {
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "migrations": {
+      "additionalProperties": false,
+      "properties": {
+        "checksumSetDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "current": {
+          "$ref": "#/$defs/natural"
+        },
+        "max": {
+          "$ref": "#/$defs/natural"
+        },
+        "min": {
+          "$ref": "#/$defs/natural"
+        }
+      },
+      "required": [
+        "checksumSetDigest",
+        "current",
+        "max",
+        "min"
+      ],
+      "type": "object"
+    },
+    "predecessorIds": {
+      "items": {
+        "$ref": "#/$defs/digest"
+      },
+      "type": "array",
+      "uniqueItems": true
+    },
+    "rollbackCompatibleThrough": {
+      "$ref": "#/$defs/natural"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceCommit": {
+      "$ref": "#/$defs/commit"
+    },
+    "version": {
+      "$ref": "#/$defs/version"
+    }
+  },
+  "required": [
+    "artifactIndexSubset",
+    "images",
+    "migrations",
+    "predecessorIds",
+    "rollbackCompatibleThrough",
+    "schemaVersion",
+    "sourceCommit",
+    "version"
+  ],
+  "title": "TelosGenerationManifest",
+  "type": "object"
+}

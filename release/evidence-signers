@@ -1,0 +1,2 @@
+# Reviewed evidence signers (OpenSSH allowed-signers; Telos beta namespaces).
+# Add keys only with: scripts/enroll-release-signer.py --purpose evidence --principal PRINCIPAL --public-key-file FILE

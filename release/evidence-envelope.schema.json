@@ -32,7 +32,20 @@
         "npm": {"type": "string", "minLength": 1},
         "npx": {"type": "string", "minLength": 1},
         "podman": {"type": "string", "minLength": 1},
-        "git": {"type": "string", "minLength": 1}
+        "git": {"type": "string", "minLength": 1},
+        "restic": {"type": "string", "minLength": 1},
+        "k6": {"type": "string", "minLength": 1},
+        "syft": {"type": "string", "minLength": 1},
+        "trivy": {"type": "string", "minLength": 1},
+        "gitleaks": {"type": "string", "minLength": 1},
+        "skopeo": {"type": "string", "minLength": 1},
+        "promtool": {"type": "string", "minLength": 1},
+        "ssh-keygen": {"type": "string", "minLength": 1},
+        "cargo": {"type": "string", "minLength": 1},
+        "rustc": {"type": "string", "minLength": 1},
+        "go": {"type": "string", "minLength": 1},
+        "buildah": {"type": "string", "minLength": 1},
+        "gh": {"type": "string", "minLength": 1}
       }
     },
     "subject": {

@@ -1,1 +1,2 @@
-release@telos.local ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...
+# Reviewed release tag signers (OpenSSH allowed-signers; namespace git).
+# Add keys only with: scripts/enroll-release-signer.py --purpose tag --principal PRINCIPAL --public-key-file FILE

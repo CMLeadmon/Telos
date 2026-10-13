@@ -183,6 +183,8 @@ jobs:
         run: bash tests/operations/accumulated_suite_test.sh
       - name: Verify platform scope
         run: python3 tests/operations/platform_scope_test.py
+      - name: Verify release graph, trust anchors, runner v2 and frozen artifacts
+        run: bash tests/operations/release_test.sh
       - name: Verify product-truth mutations
         run: bash tests/operations/product_truth_test.sh
       - name: Check product truth

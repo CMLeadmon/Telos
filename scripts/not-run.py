@@ -11,6 +11,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "lib"))
 import evidence
+import release_graph
 
 
 EXIT_NOT_RUN = 3
@@ -57,12 +58,35 @@ def write_evidence(args, output):
         raise ValueError(f"evidence writer rejected the not_run envelope: {error}") from error
 
 
+def write_result(args):
+    """Write the closed producer result the one runner consumes (never an envelope)."""
+    source_commit, candidate_digest = read_candidate_snapshot(args.candidate_lock)
+    record = {
+        "schemaVersion": 1,
+        "recordKind": "candidate",
+        "gateId": args.gate_id,
+        "sourceCommit": source_commit,
+        "candidateLockDigest": candidate_digest,
+        "status": "not_run",
+        "reason": args.reason,
+        "subjectFile": None,
+        "attachments": [],
+        "toolVersions": {"python": platform.python_version()},
+    }
+    try:
+        release_graph.validate_record("gate-result", record)
+        release_graph.write_atomic_exclusive(args.result_out, release_graph.canonical_bytes(record))
+    except release_graph.GraphError as error:
+        raise ValueError(f"result writer rejected the not_run record: {error}") from error
+
+
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gate-id", required=True)
     parser.add_argument("--reason", required=True)
     parser.add_argument("--candidate-lock")
     parser.add_argument("--evidence-out")
+    parser.add_argument("--result-out")
     parser.add_argument("original_argv", nargs=argparse.REMAINDER)
     return parser
 
@@ -70,21 +94,36 @@ def build_parser():
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     parser = build_parser()
-    if "--" not in argv:
+    runner_mode = "--" not in argv and "--result-out" in argv
+    if "--" not in argv and not runner_mode:
         parser.error("an original argv array must follow --")
     args = parser.parse_args(argv)
+    if runner_mode:
+        # The gate runner appends --candidate-lock/--result-out itself, so the
+        # recorded command is this invocation rather than a caller-supplied argv.
+        args.original_argv = ["scripts/not-run.py", *argv]
     if args.original_argv[:1] == ["--"]:
         args.original_argv = args.original_argv[1:]
     if not args.original_argv:
         parser.error("an original argv array must follow --")
     if args.evidence_out and not args.candidate_lock:
         parser.error("--candidate-lock is required with --evidence-out")
+    if args.result_out and not args.candidate_lock:
+        parser.error("--candidate-lock is required with --result-out")
+    if args.evidence_out and args.result_out:
+        parser.error("--evidence-out and --result-out are mutually exclusive")
     output = f"not_run: {args.reason}\n".encode("utf-8")
     if args.evidence_out:
         try:
             write_evidence(args, output)
         except ValueError as error:
             print(f"not_run: cannot write evidence: {error}", file=sys.stderr)
+            return 1
+    if args.result_out:
+        try:
+            write_result(args)
+        except ValueError as error:
+            print(f"not_run: cannot write result: {error}", file=sys.stderr)
             return 1
     sys.stderr.buffer.write(output)
     sys.stderr.buffer.flush()

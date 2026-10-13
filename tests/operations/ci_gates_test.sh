@@ -846,7 +846,7 @@ import sys
 
 with open(sys.argv[1], encoding="utf-8") as input_file:
     catalog = json.load(input_file)
-assert catalog.get("schemaVersion") == 1, catalog
+assert catalog.get("schemaVersion") == 2, catalog
 assert "gatesPassed" not in catalog, catalog
 ids = [gate["id"] for gate in catalog["gates"]]
 assert len(ids) == len(set(ids)), "repository catalog has duplicate IDs"
@@ -864,7 +864,7 @@ required_current_local = {
     "backend-headless-build", "api-contract-drift",
     "operator-cli-linux-amd64", "operator-cli-linux-arm64",
     "frontend-playwright", "documentation-citation-hygiene",
-    "documentation-placeholder-hygiene", "platform-scope",
+    "documentation-placeholder-hygiene", "platform-scope", "release-tooling",
 }
 missing = sorted(required_current_local - set(ids))
 assert not missing, f"repository catalog is missing current local gates: {missing}"
@@ -1012,6 +1012,7 @@ REQUIRED_COMMANDS = [
     "bash tests/operations/ci_gates_test.sh",
     "bash tests/operations/accumulated_suite_test.sh",
     "python3 tests/operations/platform_scope_test.py",
+    "bash tests/operations/release_test.sh",
     "bash tests/operations/product_truth_test.sh",
     "bash scripts/check-product-truth.sh",
     "bash scripts/check-release-truth.sh",
@@ -2385,6 +2386,18 @@ required_inventory="$(bash "$repo_root/scripts/verify-clean-checkout.sh" --list-
   exit 1
 }
 for inventory_path in \
+  release/hash-graph.md release/artifact-index.schema.json release/release-manifest.schema.json \
+  release/candidate-lock.schema.json release/generation-manifest.schema.json \
+  release/installed-generation.schema.json release/artifact-identity.schema.json \
+  release/gate-result.schema.json release/observed-subject.schema.json release/guided-smoke.schema.json \
+  release/evidence-index.schema.json release/certification.schema.json release/release-review.schema.json \
+  release/telos-tag-signers release/evidence-signers \
+  scripts/lib/release_graph.py scripts/lib/schema_check.py scripts/lib/gate_producers.py scripts/lib/signing.py \
+  scripts/enroll-release-signer.py scripts/verify-frozen-artifact.py \
+  tests/operations/release_test.sh tests/operations/release_graph_test.py \
+  tests/operations/signer_trust_test.sh tests/operations/signer_trust_test.py \
+  tests/operations/gate_runner_v2_test.py tests/operations/frozen_artifact_test.py \
+  tests/fixtures/gates/fixture_producer.py \
   .github/workflows/ci.yml \
   documentation/product/platform-scope.md \
   scripts/run-playwright-gate.py \

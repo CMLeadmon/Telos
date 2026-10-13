@@ -1,9 +1,86 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "TelosArtifactIndex",
-  "type": "object",
-  "properties": {
-    "artifacts": { "type": "array" }
+  "$defs": {
+    "natural": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "nullableDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "safePath": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._@+=-]+(?:/[A-Za-z0-9._@+=-]+)*$",
+      "type": "string"
+    },
+    "sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    }
   },
-  "required": ["artifacts"]
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "$ref": "#/$defs/nullableDigest"
+          },
+          "kind": {
+            "enum": [
+              "oci-image",
+              "desktop",
+              "static-client",
+              "source",
+              "sbom",
+              "config",
+              "generation",
+              "migrations"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/safePath"
+          },
+          "platform": {
+            "enum": [
+              "linux/amd64",
+              "linux-x86_64",
+              "any"
+            ]
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256Hex"
+          },
+          "size": {
+            "$ref": "#/$defs/natural"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "kind",
+          "path",
+          "platform",
+          "sha256",
+          "size"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schemaVersion": {
+      "const": 1
+    }
+  },
+  "required": [
+    "artifacts",
+    "schemaVersion"
+  ],
+  "title": "TelosArtifactIndex",
+  "type": "object"
 }

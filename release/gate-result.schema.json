@@ -1,0 +1,213 @@
+{
+  "$defs": {
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "gateId": {
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "nullableDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "safePath": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._@+=-]+(?:/[A-Za-z0-9._@+=-]+)*$",
+      "type": "string"
+    },
+    "sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "toolVersions": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "bash": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "buildah": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "cargo": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gh": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "git": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "gitleaks": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "go": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "k6": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "node": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "npm": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "npx": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "podman": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "promtool": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "python": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "python3": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "restic": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "rustc": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "sh": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "skopeo": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "ssh-keygen": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "syft": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "trivy": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "attachments": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "enum": [
+              "subject",
+              "report",
+              "guided-record",
+              "signature",
+              "artifact-identity"
+            ]
+          },
+          "path": {
+            "$ref": "#/$defs/safePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256Hex"
+          }
+        },
+        "required": [
+          "kind",
+          "path",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "candidateLockDigest": {
+      "$ref": "#/$defs/nullableDigest"
+    },
+    "gateId": {
+      "$ref": "#/$defs/gateId"
+    },
+    "reason": {
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+    },
+    "recordKind": {
+      "enum": [
+        "rehearsal",
+        "candidate"
+      ]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceCommit": {
+      "$ref": "#/$defs/commit"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "not_run"
+      ]
+    },
+    "subjectFile": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._@+=-]+(?:/[A-Za-z0-9._@+=-]+)*$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "toolVersions": {
+      "$ref": "#/$defs/toolVersions"
+    }
+  },
+  "required": [
+    "attachments",
+    "candidateLockDigest",
+    "gateId",
+    "reason",
+    "recordKind",
+    "schemaVersion",
+    "sourceCommit",
+    "status",
+    "subjectFile",
+    "toolVersions"
+  ],
+  "title": "TelosGateResult",
+  "type": "object"
+}

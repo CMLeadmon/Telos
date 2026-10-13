@@ -89,3 +89,40 @@ api drift, operator CLI builds) cannot run through the runner on this host (no P
 host Go. Playwright login/WebKit race fixed in tests, not by retries.
 **Commit(s):** see `git log --oneline standalone-beta-impl`.
 **Next task and first command:** P5-T1a — `python3 -m unittest tests/operations/release_graph_test.py` (red first).
+
+## P5-T1a / P5-T4a — release graph, trust anchors, catalog v2 runner
+
+**Task/subpart:** P5-T1a (schemas, canonical graph, trust tooling) and P5-T4a.1–4a.6 (catalog v2, producer plumbing, subjects,
+tool allowlist, prior-evidence reuse); 4a.7 verified. Task 1b (real key enrollment) is deliberately not done.
+**Baseline commit and working-tree exceptions:** `a7f27b1`; tree held only this packet.
+**Implemented files and interface:**
+- `scripts/lib/schema_check.py` — fail-closed JSON-Schema subset (unsupported keywords are rejected, not ignored).
+- `release/*.schema.json` — 12 closed schemas: artifact-index, release-manifest, candidate-lock, generation-manifest,
+  installed-generation, artifact-identity, gate-result, observed-subject (runtime/external-host/artifact), guided-smoke,
+  evidence-index, certification, release-review. `release/hash-graph.md` rewritten to the acyclic graph.
+- `scripts/lib/release_graph.py` — canonical bytes (sorted keys, no floats/NaN/duplicates/BOM, one LF), `sha256:` vs raw digests,
+  symlink-free path resolution, exclusive atomic writes, builders (`build-index|manifest|candidate-lock`), `verify`, `validate`,
+  gate-result directory verification, subject↔result identity checks.
+- `scripts/enroll-release-signer.py` + `scripts/lib/signing.py` — fingerprint-confirmed enrollment of ssh-ed25519/sk-ed25519
+  public keys bound to purpose namespaces (`git`, `telos-beta-{evidence,certification,review}-v1`, `telos-guided-smoke-v1`).
+  `release/telos-release.pub` removed; the fabricated-ellipsis `telos-tag-signers` entry removed; `--verify-files` exits 3
+  until a reviewed key exists.
+- `ci/phase-gates.json` is **schemaVersion 2** (61 gates + new `release-tooling`): `subjectSelector`, `maxAgeHours`
+  (168 default; 72 runtime-hardening/host-exposure/separate-host-restore/upgrade-rollback; 24 candidate-supply-chain),
+  `requiredPlatforms`. `image-lock` and `supply-chain-policy` are source gates; producer placeholders drop the legacy `-- name` tail.
+- `scripts/run-gates.py` + `scripts/lib/gate_producers.py` — v1 stays parseable; v2 adds producer execution, result/subject
+  verification (artifact bytes vs the frozen index, runtime manifest digests vs the frozen generation descriptor with config
+  ID ≠ manifest digest accepted, host record hashes), closed `--inputs` manifest, `--prior-evidence-dir`, cross-scope
+  prerequisites never executed, stop-after-first-required-failure, `beta-certification` unschedulable, fixture subject = output
+  digest. `TELOS_GATE_ID` added to the shared contract.
+- `scripts/lib/evidence.py` + envelope schema — tool allowlist extended by exactly the 13 agreed tools; envelope stays v2.
+- `scripts/not-run.py` and 21 placeholder wrappers accept `--result-out` and take the gate id from the runner.
+- `scripts/verify-frozen-artifact.py` — `static-client-image` / `desktop-builds` adapter (OCI digest, non-root, port, labels,
+  forbidden content, ELF AppImage + identity sidecar; loads/runs but never builds; no podman ⇒ `not_run`).
+**Checks (exit 0):** `release_graph_test.py` 41 tests, `signer_trust_test.py` 17, `gate_runner_v2_test.py` 54,
+`frozen_artifact_test.py` 16, existing `run_gates_test.py` 10, `ci_gates_test.sh`, accumulated/wrapper/envelope/scope/contract
+suites, product-truth mutations, inventory. Logs: `telos-review/beta-evidence/index.jsonl`.
+**External status:** not needed (fixture ephemeral keys only). **Candidate status:** not frozen.
+**Known gaps carried forward:** Task 1b real trust enrollment (needs operator public keys); OCI HTTP smoke is only exercised
+with a fake `podman`; installed-receipt cross-check of runtime descriptors belongs to the Phase 4 collector.
+**Next task and first command:** Phase 2 Task 1 — `bash tests/operations/static_client_test.sh` (red: no `frontend/Dockerfile`).

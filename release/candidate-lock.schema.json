@@ -1,0 +1,52 @@
+{
+  "$defs": {
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "version": {
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-beta\\.[1-9][0-9]*$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifactIndexDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "artifacts": {
+      "additionalProperties": {
+        "$ref": "#/$defs/digest"
+      },
+      "minProperties": 1,
+      "type": "object"
+    },
+    "releaseManifestDigest": {
+      "$ref": "#/$defs/digest"
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sourceCommit": {
+      "$ref": "#/$defs/commit"
+    },
+    "version": {
+      "$ref": "#/$defs/version"
+    }
+  },
+  "required": [
+    "artifactIndexDigest",
+    "artifacts",
+    "releaseManifestDigest",
+    "schemaVersion",
+    "sourceCommit",
+    "version"
+  ],
+  "title": "TelosCandidateLock",
+  "type": "object"
+}

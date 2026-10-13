@@ -23,6 +23,8 @@ STATUSES = ("passed", "failed", "not_run")
 SUBJECT_KINDS = ("source", "artifact", "runtime", "external-host", "fixture")
 TOOL_VERSION_KEYS = (
     "python", "bash", "sh", "python3", "node", "npm", "npx", "podman", "git",
+    "restic", "k6", "syft", "trivy", "gitleaks", "skopeo", "promtool",
+    "ssh-keygen", "cargo", "rustc", "go", "buildah", "gh",
 )
 SHA256_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 GATE_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")

@@ -1,0 +1,267 @@
+{
+  "$defs": {
+    "commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "type": "string"
+    },
+    "digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "fileRef": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/safePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256Hex"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "gateId": {
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "type": "string"
+    },
+    "name": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+    },
+    "nullableDigest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "safePath": {
+      "maxLength": 512,
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._@+=-]+(?:/[A-Za-z0-9._@+=-]+)*$",
+      "type": "string"
+    },
+    "sha256Hex": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "timestamp": {
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "bootId": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "type": "string"
+        },
+        "candidateLockDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "generationReceiptDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "hostId": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "const": "runtime"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "runtime": {
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "const": "podman"
+            },
+            "rootless": {
+              "const": false
+            },
+            "version": {
+              "$ref": "#/$defs/name"
+            }
+          },
+          "required": [
+            "name",
+            "rootless",
+            "version"
+          ],
+          "type": "object"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "services": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "containerId": {
+                "pattern": "^[0-9a-f]{12,64}$",
+                "type": "string"
+              },
+              "imageId": {
+                "$ref": "#/$defs/sha256Hex"
+              },
+              "manifestDigest": {
+                "$ref": "#/$defs/digest"
+              },
+              "name": {
+                "pattern": "^[a-z0-9][a-z0-9_.-]{0,62}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "containerId",
+              "imageId",
+              "manifestDigest",
+              "name"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "required": [
+        "bootId",
+        "candidateLockDigest",
+        "generationReceiptDigest",
+        "hostId",
+        "kind",
+        "observedAt",
+        "runtime",
+        "schemaVersion",
+        "services",
+        "sourceCommit"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "candidateLockDigest": {
+          "$ref": "#/$defs/nullableDigest"
+        },
+        "hosts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "arch": {
+                "$ref": "#/$defs/name"
+              },
+              "hostId": {
+                "maxLength": 80,
+                "minLength": 3,
+                "pattern": "^(sha256:[0-9a-f]{64}|[A-Za-z0-9._-]{3,64})$",
+                "type": "string"
+              },
+              "identityMethod": {
+                "enum": [
+                  "machine-id-sha256",
+                  "tester-assigned"
+                ]
+              },
+              "os": {
+                "$ref": "#/$defs/name"
+              },
+              "osVersion": {
+                "$ref": "#/$defs/name"
+              }
+            },
+            "required": [
+              "arch",
+              "hostId",
+              "identityMethod",
+              "os",
+              "osVersion"
+            ],
+            "type": "object"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "kind": {
+          "const": "external-host"
+        },
+        "observedAt": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "purpose": {
+          "$ref": "#/$defs/gateId"
+        },
+        "records": {
+          "items": {
+            "$ref": "#/$defs/fileRef"
+          },
+          "type": "array"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "required": [
+        "candidateLockDigest",
+        "hosts",
+        "kind",
+        "observedAt",
+        "purpose",
+        "records",
+        "schemaVersion",
+        "sourceCommit"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "artifactDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "candidateLockDigest": {
+          "$ref": "#/$defs/digest"
+        },
+        "kind": {
+          "const": "artifact"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "selector": {
+          "maxLength": 520,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sourceCommit": {
+          "$ref": "#/$defs/commit"
+        }
+      },
+      "required": [
+        "artifactDigest",
+        "candidateLockDigest",
+        "kind",
+        "schemaVersion",
+        "selector",
+        "sourceCommit"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "TelosObservedSubject"
+}

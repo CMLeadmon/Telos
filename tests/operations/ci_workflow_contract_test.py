@@ -110,6 +110,7 @@ EXPECTED_JOBS = {
             run("bash tests/operations/ci_gates_test.sh"),
             run("bash tests/operations/accumulated_suite_test.sh"),
             run("python3 tests/operations/platform_scope_test.py"),
+            run("bash tests/operations/release_test.sh"),
             run("bash tests/operations/product_truth_test.sh"),
             run("bash scripts/check-product-truth.sh"),
             run("bash scripts/check-release-truth.sh"),
