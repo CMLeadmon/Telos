@@ -275,26 +275,71 @@ func securityHeaders(next http.Handler, cfg SecurityConfig) http.Handler {
 }
 
 // corsMiddleware allows credentialed cross-origin calls only from the finite
-// development allowlist or configured TELOS_ALLOWED_ORIGINS. Production
-// emits no permissive CORS headers unless TELOS_ALLOWED_ORIGINS is set.
+// development allowlist or the configured TELOS_ALLOWED_ORIGINS (the beta pair is
+// the desktop shell's exact tauri://localhost and http://tauri.localhost).
+// Production emits no CORS headers at all unless TELOS_ALLOWED_ORIGINS is set.
+//
+// A preflight is approved only when the origin is approved AND every requested
+// header and the requested method are ones the API actually uses; nothing is
+// reflected. An approved origin therefore cannot widen the header surface by
+// asking for it.
 func corsMiddleware(next http.Handler, cfg SecurityConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if cfg.Environment == "development" || len(cfg.AllowedOrigins) > 0 {
-			origin := r.Header.Get("Origin")
-			if origin != "" && originAllowed(cfg, origin) {
-				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Credentials", "true")
-				w.Header().Set("Vary", "Origin")
-				if r.Method == http.MethodOptions {
-					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-					w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-					w.WriteHeader(http.StatusNoContent)
-					return
-				}
+		if cfg.Environment != "development" && len(cfg.AllowedOrigins) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		h := w.Header()
+		h.Add("Vary", "Origin")
+		origin := r.Header.Get("Origin")
+		if origin == "" || !originAllowed(cfg, origin) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		isPreflight := r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != ""
+		if !isPreflight {
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			next.ServeHTTP(w, r)
+			return
+		}
+		h.Add("Vary", "Access-Control-Request-Headers")
+		h.Add("Vary", "Access-Control-Request-Method")
+		if corsPreflightAcceptable(r) {
+			h.Set("Access-Control-Allow-Origin", origin)
+			h.Set("Access-Control-Allow-Credentials", "true")
+			h.Set("Access-Control-Allow-Methods", corsAllowedMethods)
+			h.Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+			h.Set("Access-Control-Max-Age", "600")
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+const corsAllowedMethods = "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS"
+
+var corsAllowedRequestHeaders = map[string]struct{}{"authorization": {}, "content-type": {}}
+
+// corsPreflightAcceptable reports whether the requested method and every
+// requested header are within the API's actual surface.
+func corsPreflightAcceptable(r *http.Request) bool {
+	switch strings.ToUpper(strings.TrimSpace(r.Header.Get("Access-Control-Request-Method"))) {
+	case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE":
+	default:
+		return false
+	}
+	for _, value := range r.Header.Values("Access-Control-Request-Headers") {
+		for _, name := range strings.Split(value, ",") {
+			name = strings.ToLower(strings.TrimSpace(name))
+			if name == "" {
+				continue
+			}
+			if _, ok := corsAllowedRequestHeaders[name]; !ok {
+				return false
 			}
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	return true
 }
 
 // ---------------------------------------------------------------------------

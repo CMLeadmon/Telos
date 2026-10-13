@@ -38,8 +38,8 @@ func register() {
 	}
 }
 
-func TestParseRoutesCoversEveryRegistrationInMainGo(t *testing.T) {
-	routes, err := parseRoutes("../../main.go")
+func TestParseRoutesCoversEveryRegistrationInRoutesGo(t *testing.T) {
+	routes, err := parseRoutes("../../routes.go")
 	if err != nil {
 		t.Fatalf("parseRoutes: %v", err)
 	}

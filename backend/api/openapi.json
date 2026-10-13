@@ -1,6 +1,6 @@
 {
   "info": {
-    "description": "Generated from the mux route table in main.go. Do not edit by hand.",
+    "description": "Generated from the mux route table in routes.go. Do not edit by hand.",
     "title": "Telos Gateway API",
     "version": "1.0.0"
   },

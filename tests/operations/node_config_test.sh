@@ -388,5 +388,6 @@ fi
 # The host support policy (Ubuntu 24.04+, Podman 5+, the pinned provider) that init,
 # doctor and the installer share.
 bash "$repo_root/tests/operations/install_test.sh"
+python3 -I "$repo_root/tests/operations/native_origins_test.py"
 
 echo "node config: init, refusal, interruption, doctor, host policy and Compose round trip verified"

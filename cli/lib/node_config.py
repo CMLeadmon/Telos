@@ -35,6 +35,7 @@ EXAMPLE_DOMAIN = re.compile(r"(^|\.)example\.(com|org|net)$|^localhost$|\.invali
 RUNTIME_UID = 10001
 RUNTIME_GID = 10001
 MIN_KEY_BYTES = 32
+NATIVE_CLIENT_ORIGINS = ("tauri://localhost", "http://tauri.localhost")
 CURSOR_CONTAINER_PATH = "/run/telos/cursor-keys.json"
 HLS_CONTAINER_PATH = "/run/telos/hls-key"
 INIT_SECRETS = (
@@ -358,6 +359,31 @@ def library_ids(value):
     return [item for item in (part.strip() for part in value.split(",")) if item]
 
 
+def validate_allowed_origins(raw, production):
+    """The beta's cross-origin surface is exactly the desktop shell's two origins.
+
+    Production must name precisely that pair (any order, no duplicates, no
+    whitespace or other entries); a development node may leave it empty or use the
+    same pair. Anything else -- ``*``, ``null``, a path, query or userinfo, an
+    arbitrary localhost origin -- is a defect, because the same list also widens
+    the CSRF and WebSocket origin checks.
+    """
+    entries = raw.split(",") if raw else []
+    if not entries:
+        return ["TELOS_ALLOWED_ORIGINS must be " + ",".join(NATIVE_CLIENT_ORIGINS)] if production else []
+    problems = []
+    if any(e != e.strip() or not e for e in entries):
+        problems.append("TELOS_ALLOWED_ORIGINS must not contain blank or padded entries")
+    if len(set(entries)) != len(entries):
+        problems.append("TELOS_ALLOWED_ORIGINS contains a duplicate entry")
+    unknown = sorted(e for e in set(entries) if e not in NATIVE_CLIENT_ORIGINS)
+    if unknown:
+        problems.append(f"TELOS_ALLOWED_ORIGINS has unsupported origin(s) {unknown[:3]}; the beta allows only " + ",".join(NATIVE_CLIENT_ORIGINS))
+    elif production and set(entries) != set(NATIVE_CLIENT_ORIGINS):
+        problems.append("TELOS_ALLOWED_ORIGINS must be " + ",".join(NATIVE_CLIENT_ORIGINS))
+    return problems
+
+
 def validate_node(path, mode, repo_root, runtime_uid=None, runtime_gid=None, strict_owner=None, only="all"):
     """Return a list of defects for a node.env in ``production`` or ``development`` mode.
 
@@ -388,6 +414,8 @@ def validate_node(path, mode, repo_root, runtime_uid=None, runtime_gid=None, str
             gid = RUNTIME_GID if runtime_gid is None else runtime_gid
             owner_check = production if strict_owner is None else strict_owner
             problems += validate_signing(config_path, uid, gid, owner_check)
+    if only == "all":
+        problems += validate_allowed_origins(values.get("TELOS_ALLOWED_ORIGINS", ""), production)
     if production and only in ("all", "integrations"):
         for key in PRODUCTION_SECRETS:
             if PLACEHOLDER.search(values.get(key, "")):

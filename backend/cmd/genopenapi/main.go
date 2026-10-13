@@ -105,7 +105,7 @@ func buildDocument(routes []Route) map[string]any {
 		"info": map[string]any{
 			"title":       "Telos Gateway API",
 			"version":     "1.0.0",
-			"description": "Generated from the mux route table in main.go. Do not edit by hand.",
+			"description": "Generated from the mux route table in routes.go. Do not edit by hand.",
 		},
 		"paths": paths,
 	}
@@ -113,7 +113,7 @@ func buildDocument(routes []Route) map[string]any {
 
 func main() {
 	check := flag.Bool("check", false, "verify the committed document is current; write nothing")
-	source := flag.String("source", "main.go", "route table source file")
+	source := flag.String("source", "routes.go", "route table source file")
 	out := flag.String("out", filepath.Join("api", "openapi.json"), "output path")
 	flag.Parse()
 

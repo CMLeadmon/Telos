@@ -23,6 +23,13 @@ func registerRoutes(mux *http.ServeMux) {
 	// the route table is how this codebase's auth posture is audited, and a bare
 	// HandleFunc on a device route reads as public at a glance.
 	mux.HandleFunc("POST /api/v1/auth/devices/refresh", handleRefreshDevice)
+	// Registration is public for the same reason, and only because the handler
+	// itself verifies a username and password (with the login limiter, constant
+	// work for unknown users and an active-account check) or a valid session
+	// cookie. A downloadable client has no cookie to present, so wrapping this in
+	// withAuth made password registration unreachable. TestPublicRoutesAreExactlyTheAuditedSet
+	// pins the complete list of bare routes.
+	mux.HandleFunc("POST /api/v1/auth/devices/register", handleRegisterDevice)
 
 	// Authenticated Routes (Requires Session check)
 	mux.Handle("POST /api/v1/auth/logout", withAuth(http.HandlerFunc(handleLogout), ""))
@@ -39,7 +46,6 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/users/me/sessions", withAuth(http.HandlerFunc(handleListMySessions), ""))
 	mux.Handle("DELETE /api/v1/users/me/sessions/{id}", withAuth(http.HandlerFunc(handleRevokeSession), ""))
 	mux.Handle("POST /api/v1/users/me/sessions/revoke-others", withAuth(http.HandlerFunc(handleRevokeOtherSessions), ""))
-	mux.Handle("POST /api/v1/auth/devices/register", withAuth(http.HandlerFunc(handleRegisterDevice), ""))
 	mux.Handle("POST /api/v1/auth/ws-ticket", withAuth(http.HandlerFunc(handleWSTicket), ""))
 	mux.Handle("GET /api/v1/users/me/devices", withAuth(http.HandlerFunc(handleListDevices), ""))
 	mux.Handle("DELETE /api/v1/users/me/devices/{id}", withAuth(http.HandlerFunc(handleRevokeDevice), ""))

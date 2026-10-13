@@ -647,3 +647,117 @@ func TestAllowedOriginsCSRFBoundary(t *testing.T) {
 		}
 	})
 }
+
+// TestCORSPreflight pins the exact cross-origin policy a desktop client relies on.
+func TestCORSPreflight(t *testing.T) {
+	cfg := testSecurityConfig(t, "production", "https://community.example.org")
+	cfg.AllowedOrigins = map[string]struct{}{}
+	for _, origin := range []string{"tauri://localhost", "http://tauri.localhost"} {
+		normalized, err := normalizeOrigin(origin)
+		if err != nil {
+			t.Fatalf("normalizeOrigin(%q): %v", origin, err)
+		}
+		cfg.AllowedOrigins[normalized.String()] = struct{}{}
+	}
+	reached := false
+	handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }), cfg)
+
+	preflight := func(origin, headers string) *httptest.ResponseRecorder {
+		reached = false
+		req := httptest.NewRequest(http.MethodOptions, "/api/v1/auth/devices/register", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		req.Header.Set("Access-Control-Request-Method", "POST")
+		if headers != "" {
+			req.Header.Set("Access-Control-Request-Headers", headers)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	approved := []struct{ origin, headers string }{
+		{"tauri://localhost", "authorization, content-type"},
+		{"tauri://localhost", "Authorization"},
+		{"http://tauri.localhost", "Authorization"},
+		{"http://tauri.localhost", "authorization,content-type"},
+		{"tauri://localhost", ""},
+	}
+	for _, c := range approved {
+		rec := preflight(c.origin, c.headers)
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s %q: status %d, want 204", c.origin, c.headers, rec.Code)
+		}
+		if got := rec.Header().Get("Access-Control-Allow-Origin"); got != c.origin {
+			t.Errorf("%s: ACAO = %q, want the exact origin", c.origin, got)
+		}
+		if rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+			t.Errorf("%s: credentials not allowed for an exact origin", c.origin)
+		}
+		allowed := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers"))
+		if !strings.Contains(allowed, "authorization") || !strings.Contains(allowed, "content-type") {
+			t.Errorf("%s: Access-Control-Allow-Headers = %q lacks Authorization/Content-Type", c.origin, allowed)
+		}
+		methods := rec.Header().Get("Access-Control-Allow-Methods")
+		for _, m := range strings.Split(methods, ",") {
+			switch strings.TrimSpace(m) {
+			case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+			default:
+				t.Errorf("%s: unexpected allowed method %q in %q", c.origin, m, methods)
+			}
+		}
+		vary := rec.Header().Values("Vary")
+		joined := strings.ToLower(strings.Join(vary, ","))
+		for _, v := range []string{"origin", "access-control-request-headers", "access-control-request-method"} {
+			if !strings.Contains(joined, v) {
+				t.Errorf("%s: Vary lacks %s (%v)", c.origin, v, vary)
+			}
+		}
+		if reached {
+			t.Errorf("%s: an approved preflight must not reach the application handler", c.origin)
+		}
+	}
+
+	denied := []struct{ name, origin, headers string }{
+		{"loopback http origin", "http://localhost", "authorization"},
+		{"loopback with port", "http://localhost:3000", "content-type"},
+		{"null origin", "null", "authorization"},
+		{"foreign origin", "https://evil.example", "authorization, content-type"},
+		{"suffix lookalike", "tauri://localhost.evil.example", "authorization"},
+		{"approved origin, injected header", "tauri://localhost", "X-Injected"},
+		{"approved origin, header smuggled in a list", "tauri://localhost", "authorization, x-injected"},
+	}
+	for _, c := range denied {
+		rec := preflight(c.origin, c.headers)
+		if rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("Access-Control-Allow-Credentials") != "" {
+			t.Errorf("%s: CORS was approved (ACAO=%q ACAC=%q)", c.name, rec.Header().Get("Access-Control-Allow-Origin"), rec.Header().Get("Access-Control-Allow-Credentials"))
+		}
+		if rec.Header().Get("Access-Control-Allow-Headers") != "" {
+			t.Errorf("%s: allowed headers were reflected: %q", c.name, rec.Header().Get("Access-Control-Allow-Headers"))
+		}
+	}
+
+	// The public browser origin is same-origin: it needs no CORS approval and gets none beyond its own origin.
+	rec := preflight("https://community.example.org", "content-type")
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "" && got != "https://community.example.org" {
+		t.Errorf("public origin ACAO = %q", got)
+	}
+
+	// An ordinary approved response carries the exact origin and credentials; an
+	// unapproved one carries neither.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "tauri://localhost")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "tauri://localhost" || rec.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Errorf("ordinary response to an approved origin lacks exact ACAO/credentials: %v", rec.Header())
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Header.Set("Origin", "https://evil.example")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Header().Get("Access-Control-Allow-Origin") != "" || rec.Header().Get("Access-Control-Allow-Credentials") != "" {
+		t.Errorf("ordinary response to an unapproved origin carries CORS headers: %v", rec.Header())
+	}
+}
