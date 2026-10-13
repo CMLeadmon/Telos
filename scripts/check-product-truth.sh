@@ -696,6 +696,19 @@ if lock_path.exists():
         if f'name = "{retired}"' in lock:
             fail("desktopCredentials", f"Cargo.lock still resolves {retired}")
 
+if (root / "frontend/src-tauri/Cargo.toml").exists() and (root / ".github").exists():
+    desktop_workflow = root / ".github/workflows/desktop.yml"
+    if not desktop_workflow.exists():
+        fail("desktopWorkflow", ".github/workflows/desktop.yml (the Ubuntu AppImage lane) is missing")
+    else:
+        workflow_text = desktop_workflow.read_text(encoding="utf-8")
+        if "runs-on: ubuntu-24.04" not in workflow_text or "--bundles appimage" not in workflow_text:
+            fail("desktopWorkflow", "desktop.yml must build the AppImage on ubuntu-24.04")
+        if re.search(r"windows|macos|notariz|signtool|codesign", workflow_text, re.I):
+            fail("desktopWorkflow", "desktop.yml carries a deferred native platform; only the Linux lane is initial scope")
+        if "continue-on-error" in workflow_text:
+            fail("desktopWorkflow", "desktop.yml must not tolerate a failing native build")
+
 native_pair = "tauri://localhost,http://tauri.localhost"
 if (root / ".env.example").exists() and f"\nTELOS_ALLOWED_ORIGINS={native_pair}\n" not in text(".env.example"):
     fail("desktopOrigins", f".env.example must ship TELOS_ALLOWED_ORIGINS={native_pair}")

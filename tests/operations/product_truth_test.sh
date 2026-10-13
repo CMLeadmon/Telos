@@ -878,6 +878,21 @@ desktop_fixture desktop-pinning
 printf '\nTelos pins the certificate on first use (TOFU) for every node.\n' >>"$fixture_root/desktop-pinning/README.md"
 assert_rejected "pinning-claim" "platformTrust" "$fixture_root/desktop-pinning"
 
+desktop_fixture desktop-workflow-missing
+mkdir -p "$fixture_root/desktop-workflow-missing/.github/workflows"
+assert_rejected "missing-appimage-lane" "desktopWorkflow" "$fixture_root/desktop-workflow-missing"
+
+desktop_fixture desktop-workflow-windows
+mkdir -p "$fixture_root/desktop-workflow-windows/.github/workflows"
+cp "$repo_root/.github/workflows/desktop.yml" "$fixture_root/desktop-workflow-windows/.github/workflows/desktop.yml"
+printf '  windows-msi:\n    runs-on: windows-latest\n' >>"$fixture_root/desktop-workflow-windows/.github/workflows/desktop.yml"
+assert_rejected "deferred-platform-job" "desktopWorkflow" "$fixture_root/desktop-workflow-windows"
+
+desktop_fixture desktop-workflow-ok
+mkdir -p "$fixture_root/desktop-workflow-ok/.github/workflows"
+cp "$repo_root/.github/workflows/desktop.yml" "$fixture_root/desktop-workflow-ok/.github/workflows/desktop.yml"
+bash "$repo_root/scripts/check-product-truth.sh" --root "$fixture_root/desktop-workflow-ok"
+
 desktop_fixture desktop-pinning-denied
 printf '\nTelos does not support certificate pinning; the platform trust store decides.\n' >>"$fixture_root/desktop-pinning-denied/README.md"
 bash "$repo_root/scripts/check-product-truth.sh" --root "$fixture_root/desktop-pinning-denied"

@@ -97,12 +97,12 @@ Android outputs land under
 
 ## What CI does and does not check
 
-`.github/workflows/ci.yml` builds the frontend, runs its unit tests, and
-builds the experimental Go CLI for Linux architectures only. **It does not compile the
-Tauri shell.** Nothing automated proves `frontend/src-tauri/` still builds, on
-any platform, so a Rust-side break surfaces only when someone runs the commands
-above. Run a desktop build by hand before cutting a release that claims a native
-client.
+`.github/workflows/desktop.yml` builds the Linux AppImage on `ubuntu-24.04`, runs the Rust
+format/lint/test gates and the artifact verifier, and uploads the package with its identity
+sidecar. `.github/workflows/ci.yml` builds the frontend, runs its unit tests and the backend
+suites. **CI does not prove a working Secret Service, codec stack or WebKitGTK media element**;
+the manual smoke in [desktop-beta.md](desktop-beta.md) does. Windows, macOS and mobile builds
+are not part of the initial delivery.
 
 ## Troubleshooting
 

@@ -1,0 +1,68 @@
+name: Desktop
+
+# The Linux desktop client: Rust format/lint/test, the AppImage build and its
+# artifact verification. CI success proves the package builds and has the expected
+# shape. It does NOT prove a working Secret Service, codec stack or WebKitGTK media
+# element; that is the manual `desktop-linux` smoke in
+# documentation/operations/desktop-beta.md.
+
+on:
+  push:
+    branches: [ main, docs-rewrite ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-appimage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      NO_STRIP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+      - name: Install the declared Tauri prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev squashfs-tools xdg-utils patchelf
+      - name: Record the exact prerequisite versions
+        run: |
+          dpkg-query -W -f='${Package} ${Version}\n' libwebkit2gtk-4.1-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev squashfs-tools | tee prerequisite-versions.txt
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustc --version
+          cargo --version
+      - run: npm --prefix frontend ci
+      - name: Desktop credential, TLS and artifact gates
+        run: |
+          bash scripts/ci/desktop-gate.sh os-credential-adapter
+          bash scripts/ci/desktop-gate.sh platform-trusted-tls
+          bash scripts/ci/desktop-gate.sh native-auth-state
+      - name: Build the unsigned AppImage
+        run: npm --prefix frontend run tauri -- build --bundles appimage
+      - name: Write the artifact identity and verify the bundle
+        run: |
+          set -euo pipefail
+          bundle=frontend/src-tauri/target/release/bundle/appimage
+          version="$(node -p "require('./frontend/package.json').version")"
+          image="$bundle/Telos_${version}_amd64.AppImage"
+          python3 scripts/write-artifact-identity.py --artifact "$image" --source-commit "$GITHUB_SHA" \
+            --version "$version" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --out "$image.identity.json"
+          python3 scripts/verify-desktop-artifact.py --platform linux --artifact "$bundle" --identity "$image.identity.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telos-linux-appimage
+          if-no-files-found: error
+          path: |
+            frontend/src-tauri/target/release/bundle/appimage/*.AppImage
+            frontend/src-tauri/target/release/bundle/appimage/*.AppImage.identity.json
+            prerequisite-versions.txt

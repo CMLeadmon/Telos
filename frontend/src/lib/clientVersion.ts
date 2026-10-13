@@ -2,7 +2,7 @@
  * This client's version. Must track the "version" field in frontend/package.json;
  * the static export has no runtime access to that file, so it is restated here.
  */
-export const CLIENT_VERSION = "0.1.0";
+export const CLIENT_VERSION = "0.1.0-beta.1";
 
 /**
  * Compares dotted numeric versions. Returns <0, 0 or >0 like a comparator.

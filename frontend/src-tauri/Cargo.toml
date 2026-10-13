@@ -1,6 +1,6 @@
 [package]
 name = "telos-shell"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 description = "Telos Native Client Shell"
 authors = ["Telos Contributors"]
 edition = "2021"
