@@ -76,6 +76,10 @@ response = json.loads(sys.argv[1])
 assert response == {"jellyfin": [{"id": "m1", "name": "Movies"}, {"id": "m2", "name": "Music"}],
                     "grimmory": [{"id": "4", "name": "Books"}]}, response
 PY
+# Plain validation is read-only; only the final-step flag stores the Base URL.
+[[ ! -e "$work/network.saved" ]] || { echo "validation saved Jellyfin settings" >&2; exit 1; }
+env -i PATH="$PATH" JELLYFIN_URL="http://127.0.0.1:$port" GRIMMORY_URL="http://127.0.0.1:$port" \
+  "$binary" validate-integrations --set-jellyfin-base-url <<<"$request" >/dev/null
 python3 - "$work/network.saved" <<'PY'
 import json, sys
 saved = json.load(open(sys.argv[1]))

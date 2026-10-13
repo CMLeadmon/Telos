@@ -23,19 +23,19 @@ sudo telos configure integrations --setup
 6. Reads the Jellyfin API key and the Grimmory gateway account **without echo**,
    and sends them (stdin of a throwaway `telos-core validate-integrations`
    container on the production networks) to the two services.
-   After Jellyfin accepts the key and lists its libraries, the same call stores
-   Jellyfin's **Base URL** as `/jellyfin` in its network settings (every other
-   setting is sent back unchanged). The gateway reaches Jellyfin at
-   `http://jellyfin:8096/jellyfin` and its HLS rewriting depends on that prefix;
-   a fresh Jellyfin serves from `/`, so without this the gateway reports Jellyfin
-   `degraded`. Jellyfin applies a new Base URL when it next starts, which the
-   teardown in step 9 and the following `telos start` provide. Nothing is changed
-   if the key is rejected or the libraries cannot be listed, and a Jellyfin that
-   already serves under `/jellyfin` is left alone.
 7. Shows each service's libraries as `name (id …)`, asks which to expose
    (comma-separated numbers; duplicates collapse; the result follows the order
    shown), validates again with the same credentials, and checks every selected
-   ID still exists.
+   ID still exists. This final validation also stores Jellyfin's **Base URL** as
+   `/jellyfin` in its network settings (every other setting is sent back
+   unchanged): the gateway reaches Jellyfin at `http://jellyfin:8096/jellyfin` and
+   its HLS rewriting depends on that prefix, but a fresh Jellyfin serves from `/`,
+   so without this the gateway reports Jellyfin `degraded`. It happens only after
+   the key has listed the libraries, and a Jellyfin that already serves under
+   `/jellyfin` is left alone. Jellyfin applies a new Base URL when it next starts
+   (until then it answers neither path), which the teardown in step 9 and the
+   following `telos start` provide; running the command again before that point
+   stops with `jellyfin_restart_pending`.
 8. Writes `JELLYFIN_ADMIN_TOKEN`, `JELLYFIN_LIBRARY_IDS`, `GRIMMORY_ADMIN_USER`,
    `GRIMMORY_LIBRARY_IDS` (and `GRIMMORY_ADMIN_PASSWORD` only if you typed one) to
    `node.env` in a single atomic rewrite; every other byte is untouched and the

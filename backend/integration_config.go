@@ -81,6 +81,7 @@ var (
 	errJellyfinRejected         = newIntegrationError("jellyfin_rejected", "Jellyfin rejected the token or the request")
 	errJellyfinInvalidResponse  = newIntegrationError("jellyfin_invalid_response", "Jellyfin returned an unexpected response")
 	errJellyfinBasePath         = newIntegrationError("jellyfin_base_path", "Jellyfin would not accept the /jellyfin Base URL that Telos requires")
+	errJellyfinRestartPending   = newIntegrationError("jellyfin_restart_pending", "Jellyfin has a new Base URL that only takes effect after it restarts; run telos stop and telos start, then configure again")
 	errJellyfinNoLibraries      = newIntegrationError("jellyfin_no_libraries", "Jellyfin has no libraries; create one first")
 	errJellyfinDuplicateLibrary = newIntegrationError("jellyfin_duplicate_library", "Jellyfin returned the same library ID twice")
 	errGrimmoryUnavailable      = newIntegrationError("grimmory_unavailable", "Grimmory could not be reached")
@@ -219,19 +220,41 @@ func discoverJellyfinLibraries(ctx context.Context, client *http.Client, base, t
 	return libraries, nil
 }
 
-// jellyfinServesUnderBasePath reports whether Jellyfin already answers its public
-// info endpoint under /jellyfin. Any other outcome means "not yet".
-func jellyfinServesUnderBasePath(ctx context.Context, client *http.Client, root string) bool {
-	request, err := http.NewRequest(http.MethodGet, root+jellyfinBasePath+"/System/Info/Public", nil)
-	if err != nil {
-		return false
+type jellyfinPlacementState int
+
+const (
+	jellyfinPlacedAtRoot jellyfinPlacementState = iota
+	jellyfinPlacedUnderPrefix
+	// jellyfinRestartPending: a Base URL was saved but not yet applied. Jellyfin
+	// redirects the root to the prefix and answers 404 under it.
+	jellyfinRestartPending
+)
+
+// jellyfinPlacement finds where Jellyfin answers its public info endpoint. Any
+// outcome other than a clear 2xx under the prefix, or a redirect into it, is
+// treated as the root so the discovery call reports the real problem.
+func jellyfinPlacement(ctx context.Context, client *http.Client, root string) jellyfinPlacementState {
+	probe := func(path string) (*http.Response, bool) {
+		request, err := http.NewRequest(http.MethodGet, root+path+"/System/Info/Public", nil)
+		if err != nil {
+			return nil, false
+		}
+		resp, err := doIntegrationRequest(ctx, client, request)
+		if err != nil {
+			return nil, false
+		}
+		resp.Body.Close()
+		return resp, true
 	}
-	resp, err := doIntegrationRequest(ctx, client, request)
-	if err != nil {
-		return false
+	if resp, ok := probe(jellyfinBasePath); ok && resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return jellyfinPlacedUnderPrefix
 	}
-	defer resp.Body.Close()
-	return resp.StatusCode >= 200 && resp.StatusCode < 300
+	if resp, ok := probe(""); ok && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if location, err := resp.Location(); err == nil && strings.HasPrefix(location.Path, jellyfinBasePath+"/") {
+			return jellyfinRestartPending
+		}
+	}
+	return jellyfinPlacedAtRoot
 }
 
 // setJellyfinBasePath stores BaseUrl=/jellyfin in Jellyfin's network settings,
@@ -375,11 +398,24 @@ func discoverGrimmoryLibraries(ctx context.Context, client *http.Client, base, u
 	return libraries, nil
 }
 
+// validateIntegrationConfig discovers both services' libraries. It changes nothing.
 func validateIntegrationConfig(ctx context.Context, req IntegrationValidationRequest, jellyfinURL, grimmoryURL string) (IntegrationValidationResponse, error) {
+	return checkIntegrationConfig(ctx, req, jellyfinURL, grimmoryURL, false)
+}
+
+// prepareIntegrationConfig validates, then makes Jellyfin serve under the prefix
+// the gateway uses. It is the last step of guided setup: once saved, Jellyfin
+// answers neither at the root (it redirects) nor under the prefix until it
+// restarts, so nothing may query it afterwards in the same session.
+func prepareIntegrationConfig(ctx context.Context, req IntegrationValidationRequest, jellyfinURL, grimmoryURL string) (IntegrationValidationResponse, error) {
+	return checkIntegrationConfig(ctx, req, jellyfinURL, grimmoryURL, true)
+}
+
+func checkIntegrationConfig(ctx context.Context, req IntegrationValidationRequest, jellyfinURL, grimmoryURL string, prepare bool) (IntegrationValidationResponse, error) {
 	if strings.TrimSpace(req.JellyfinToken) == "" || strings.TrimSpace(req.GrimmoryUser) == "" || req.GrimmoryPassword == "" {
 		return IntegrationValidationResponse{}, errIntegrationRequest
 	}
-	jellyfinBase, err := validateIntegrationBaseURL(jellyfinURL)
+	jellyfinRoot, err := validateIntegrationBaseURL(jellyfinURL)
 	if err != nil {
 		return IntegrationValidationResponse{}, err
 	}
@@ -388,26 +424,28 @@ func validateIntegrationConfig(ctx context.Context, req IntegrationValidationReq
 		return IntegrationValidationResponse{}, err
 	}
 	client := integrationClient()
-	// A fresh Jellyfin serves from the root; a configured node already serves
-	// under /jellyfin. Discover where it is now, then make it serve under the
-	// prefix the gateway uses (effective when Jellyfin next starts).
-	jellyfinRoot := jellyfinBase
-	prefixed := jellyfinServesUnderBasePath(ctx, client, jellyfinRoot)
-	if prefixed {
+	// A fresh Jellyfin serves from the root; a configured node serves under the
+	// gateway's prefix.
+	jellyfinBase := jellyfinRoot
+	switch jellyfinPlacement(ctx, client, jellyfinRoot) {
+	case jellyfinPlacedUnderPrefix:
 		jellyfinBase += jellyfinBasePath
+	case jellyfinRestartPending:
+		return IntegrationValidationResponse{}, errJellyfinRestartPending
 	}
 	jellyfin, err := discoverJellyfinLibraries(ctx, client, jellyfinBase, req.JellyfinToken)
 	if err != nil {
 		return IntegrationValidationResponse{}, err
 	}
-	if !prefixed {
-		if err := setJellyfinBasePath(ctx, client, jellyfinRoot, req.JellyfinToken); err != nil {
-			return IntegrationValidationResponse{}, err
-		}
-	}
 	grimmory, err := discoverGrimmoryLibraries(ctx, client, grimmoryBase, req.GrimmoryUser, req.GrimmoryPassword)
 	if err != nil {
 		return IntegrationValidationResponse{}, err
+	}
+	// Only a token that has just listed the libraries is allowed to change Jellyfin.
+	if prepare && jellyfinBase == jellyfinRoot {
+		if err := setJellyfinBasePath(ctx, client, jellyfinRoot, req.JellyfinToken); err != nil {
+			return IntegrationValidationResponse{}, err
+		}
 	}
 	return IntegrationValidationResponse{Jellyfin: jellyfin, Grimmory: grimmory}, nil
 }
@@ -431,7 +469,7 @@ func readIntegrationRequest(in io.Reader) (IntegrationValidationRequest, error) 
 	return req, nil
 }
 
-func runIntegrationValidationCommand(in io.Reader, out, errOut io.Writer) error {
+func runIntegrationValidationCommand(in io.Reader, out, errOut io.Writer, prepare bool) error {
 	req, err := readIntegrationRequest(in)
 	if err != nil {
 		return err
@@ -444,7 +482,11 @@ func runIntegrationValidationCommand(in io.Reader, out, errOut io.Writer) error 
 	if grimmoryURL == "" {
 		grimmoryURL = defaultGrimmoryURL
 	}
-	response, err := validateIntegrationConfig(context.Background(), req, jellyfinURL, grimmoryURL)
+	check := validateIntegrationConfig
+	if prepare {
+		check = prepareIntegrationConfig
+	}
+	response, err := check(context.Background(), req, jellyfinURL, grimmoryURL)
 	if err != nil {
 		return err
 	}
@@ -457,14 +499,21 @@ func runIntegrationValidationCommand(in io.Reader, out, errOut io.Writer) error 
 }
 
 // integrationCommandMain is the process entry for `validate-integrations`. It
-// returns the exit code: 0 success, 1 failed validation, 2 usage.
+// returns the exit code: 0 success, 1 failed validation, 2 usage. The one
+// accepted argument, --set-jellyfin-base-url, additionally saves Jellyfin's Base
+// URL after a successful validation (the final step of guided setup).
 func integrationCommandMain(args []string, in io.Reader, out, errOut io.Writer) int {
-	if len(args) != 0 {
-		fmt.Fprintln(errOut, "usage: telos-core validate-integrations < request.json")
+	prepare := false
+	switch {
+	case len(args) == 0:
+	case len(args) == 1 && args[0] == "--set-jellyfin-base-url":
+		prepare = true
+	default:
+		fmt.Fprintln(errOut, "usage: telos-core validate-integrations [--set-jellyfin-base-url] < request.json")
 		return 2
 	}
 	var stdout bytes.Buffer
-	if err := runIntegrationValidationCommand(in, &stdout, errOut); err != nil {
+	if err := runIntegrationValidationCommand(in, &stdout, errOut, prepare); err != nil {
 		fmt.Fprintln(errOut, "integration validation failed:", redactIntegrationError(err))
 		return 1
 	}

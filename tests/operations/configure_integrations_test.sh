@@ -217,6 +217,10 @@ assert request == {"jellyfinToken": sys.argv[2], "grimmoryUser": "gateway-user",
 PY
 done
 ! grep -q 'docker-compose.setup.yml' "$work/state/run.1.argv" || fail "the setup overlay was used without --setup"
+# Saving Jellyfin's Base URL leaves Jellyfin unanswering until it restarts, so only the
+# final validation may carry the flag; the first (listing) one must stay read-only.
+! grep -q -- '--set-jellyfin-base-url' "$work/state/run.1.argv" || fail "the first validation must be read-only"
+grep -q -- 'validate-integrations --set-jellyfin-base-url$' "$work/state/run.2.argv" || fail "the final validation must save Jellyfin's Base URL: $(cat "$work/state/run.2.argv")"
 grep -q 'compose --env-file '"$env_file"' -p telos' "$STUB_LOG" || fail "Compose was not run against node.env with a stable project"
 
 # --- blank password keeps the stored one; an explicit one replaces it --------------------------

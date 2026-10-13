@@ -87,13 +87,17 @@ sys.stdout.write(json.dumps({"jellyfinToken": token.decode(), "grimmoryUser": us
 '
 }
 
-# cfg_discover TOKEN USER PASSWORD — run validate-integrations in a throwaway
-# gateway container on the production networks; JSON response on stdout.
+# cfg_discover TOKEN USER PASSWORD [--set-jellyfin-base-url] — run
+# validate-integrations in a throwaway gateway container on the production
+# networks; JSON response on stdout. The optional flag is passed only by the
+# final validation: it saves Jellyfin's /jellyfin Base URL, after which Jellyfin
+# answers nothing until it restarts, so no further discovery may follow.
 cfg_discover() {
-  local overlay=()
+  local overlay=() flag=()
   [ "$CFG_STARTED_SETUP" -eq 1 ] && overlay=(docker-compose.setup.yml)
+  [ -n "${4:-}" ] && flag=("$4")
   printf '%s\0%s\0%s\0' "$1" "$2" "$3" | cfg_encode_request \
-    | compose_with ${overlay+"${overlay[@]}"} -- run --rm -T --no-deps telos-core ./telos-core validate-integrations
+    | compose_with ${overlay+"${overlay[@]}"} -- run --rm -T --no-deps telos-core ./telos-core validate-integrations ${flag+"${flag[@]}"}
 }
 
 # cfg_choose JSON KEY LABEL — print a numbered list (non-secret) and read a
@@ -268,7 +272,7 @@ EOF
 
   info ""
   info "Re-validating the selection..."
-  if ! second="$(cfg_discover "$token" "$user" "$password" 2>/dev/null)" \
+  if ! second="$(cfg_discover "$token" "$user" "$password" --set-jellyfin-base-url 2>/dev/null)" \
      || ! cfg_all_present "$second" jellyfin "$jellyfin_ids" \
      || ! cfg_all_present "$second" grimmory "$grimmory_ids"; then
     unset token user password
