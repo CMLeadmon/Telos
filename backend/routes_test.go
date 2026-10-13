@@ -198,16 +198,15 @@ func TestProductionDeviceRegistration(t *testing.T) {
 		}
 		errorOf := func(rec *httptest.ResponseRecorder) string {
 			var parsed struct {
-				Error struct{ Code, Message string } `json:"error"`
+				Error struct {
+					Code    string `json:"code"`
+					Message string `json:"message"`
+				} `json:"error"`
 			}
-			raw := map[string]any{}
-			_ = json.Unmarshal(rec.Body.Bytes(), &raw)
-			encoded, _ := json.Marshal(raw)
-			_ = json.Unmarshal(encoded, &parsed)
-			delete(raw, "requestId")
-			delete(raw, "request_id")
-			cleaned, _ := json.Marshal(raw)
-			return string(cleaned)
+			if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+				t.Fatalf("decode error body %q: %v", rec.Body.String(), err)
+			}
+			return parsed.Error.Code + "|" + parsed.Error.Message
 		}
 		wrong := httptest.NewRecorder()
 		handler.ServeHTTP(wrong, registrationRequest(body("desktopuser", "not-the-password"), "tauri://localhost"))
