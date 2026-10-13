@@ -74,6 +74,7 @@ required_paths() {
 AGENTS.md
 docker-compose.yml
 docker-compose.dev.yml
+docker-compose.setup.yml
 config/traefik.yaml
 config/dynamic/routes.yaml
 backend/go.mod
@@ -84,6 +85,7 @@ backend/integration_config_test.go
 backend/testdata/integrations/grimmory-libraries.synthetic.json
 backend/main.go
 ci/phase-gates.json
+cli/commands/configure.sh
 cli/lib/common.sh
 cli/lib/config.sh
 cli/lib/node_config.py
@@ -96,6 +98,7 @@ frontend/next.config.ts
 documentation/product/beta-contract.json
 documentation/product/platform-scope.md
 documentation/operations/backup-and-restore.md
+documentation/operations/guided-integrations.md
 documentation/operations/repository-baseline.md
 scripts/backup.sh
 scripts/check-documentation-hygiene.py
@@ -117,11 +120,13 @@ scripts/tests/verify-clean-checkout-test.sh
 tests/fixtures/gates/fixture_producer.py
 tests/fixtures/product-truth/transitional-routes.yaml
 tests/helpers/compose_double/podman
+tests/helpers/pty_drive.py
 tests/helpers/compose_double/render_compose.py
 tests/operations/ci_workflow_contract_test.py
 tests/operations/frozen_artifact_test.py
 tests/operations/gate_runner_v2_test.py
 tests/operations/release_graph_test.py
+tests/operations/configure_integrations_test.sh
 tests/operations/integration_discovery_test.sh
 tests/operations/node_config_test.sh
 tests/operations/release_test.sh

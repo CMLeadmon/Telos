@@ -65,3 +65,23 @@ require_node_env() {
   local file; file="$(node_env_path)"
   [ -f "$file" ] || die "node.env not found at $file — run: telos init"
 }
+
+# acquire_config_lock — exclusive, non-blocking lock shared by init, configure and
+# start so no two of them change or consume a node's configuration at once. The
+# lock lives in the node directory and is held on fd 9 until release_config_lock
+# (or process exit).
+acquire_config_lock() {
+  local node lock_file; node="$(node_path)" || return 2
+  [ -d "$node" ] || die "node directory $node does not exist — run: telos init"
+  lock_file="$node/.config.lock"
+  exec 9>"$lock_file" || die "cannot open $lock_file"
+  chmod 600 "$lock_file" 2>/dev/null || true
+  if ! flock -n 9; then
+    exec 9>&-
+    return 1
+  fi
+}
+
+# Closing fd 9 must not carry a redirection: `exec 9>&- 2>/dev/null` would silence
+# this shell's stderr for the rest of the process.
+release_config_lock() { exec 9>&-; }

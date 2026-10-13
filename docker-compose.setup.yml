@@ -1,0 +1,13 @@
+# First-run overlay: exposes the Jellyfin and Grimmory administration UIs on this
+# host's LOOPBACK interface only, so an operator can create the upstream accounts
+# and libraries (locally or through an SSH tunnel) before `telos configure
+# integrations` records them. Layered only by `telos configure integrations
+# --setup`, which removes the containers (never the volumes) and verifies both
+# ports are closed before it returns. Never layer this onto a running stack.
+services:
+  jellyfin:
+    ports:
+      - "127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096"
+  grimmory:
+    ports:
+      - "127.0.0.1:${GRIMMORY_SETUP_PORT:-6060}:6060"

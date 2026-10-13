@@ -142,9 +142,22 @@ def fsync_directory(path):
         os.close(descriptor)
 
 
+class _Interrupted(BaseException):
+    pass
+
+
+def _raise_interrupted(signum, _frame):
+    raise _Interrupted(signum)
+
+
 def atomic_replace(path, data, mode=0o600):
-    """Replace an existing file via a sibling temp: all-or-nothing, mode preserved."""
+    """Replace an existing file via a sibling temp: all-or-nothing, mode preserved.
+
+    SIGINT/SIGTERM/SIGHUP unwind through the cleanup below, so an interrupted
+    rewrite leaves the original bytes and no staging file behind.
+    """
     directory = os.path.dirname(path)
+    handlers = {sig: signal.signal(sig, _raise_interrupted) for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)}
     descriptor, temp = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -159,6 +172,9 @@ def atomic_replace(path, data, mode=0o600):
         except FileNotFoundError:
             pass
         raise
+    finally:
+        for sig, handler in handlers.items():
+            signal.signal(sig, handler)
     fsync_directory(directory)
 
 
@@ -184,27 +200,37 @@ def exclusive_create(path, data, mode=0o600):
     fsync_directory(directory)
 
 
-def set_value(path, key, value):
-    """Rewrite one assignment, leaving every other byte of the file untouched."""
-    if not KEY_PATTERN.match(key):
-        fail(f"invalid variable name {key!r}")
+def set_values(path, assignments):
+    """Apply every assignment in one atomic rewrite; other bytes stay untouched.
+
+    Either all keys change or none do, and the old file is intact until the
+    final rename, so an interruption at any point leaves node.env unchanged.
+    """
     text = read_text(path)
     values, lines = parse_env_text(text, os.path.basename(path))
-    encoded = f"{key}={encode_value(value)}\n"
-    if key in values:
-        for index, line in enumerate(lines):
-            if line.split("=", 1)[0] == key and not line.lstrip().startswith("#"):
-                ending = "\r\n" if line.endswith("\r\n") else "\n"
-                lines[index] = encoded.rstrip("\n") + ending
-                break
-    else:
-        if lines and not lines[-1].endswith("\n"):
-            lines[-1] += "\n"
-        lines.append(encoded)
+    for key, value in assignments:
+        if not KEY_PATTERN.match(key):
+            fail(f"invalid variable name {key!r}")
+        encoded = f"{key}={encode_value(value)}\n"
+        if key in values:
+            for index, line in enumerate(lines):
+                if line.split("=", 1)[0] == key and not line.lstrip().startswith("#"):
+                    ending = "\r\n" if line.endswith("\r\n") else "\n"
+                    lines[index] = encoded.rstrip("\n") + ending
+                    break
+        else:
+            if lines and not lines[-1].endswith("\n"):
+                lines[-1] += "\n"
+            lines.append(encoded)
+            values[key] = value
     new_text = "".join(lines)
     parse_env_text(new_text, os.path.basename(path))
     mode = stat.S_IMODE(os.stat(path).st_mode)
     atomic_replace(path, new_text.encode("utf-8"), mode)
+
+
+def set_value(path, key, value):
+    set_values(path, [(key, value)])
 
 
 # --------------------------------------------------------------------------- node path
@@ -425,14 +451,14 @@ class Initializer:
         self.created = []
 
     def acquire_lock(self, node):
-        path = os.path.join(node, ".init.lock")
+        path = os.path.join(node, ".config.lock")
         descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             os.close(descriptor)
             if error.errno in (errno.EAGAIN, errno.EACCES):
-                fail("another telos init is running for this node; wait for it to finish")
+                fail("another telos command is changing this node's configuration (init or configure); wait for it to finish")
             raise
         self.lock_descriptor = descriptor
 
@@ -607,6 +633,9 @@ def main(argv=None):
     setter.add_argument("file")
     setter.add_argument("key")
     setter.add_argument("--value-fd", type=int, required=True)
+    many = commands.add_parser("set-many")
+    many.add_argument("file")
+    many.add_argument("--assign", action="append", default=[], metavar="KEY=fd:N")
     validate = commands.add_parser("validate")
     validate.add_argument("file")
     validate.add_argument("--mode", choices=("production", "development"), required=True)
@@ -637,6 +666,16 @@ def main(argv=None):
             sys.stdout.write(values[arguments.key] + "\n")
         elif arguments.command == "set":
             set_value(arguments.file, arguments.key, read_fd_value(arguments.value_fd))
+        elif arguments.command == "set-many":
+            pairs = []
+            for item in arguments.assign:
+                key, _, source = item.partition("=fd:")
+                if not source.isdigit():
+                    fail(f"invalid assignment source for {key!r}; use KEY=fd:N")
+                pairs.append((key, read_fd_value(int(source))))
+            if not pairs:
+                fail("set-many needs at least one --assign")
+            set_values(arguments.file, pairs)
         elif arguments.command == "validate":
             problems = validate_node(
                 arguments.file, arguments.mode, arguments.repo_root,

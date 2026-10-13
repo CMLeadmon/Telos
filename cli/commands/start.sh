@@ -30,6 +30,9 @@ run() {
   done
 
   require_node_env
+  # A configure run may be rewriting node.env right now; never validate or start
+  # against a half-finished change.
+  acquire_config_lock || die "another telos command is changing this node's configuration; try again when it finishes"
   # Refuse before Compose runs: a node with placeholder credentials, missing
   # library IDs or unreadable signing files must never come up half-configured.
   local env_file mode
@@ -40,6 +43,8 @@ run() {
     note "telos doctor names one repair per defect; it never regenerates credentials or keys."
     return 1
   fi
+
+  release_config_lock
 
   local args=(up -d)
   [ "$build" -eq 1 ] && args+=(--build)

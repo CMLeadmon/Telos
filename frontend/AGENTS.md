@@ -8,7 +8,7 @@ Two themes, toggled by `data-theme` on `<html>`: `synthwave` (dark, default) and
 ## Next.js
 This Next.js version is newer than model training data — consult `node_modules/next/dist/docs/` before nontrivial Next.js work. Static export (`output: "export"`, `trailingSlash: true`); no server components at runtime, no API routes, no dynamic routes without `generateStaticParams`.
 
-Production hosted-browser delivery is served by the separate `telos-client` static container; clean-host certification is still pending. The default backend build is headless and does not require `backend/out/` or a build tag. The static export remains a client build artifact, not an embedded Phase 1 production surface.
+Production hosted-browser delivery is served by the separate `telos-client` static container; clean-host certification is still pending. The default backend build is headless and does not require `backend/out/` or a build tag. The static export is built into the `telos-client` image (`frontend/Dockerfile`, unprivileged nginx); the Go gateway no longer serves it in production.
 
 ## Layout
 - Routes: `/` (landing), `/login`, and the `(shell)/` group — `/chat`, `/stream`, `/library`, `/files`, `/settings` — sharing `AppShell` (topbar · rail · arena · tabbar).
@@ -16,7 +16,7 @@ Production hosted-browser delivery is served by the separate `telos-client` stat
 - Stores (`src/stores/`), all Zustand:
   - **Session/shell:** `useAuthStore` (cookie session via `/api/v1/auth/*`), `useThemeStore` (persisted), `usePreferencesStore`, `useSettingsStore`, `useMobileNavStore`
   - **Per-module:** `useChatSessionStore` (channels, chat WS, threads), `useMediaStore`, `useLibraryStore`, `useFilesStore`, `useAnnotationStore` (commentary on any target)
-- `src/lib/api.ts` is always single-origin. The development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway. Phase 2 will place the separate `telos-client` browser service and API gateway behind the production origin.
+- `src/lib/api.ts` is single-origin in the browser. In production Traefik serves the page from `telos-client` and `/api/v1/*` (including WebSockets) from `telos-core` on the same HTTPS origin, so cookies and CSRF checks are unchanged; the development server proxies `/api/*` and its WebSocket upgrades to the loopback gateway. The Linux Tauri shell does not use that path: it targets an explicit remote base URL and authenticates with device-registered bearer tokens (Phase 3).
 - Mount-time data loaders must be **sync** `useCallback`s using promise chains — `api<T>(...).then(setX).catch(() => setX(fallback))`. The React Compiler lint rule `react-hooks/set-state-in-effect` traces from an effect into an async callback and rejects `setState(await ...)`. See `components/settings/SecuritySection.tsx` for the sanctioned pattern.
 
 ## Commands

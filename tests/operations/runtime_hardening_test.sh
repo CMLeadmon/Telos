@@ -27,6 +27,7 @@ make_fixture() {
   cp "$repo_root/docker-compose.yml" "$fixture/docker-compose.yml"
   cp "$repo_root/config/dynamic/routes.yaml" "$fixture/config/dynamic/routes.yaml"
   cp "$repo_root/tests/fixtures/compose.env" "$fixture/tests/fixtures/compose.env"
+  cp "$repo_root/docker-compose.setup.yml" "$fixture/docker-compose.setup.yml"
 }
 
 run_checks() {
@@ -179,6 +180,51 @@ for mutation in auth-to-client streaming-to-client catch-all-to-core no-api-fall
   mutate_routes "$fixture" "$mutation"
   assert_rejected "routes:$mutation" "$fixture" "route-split"
 done
+
+run_overlay_check() {
+  bash "$repo_root/scripts/validate-compose.sh" --root "$1" --env-file tests/fixtures/compose.env --checks setup-overlay 2>&1
+}
+output="$(run_overlay_check "$valid")" || { echo "the real setup overlay was rejected: $output" >&2; exit 1; }
+overlay_variants=(
+  '      - "0.0.0.0:${JELLYFIN_SETUP_PORT:-8096}:8096"'
+  '      - "${JELLYFIN_SETUP_PORT:-8096}:8096"'
+  '      - "8096:8096"'
+  '      - "127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096"\n      - "127.0.0.1:9000:9000"'
+  '      - "[::]:${JELLYFIN_SETUP_PORT:-8096}:8096"'
+  '      - "127.0.0.2:${JELLYFIN_SETUP_PORT:-8096}:8096"'
+)
+for index in "${!overlay_variants[@]}"; do
+  fixture="$work/overlay-$index"
+  make_fixture "$fixture"
+  python3 - "$fixture/docker-compose.setup.yml" "${overlay_variants[$index]}" <<'PY'
+import sys
+path, replacement = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+text = text.replace('      - "127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096"', replacement.replace("\\n", "\n"), 1)
+open(path, "w", encoding="utf-8").write(text)
+PY
+  set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
+  [[ $status -ne 0 ]] || { echo "setup overlay variant $index was accepted" >&2; exit 1; }
+  grep -Fq setup-overlay <<<"$output" || { echo "variant $index did not name setup-overlay: $output" >&2; exit 1; }
+done
+fixture="$work/overlay-extra-service"
+make_fixture "$fixture"
+printf '  postgres:\n    ports:\n      - "127.0.0.1:5432:5432"\n' >>"$fixture/docker-compose.setup.yml"
+set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
+[[ $status -ne 0 ]] || { echo "a setup overlay touching postgres was accepted" >&2; exit 1; }
+fixture="$work/overlay-production-port"
+make_fixture "$fixture"
+python3 - "$fixture/docker-compose.yml" <<'PY'
+import sys
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+open(path, "w", encoding="utf-8").write(text.replace("  jellyfin:\n    image: jellyfin/jellyfin:latest\n", "  jellyfin:\n    ports:\n      - \"8096:8096\"\n    image: jellyfin/jellyfin:latest\n", 1))
+PY
+set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
+[[ $status -ne 0 ]] || { echo "a production model publishing Jellyfin was accepted" >&2; exit 1; }
+rm -f "$fixture/docker-compose.setup.yml"
+set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
+[[ $status -ne 0 ]] || { echo "a missing overlay was accepted" >&2; exit 1; }
 
 # An unknown check must be a usage error, never a silent pass.
 set +e

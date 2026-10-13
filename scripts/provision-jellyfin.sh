@@ -15,7 +15,7 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-arguments=(--gate-id "${TELOS_GATE_ID:-jellyfin-guided-setup}" --reason "use telos configure integrations after Phase 2")
+arguments=(--gate-id "${TELOS_GATE_ID:-jellyfin-guided-setup}" --reason "run telos configure integrations --setup; Jellyfin and Grimmory accounts are created by hand, never by script")
 [[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
 [[ -n "$evidence_out" ]] && arguments+=(--evidence-out "$evidence_out")
 [[ -n "$result_out" ]] && arguments+=(--result-out "$result_out")

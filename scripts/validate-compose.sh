@@ -11,6 +11,7 @@
 #   database-observer  pg_stat_statements is preloaded and no app carries the observer URL.
 #   standalone-client  telos-client is isolated: ingress-only, no ports/volumes/secrets, hardened.
 #   route-split        Traefik sends /api/v1/* to telos-core and every other path to telos-client.
+#   setup-overlay      docker-compose.setup.yml binds only Jellyfin/Grimmory admin ports, on 127.0.0.1.
 #
 # --root points the checks at another checkout (used only by the mutation tests).
 # A missing podman or Compose provider exits 3 (not_run): nothing was rendered.
@@ -21,8 +22,8 @@ set -euo pipefail
 
 env_file=""
 root=""
-known_checks="core-ingress stop-grace database-observer standalone-client route-split"
-checks="core-ingress,stop-grace,database-observer,standalone-client,route-split"
+known_checks="core-ingress stop-grace database-observer standalone-client route-split setup-overlay"
+checks="core-ingress,stop-grace,database-observer,standalone-client,route-split,setup-overlay"
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--root)
@@ -364,6 +365,52 @@ PY
 		fail=1
 	else
 		report route-split "OK"
+	fi
+fi
+
+if want setup-overlay; then
+	overlay_problem="$(python3 - "docker-compose.setup.yml" "$rendered" <<'PY'
+import re
+import sys
+import yaml
+
+problems = []
+try:
+    overlay = yaml.safe_load(open(sys.argv[1]))
+except OSError:
+    print("docker-compose.setup.yml is missing")
+    raise SystemExit
+services = (overlay or {}).get("services") or {}
+if set(overlay or {}) != {"services"}:
+    problems.append("the overlay may only define services")
+if set(services) != {"jellyfin", "grimmory"}:
+    problems.append(f"the overlay may only touch jellyfin and grimmory, found {sorted(services)}")
+expected = {"jellyfin": ("JELLYFIN_SETUP_PORT", 8096, 8096), "grimmory": ("GRIMMORY_SETUP_PORT", 6060, 6060)}
+for name, spec in services.items():
+    if set(spec) != {"ports"}:
+        problems.append(f"{name} may only add ports in the setup overlay")
+        continue
+    ports = spec["ports"]
+    if len(ports) != 1:
+        problems.append(f"{name} must publish exactly one setup port")
+    for port in ports:
+        text = str(port)
+        pattern = r"127\.0\.0\.1:\$\{%s:-%d\}:%d" % (expected.get(name, ("", 0, 0))[0], expected.get(name, ("", 0, 0))[1], expected.get(name, ("", 0, 0))[2])
+        if not re.fullmatch(pattern, text):
+            problems.append(f"{name} setup binding {text!r} must be loopback-only 127.0.0.1:${{{expected.get(name, ('?',))[0]}}}:<port>")
+# The production model itself must stay port-free for both services.
+rendered = yaml.safe_load(open(sys.argv[2]))
+for name in ("jellyfin", "grimmory"):
+    if (rendered.get("services", {}).get(name) or {}).get("ports"):
+        problems.append(f"the production model publishes a port for {name}")
+print("; ".join(problems))
+PY
+)"
+	if [ -n "$overlay_problem" ]; then
+		report setup-overlay "FAIL ($overlay_problem)"
+		fail=1
+	else
+		report setup-overlay "OK"
 	fi
 fi
 

@@ -185,7 +185,7 @@ telos init --dev --storage "$work/storage" >"$work/second-concurrent.out" 2>&1
 concurrent_status=$?
 set -e
 [[ $concurrent_status -ne 0 ]] || fail "two initializations ran at once"
-grep -q 'another telos init is running' "$work/second-concurrent.out" || fail "concurrent init did not report the lock"
+grep -q 'changing this node.s configuration' "$work/second-concurrent.out" || fail "concurrent init did not report the lock"
 kill -TERM "$first_python" 2>/dev/null || true
 kill -KILL "$first_sleeper" 2>/dev/null || true
 wait "$first_pid" 2>/dev/null || true

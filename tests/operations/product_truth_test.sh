@@ -860,8 +860,8 @@ for wrapper in provision-jellyfin.sh provision-grimmory.sh; do
     echo "$wrapper returned $wrapper_status instead of not_run exit 3" >&2
     exit 1
   fi
-  if ! grep -Fxq 'not_run: use telos configure integrations after Phase 2' <<<"$wrapper_output"; then
-    echo "$wrapper did not print the Phase 2 integration guidance" >&2
+  if ! grep -Fxq 'not_run: run telos configure integrations --setup; Jellyfin and Grimmory accounts are created by hand, never by script' <<<"$wrapper_output"; then
+    echo "$wrapper did not direct the operator to the guided setup" >&2
     exit 1
   fi
 done
