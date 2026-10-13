@@ -30,30 +30,6 @@ classify_state() {
   esac
 }
 
-# Best-effort gateway probe. Unreachable is a useful signal, not an error.
-# Development publishes the gateway on loopback :8080. A production gateway is only
-# reachable through Traefik, so ask it the way a member's browser would: by the
-# node's domain, pinned to this machine (-k: health is public and a node still
-# waiting for its certificate must not look down). The body is wanted even when the
-# gateway answers 503, because that is when the per-dependency detail matters.
-gateway_health() {
-  command -v curl >/dev/null 2>&1 || return 1
-  if [ -n "${TELOS_HEALTH_URL:-}" ]; then
-    curl -fsS --max-time 3 "$TELOS_HEALTH_URL" 2>/dev/null
-    return
-  fi
-  if [ "$(node_mode)" = development ]; then
-    curl -fsS --max-time 3 "http://127.0.0.1:8080/api/v1/health" 2>/dev/null
-    return
-  fi
-  local domain port body
-  domain="$(env_value "$(node_env_path)" TELOS_DOMAIN 2>/dev/null)" || return 1
-  [ -n "$domain" ] || return 1
-  port="$(env_value "$(node_env_path)" TRAEFIK_HTTPS_PORT 2>/dev/null)" || port=""
-  body="$(curl -sk --max-time 3 --resolve "$domain:${port:-443}:127.0.0.1" "https://$domain:${port:-443}/api/v1/health" 2>/dev/null)" || return 1
-  case "$body" in '{'*) printf '%s' "$body" ;; *) return 1 ;; esac
-}
-
 render_health() {
   python3 -c '
 import json, sys

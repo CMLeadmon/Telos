@@ -137,3 +137,56 @@ func TestJellyfinAuthorizationFailsClosedWhenLibrariesCannotBeListed(t *testing.
 		t.Fatalf("a transient listing failure dropped the last good library map: %v", items)
 	}
 }
+
+// An item Jellyfin has never heard of is a 404; a Jellyfin that cannot answer is a
+// 503 the client can retry. Reporting an outage as "not found" would send members
+// to report missing media that is merely unreachable.
+func TestJellyfinOutageIsUnavailableNotNotFound(t *testing.T) {
+	var ancestorsStatus atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/Library/VirtualFolders":
+			_ = json.NewEncoder(w).Encode([]map[string]any{{"ItemId": "lib-movies", "Locations": []string{"/data/media/movies"}}})
+		case strings.HasSuffix(r.URL.Path, "/Ancestors"):
+			if status := ancestorsStatus.Load(); status != 0 {
+				w.WriteHeader(int(status))
+				return
+			}
+			_ = json.NewEncoder(w).Encode([]map[string]string{{"Id": "f", "Type": "Folder", "Path": "/data/media/movies"}})
+		}
+	}))
+	t.Cleanup(server.Close)
+	useJellyfinResolverFake(t, server)
+	authorizer, err := NewJellyfinAuthorizer(jellyfinAPIResolver{}, []string{"lib-movies"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := jellyfinAuthorizer
+	jellyfinAuthorizer = authorizer
+	t.Cleanup(func() { jellyfinAuthorizer = previous })
+
+	probe := func() int {
+		authorizer.Invalidate()
+		recorder := httptest.NewRecorder()
+		authorizeJellyfinItem(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/media/items/x", nil), "eeeeeeee55555555eeeeeeee55555555")
+		return recorder.Code
+	}
+	ancestorsStatus.Store(0)
+	if code := probe(); code != http.StatusOK {
+		t.Fatalf("an authorized item answered %d", code)
+	}
+	ancestorsStatus.Store(http.StatusNotFound)
+	if code := probe(); code != http.StatusNotFound {
+		t.Errorf("an item Jellyfin does not know answered %d, want 404", code)
+	}
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusUnauthorized} {
+		ancestorsStatus.Store(int32(status))
+		if code := probe(); code != http.StatusServiceUnavailable {
+			t.Errorf("Jellyfin answering %d surfaced as %d, want 503", status, code)
+		}
+	}
+	server.Close()
+	if code := probe(); code != http.StatusServiceUnavailable {
+		t.Errorf("an unreachable Jellyfin surfaced as %d, want 503", code)
+	}
+}

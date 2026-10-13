@@ -202,15 +202,34 @@ check_node() {
   fi
 
   # Gateway reachability is independent of container state — a container can
-  # be up while the gateway cannot serve.
-  local url="${TELOS_HEALTH_URL:-http://127.0.0.1:8080/api/v1/health}"
-  if command -v curl >/dev/null 2>&1; then
-    if curl -fsS --max-time 3 "$url" >/dev/null 2>&1; then
-      dx_ok "gateway responding at $url"
-    elif [ "$up" -gt 0 ]; then
-      dx_warn "gateway not responding at $url"
-      note "      Expected if you started without --dev (no host port binding)."
+  # be up while the gateway cannot serve. Ask it the way a browser would (see
+  # gateway_health): through Traefik in production, on loopback in development.
+  if command -v curl >/dev/null 2>&1 && [ "$up" -gt 0 ]; then
+    if gateway_health >/dev/null 2>&1; then
+      dx_ok "gateway responding through the front door"
+    else
+      dx_bad "gateway not responding through the front door" "telos status    # which dependency is down"
     fi
+  fi
+
+  check_ingress_forwarding "$runtime"
+}
+
+# A published port reaches Traefik only if the host forwards packets arriving from
+# the ingress bridge. On a real Podman host the bridge was seen with forwarding
+# switched off after a restart: every container reported healthy and loopback
+# worked, but other machines timed out on 80/443. Loopback cannot show this.
+check_ingress_forwarding() {
+  local runtime="$1" bridge forwarding
+  [ "$(node_mode)" = production ] || return 0
+  bridge="$($runtime network inspect telos-ingress --format '{{.NetworkInterface}}' 2>/dev/null)" || return 0
+  [ -n "$bridge" ] || return 0
+  forwarding="$(cat "${TELOS_PROC_IPV4_CONF:-/proc/sys/net/ipv4/conf}/$bridge/forwarding" 2>/dev/null)" || return 0
+  if [ "$forwarding" = 1 ]; then
+    dx_ok "ingress bridge $bridge forwards packets (published ports reachable from other machines)"
+  else
+    dx_bad "ingress bridge $bridge does not forward (forwarding=$forwarding): ports 80/443 time out for other machines" \
+      "sudo telos stop && sudo telos start    # recreates the bridge with forwarding on"
   fi
 }
 

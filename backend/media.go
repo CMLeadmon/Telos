@@ -61,6 +61,11 @@ const (
 
 var errItemNotAuthorized = errors.New("media item not authorized")
 
+// errJellyfinUnreachable means Jellyfin could not answer, which is not the same as
+// "this item is not in an exposed library": the first is a 503 the client can
+// retry, the second a 404.
+var errJellyfinUnreachable = errors.New("jellyfin unreachable")
+
 // NewJellyfinAuthorizer requires a nonempty allowlist of stable library IDs.
 func NewJellyfinAuthorizer(resolver JellyfinItemResolver, allowedLibraryIDs []string) (*JellyfinAuthorizer, error) {
 	if len(allowedLibraryIDs) == 0 {
@@ -195,7 +200,7 @@ func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (
 		resp, err := upstreamHTTPClient.Do(req)
 		if err != nil {
 			cancel()
-			continue
+			return nil, errJellyfinUnreachable
 		}
 		var ancestors []struct {
 			ID   string `json:"Id"`
@@ -203,7 +208,20 @@ func (jellyfinAPIResolver) ResolveItems(ctx context.Context, itemIDs []string) (
 			Type string `json:"Type"`
 			Path string `json:"Path"`
 		}
-		json.NewDecoder(resp.Body).Decode(&ancestors)
+		switch {
+		case resp.StatusCode == http.StatusNotFound:
+			// Jellyfin does not know the item: it is simply not authorized.
+		case resp.StatusCode != http.StatusOK:
+			resp.Body.Close()
+			cancel()
+			return nil, errJellyfinUnreachable
+		default:
+			if err := json.NewDecoder(resp.Body).Decode(&ancestors); err != nil {
+				resp.Body.Close()
+				cancel()
+				return nil, errJellyfinUnreachable
+			}
+		}
 		resp.Body.Close()
 		cancel()
 		ri := resolvedItem{}
@@ -435,6 +453,10 @@ func authorizeJellyfinItem(w http.ResponseWriter, r *http.Request, itemID string
 		return true
 	}
 	if _, err := jellyfinAuthorizer.AuthorizeItem(r.Context(), itemID); err != nil {
+		if errors.Is(err, errJellyfinUnreachable) {
+			writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Stream is temporarily unavailable.")
+			return false
+		}
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return false
 	}
