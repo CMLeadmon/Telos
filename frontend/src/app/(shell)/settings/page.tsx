@@ -38,6 +38,7 @@ export default function SettingsPage() {
   // Section choice lives in the store because the module rail renders the
   // section list, the same way every other module's sub-nav sits in the rail.
   const active = useSettingsStore((s) => s.activeSection);
+  const setSection = useSettingsStore((s) => s.setSection);
   // Client-side visibility only — every admin endpoint enforces permissions server-side.
   const visible = SECTIONS.filter(
     (s) => !s.admin || (s.capability && hasCapability(user, s.capability)),
@@ -49,6 +50,22 @@ export default function SettingsPage() {
     <div className="settings" data-testid="settings-page">
       {/* No arenahead here: each section renders its own <h2>, and several are
           more specific than the rail label ("Roles & permissions" vs "Roles"). */}
+      {/* The module rail carries this list from 900px up. Below that the rail is
+          gone, so the sections must stay reachable from the page itself. */}
+      <nav className="setsections" aria-label="Settings sections">
+        {visible.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            className={`setnavbtn${current.id === id ? " on" : ""}`}
+            aria-current={current.id === id ? "page" : undefined}
+            onClick={() => setSection(id)}
+          >
+            <Icon size={15} />
+            {label}
+          </button>
+        ))}
+      </nav>
       <div className="setpanel">
         <Panel />
       </div>

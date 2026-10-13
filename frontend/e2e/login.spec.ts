@@ -8,6 +8,14 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+// Typing before React hydrates is discarded when hydration resets the controlled
+// inputs, so a cold dev-server compile can wipe a field a test just filled. Wait
+// for the page's script chunks to settle before interacting.
+async function openLogin(page: Page) {
+  await page.goto("/login/");
+  await page.waitForLoadState("networkidle");
+}
+
 async function fillCredentials(
   page: Page,
   username = "test-member",
@@ -18,7 +26,7 @@ async function fillCredentials(
 }
 
 test("invite mode can be selected", async ({ page }) => {
-  await page.goto("/login/");
+  await openLogin(page);
 
   await page.getByRole("button", { name: "have an invite?" }).click();
 
@@ -30,7 +38,7 @@ test("invite mode can be selected", async ({ page }) => {
 test("required-field feedback marks and focuses invalid inputs", async ({
   page,
 }) => {
-  await page.goto("/login/");
+  await openLogin(page);
 
   await page.getByRole("button", { name: "Enter the node" }).click();
 
@@ -60,7 +68,7 @@ test("sign-in keeps short credentials, reports rejection, and retains input", as
       body: "Unauthorized: Invalid credentials",
     });
   });
-  await page.goto("/login/");
+  await openLogin(page);
   await fillCredentials(page, "ab", "short");
 
   await page.getByRole("button", { name: "Enter the node" }).click();
@@ -90,7 +98,7 @@ test("sign-in keeps short credentials, reports rejection, and retains input", as
 });
 
 test("the eye control reveals and hides the password", async ({ page }) => {
-  await page.goto("/login/");
+  await openLogin(page);
   await page
     .getByLabel("password", { exact: true })
     .fill("secret-passphrase");
@@ -125,7 +133,7 @@ for (const accountMode of [
   },
 ]) {
   test(`${accountMode.name} reports an invalid passphrase`, async ({ page }) => {
-    await page.goto("/login/");
+    await openLogin(page);
     await page.getByRole("button", { name: accountMode.modeButton }).click();
     await fillCredentials(page, "new-member", "too-short");
     await page.getByLabel(accountMode.tokenLabel).fill("test-token");
@@ -154,7 +162,7 @@ test("bootstrap reports and focuses a rejected token", async ({ page }) => {
       body: "Forbidden: Invalid bootstrap token",
     });
   });
-  await page.goto("/login/");
+  await openLogin(page);
   await page.getByRole("button", { name: "first boot" }).click();
   await fillCredentials(page, "new-owner");
   await page.getByLabel("bootstrap token").fill("wrong-token");
@@ -183,7 +191,7 @@ test("invite reports progress, prevents resubmission, and explains token failure
       body: "Invalid or expired invite token",
     });
   });
-  await page.goto("/login/");
+  await openLogin(page);
   await page.getByRole("button", { name: "have an invite?" }).click();
   await fillCredentials(page, "new-member");
   await page.getByLabel("invite token").fill("expired-token");
@@ -241,7 +249,7 @@ for (const gatewayCase of [
         body: gatewayCase.body,
       });
     });
-    await page.goto("/login/");
+    await openLogin(page);
     await fillCredentials(page);
 
     await page.getByRole("button", { name: "Enter the node" }).click();
@@ -256,7 +264,7 @@ test("sign-in explains when the node cannot be reached", async ({ page }) => {
   await page.route("**/api/v1/auth/login", async (route) => {
     await route.abort("connectionrefused");
   });
-  await page.goto("/login/");
+  await openLogin(page);
   await fillCredentials(page);
 
   await page.getByRole("button", { name: "Enter the node" }).click();
@@ -330,7 +338,7 @@ for (const successMode of [
       });
     }
 
-    await page.goto("/login/");
+    await openLogin(page);
     if (successMode.modeButton) {
       await page.getByRole("button", { name: successMode.modeButton }).click();
     }

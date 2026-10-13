@@ -125,6 +125,7 @@ export default function StreamPage() {
     fetchLibraries,
     fetchContinue,
     fetchRecent,
+    fetchItems,
     refresh,
     clearRefreshNotice,
     open,
@@ -139,6 +140,17 @@ export default function StreamPage() {
     void fetchContinue();
     void fetchRecent();
   }, [libraryStatus, fetchLibraries, fetchContinue, fetchRecent]);
+
+  // The home grid renders one row per library, so every library's first level
+  // must load once the library list is ready (and again after a rescan clears it).
+  useEffect(() => {
+    if (libraryStatus !== "ready") return;
+    for (const library of libraries) {
+      if ((itemsStatusByParent[library.id] ?? "idle") === "idle") {
+        void fetchItems(library.id);
+      }
+    }
+  }, [libraryStatus, libraries, itemsStatusByParent, fetchItems]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);

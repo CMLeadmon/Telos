@@ -21,7 +21,50 @@ jobs:
         run: |
           cd backend
           go test -race -v -coverprofile=coverage.out ./...
+      - name: Vet Backend
+        run: |
+          cd backend
+          go vet ./...
 
+  # The harness starts disposable PostgreSQL 16.14 and Redis 7 containers on an
+  # isolated network. Plain `go test` self-skips every integration test, so the
+  # backend-gates job alone cannot exercise migrations, auth or realtime.
+  backend-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify container runtime
+        run: |
+          podman --version
+          podman info --format '{{.Host.OCIRuntime.Name}}'
+      - name: Run backend integration suite
+        run: bash scripts/test-backend.sh
+
+  # `podman compose` needs a Compose provider and the renderer imports PyYAML.
+  # Ubuntu's podman-compose is a rendering convenience for CI only; the
+  # operator runtime pins its own provider (see Phase 2).
+  compose-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Podman Compose provider and PyYAML
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman podman-compose python3-yaml
+      - name: Verify Compose prerequisites
+        run: |
+          podman --version
+          podman-compose --version
+          python3 -c 'import yaml'
+      - name: Render and validate the production Compose model
+        run: bash scripts/validate-compose.sh --env-file .env.example
+
+  # `npm run check:a11y-evidence` is intentionally absent here. It exits 3
+  # (not_run) because WCAG audit evidence must come from a candidate run that no
+  # CI job can produce; a permanently red step is not a gate. The catalog keeps
+  # the frontend-accessibility gate and tests/operations/ci_workflow_contract_test.py
+  # pins the checker as fail-closed until a real evidence validator replaces it.
   frontend-gates:
     runs-on: ubuntu-latest
     steps:
@@ -29,14 +72,40 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24.18.0'
-      - name: Lint and Unit Test
-        run: |
-          cd frontend
-          npm ci
-          npm run lint
-          npm run test:unit
-          npm run build
-          npm run check:bundle
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Lint
+        run: npm --prefix frontend run lint
+      - name: Type-check with the locked compiler
+        run: node frontend/node_modules/typescript/bin/tsc --project frontend/tsconfig.json --noEmit
+      - name: Prove the type gate catches errors
+        run: bash tests/operations/frontend_types_gate_test.sh
+      - name: Unit test
+        run: npm --prefix frontend run test:unit
+      - name: Build static export
+        run: npm --prefix frontend run build
+      - name: Check bundle budget
+        run: npm --prefix frontend run check:bundle
+
+  # Real Playwright execution through the managed-server wrapper. `npm run
+  # check:browsers` only reads a JSON declaration, so the browser binaries are
+  # installed explicitly from the locked Playwright version. The wrapper owns
+  # port 3000 and its dev server; its 1650-second budget sits inside the
+  # catalog's 1800-second gate.
+  frontend-playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Install Chromium and WebKit with system libraries
+        run: npm --prefix frontend exec --no -- playwright install --with-deps chromium webkit
+      - name: Run Playwright through the managed dev server
+        run: python3 scripts/run-playwright-gate.py --playwright-timeout-seconds 1650
 
   # backend/out/ is gitignored, so a fresh checkout has never contained it.
   # Before the embedfrontend build tag, compiling from a clean tree failed with
@@ -99,6 +168,11 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Install fixture prerequisites
+        run: sudo apt-get install -y ripgrep python3-yaml
       - name: Verify evidence envelope contract
         run: bash tests/operations/evidence_envelope_test.sh
       - name: Verify fail-closed gate behavior

@@ -85,6 +85,61 @@ class PlatformScopeTests(unittest.TestCase):
         self.write(path, catalog)
         self.assertNotEqual(self.check().returncode, 0)
 
+    def assert_platform_gate_rejected(self, mutate, label):
+        path = "ci/phase-gates.json"
+        catalog = self.read(path)
+        mutate(catalog)
+        self.write(path, catalog)
+        result = self.check()
+        self.assertNotEqual(result.returncode, 0, f"{label} was accepted: {result.stdout}")
+        self.assertIn("platform-scope", result.stdout + result.stderr, label)
+
+    @staticmethod
+    def gate(catalog, gate_id):
+        return next(g for g in catalog["gates"] if g["id"] == gate_id)
+
+    def test_catalog_must_carry_platform_scope_gate(self):
+        self.assert_platform_gate_rejected(
+            lambda catalog: catalog.update(gates=[
+                g for g in catalog["gates"] if g["id"] != "platform-scope"]),
+            "catalog without platform-scope")
+
+    def test_platform_scope_gate_cannot_be_optional(self):
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(required=False),
+            "optional platform-scope")
+
+    def test_platform_scope_gate_must_stay_phase_one_local(self):
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(phase=2),
+            "platform-scope moved out of phase 1")
+        self.setUp()
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(scope="external"),
+            "platform-scope moved out of local scope")
+
+    def test_certification_must_depend_on_platform_scope(self):
+        def drop(catalog):
+            gate = self.gate(catalog, "beta-certification")
+            gate["prerequisites"] = [p for p in gate["prerequisites"] if p != "platform-scope"]
+        self.assert_platform_gate_rejected(drop, "certification without platform-scope")
+
+    def test_platform_scope_gate_must_run_this_test(self):
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(
+                command=["python3", "-c", "raise SystemExit(0)"]),
+            "platform-scope with a hollow command")
+
+    def test_platform_scope_gate_must_bind_source_without_prerequisites(self):
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(subjectKind="fixture"),
+            "platform-scope bound to a fixture subject")
+        self.setUp()
+        self.assert_platform_gate_rejected(
+            lambda catalog: self.gate(catalog, "platform-scope").update(
+                prerequisites=["evidence-envelope"]),
+            "platform-scope with a prerequisite")
+
 
 if __name__ == "__main__":
     unittest.main()

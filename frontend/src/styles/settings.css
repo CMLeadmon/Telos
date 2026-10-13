@@ -48,7 +48,9 @@
 .setdanger{border-color:color-mix(in srgb, var(--rose) 45%, var(--line))}
 html[data-motion="reduced"] *,html[data-motion="reduced"] *::before,html[data-motion="reduced"] *::after{
   animation-duration:.001s!important;transition-duration:.001s!important}
+.setsections{display:none}
 @media (max-width: 900px){.settings{flex-direction:column;padding:16px;overflow-y:auto}
+  .setsections{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
   .setnav{width:100%;flex-direction:row;flex-wrap:wrap;overflow:visible}
   .setnav .grouplabel{width:100%}}
 

@@ -9,6 +9,15 @@ repo_root="$(git rev-parse --show-toplevel)"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
 
+# The removed-feature scan and the dev-proxy fixture need these host tools; a
+# missing one is a failed prerequisite, not a reason to skip a mutation.
+for required_tool in node rg; do
+  command -v "$required_tool" >/dev/null || {
+    echo "product-truth test prerequisite missing: $required_tool" >&2
+    exit 1
+  }
+done
+
 node "$repo_root/tests/operations/dev_server_proxy_test.mjs"
 
 copy_fixture() {

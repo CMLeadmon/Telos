@@ -69,6 +69,7 @@ cd "$repo_root"
 required_paths() {
 	cat <<'EOF'
 .env.example
+.github/workflows/ci.yml
 .nvmrc
 AGENTS.md
 docker-compose.yml
@@ -84,17 +85,23 @@ frontend/package.json
 frontend/package-lock.json
 frontend/next.config.ts
 documentation/product/beta-contract.json
+documentation/product/platform-scope.md
 documentation/operations/backup-and-restore.md
 documentation/operations/repository-baseline.md
 scripts/backup.sh
+scripts/check-documentation-hygiene.py
 scripts/lib/evidence.py
 scripts/lib/process_supervisor.py
 scripts/not-run.py
+scripts/run-playwright-gate.py
 scripts/restore.sh
 scripts/run-gates.py
 scripts/verify-clean-checkout.sh
 scripts/verify-evidence.sh
 scripts/tests/verify-clean-checkout-test.sh
+tests/operations/ci_workflow_contract_test.py
+tests/operations/frontend_types_gate_test.sh
+tests/operations/platform_scope_test.py
 release/evidence-envelope.schema.json
 EOF
 }

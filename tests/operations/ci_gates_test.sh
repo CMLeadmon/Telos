@@ -15,6 +15,7 @@ trap cleanup EXIT
 
 python3 -B "$repo_root/tests/operations/process_supervisor_test.py"
 python3 -B "$repo_root/tests/operations/run_gates_test.py"
+python3 -B "$repo_root/tests/operations/ci_workflow_contract_test.py"
 
 if [[ -e "$sentinel" ]]; then
   echo "refusing to overwrite pre-existing injection sentinel: $sentinel" >&2
@@ -863,7 +864,7 @@ required_current_local = {
     "backend-headless-build", "api-contract-drift",
     "operator-cli-linux-amd64", "operator-cli-linux-arm64",
     "frontend-playwright", "documentation-citation-hygiene",
-    "documentation-placeholder-hygiene",
+    "documentation-placeholder-hygiene", "platform-scope",
 }
 missing = sorted(required_current_local - set(ids))
 assert not missing, f"repository catalog is missing current local gates: {missing}"
@@ -912,6 +913,30 @@ required_before_beta = {
     gate["id"] for gate in catalog["gates"][:beta_index] if gate["required"]
 }
 assert set(gate_by_id["beta-certification"]["prerequisites"]) == required_before_beta
+
+# The owner's Ubuntu-server / browser-and-Linux-first scope is enforced by a
+# catalog gate, not only by CI. It must be a phase-1 local source gate that the
+# aggregate cannot omit.
+platform_gate = gate_by_id["platform-scope"]
+assert platform_gate["command"] == ["python3", "tests/operations/platform_scope_test.py"], platform_gate
+assert platform_gate["phase"] == 1 and platform_gate["scope"] == "local", platform_gate
+assert platform_gate["required"] is True, platform_gate
+assert platform_gate["subjectKind"] == "source", platform_gate
+assert platform_gate["prerequisites"] == [], platform_gate
+assert platform_gate["timeoutSeconds"] == 120, platform_gate
+assert ids.count("platform-scope") == 1, ids
+assert set(gate_by_id["beta-certification"]["prerequisites"]) >= (
+    required_before_beta - {"beta-certification"}
+), "beta-certification must include every other required predecessor"
+assert "platform-scope" in gate_by_id["beta-certification"]["prerequisites"]
+
+# `npx --prefix frontend tsc` launched from the repository root finds no
+# tsconfig and silently checks nothing; tests/operations/frontend_types_gate_test.sh
+# proves the corrected argv with a real compiler.
+assert gate_by_id["frontend-types"]["command"] == [
+    "node", "frontend/node_modules/typescript/bin/tsc",
+    "--project", "frontend/tsconfig.json", "--noEmit",
+], gate_by_id["frontend-types"]
 PY
 
 python3 "$repo_root/scripts/check-documentation-hygiene.py" citations
@@ -981,6 +1006,7 @@ import sys
 from pathlib import Path
 
 REQUIRED_COMMANDS = [
+    "sudo apt-get install -y ripgrep python3-yaml",
     "bash tests/operations/evidence_envelope_test.sh",
     "bash tests/operations/beta_certification_test.sh",
     "bash tests/operations/ci_gates_test.sh",
@@ -995,7 +1021,7 @@ KEY = re.compile(r"(?:([A-Za-z0-9_-]+)|'([^']+)'|\"([^\"]+)\"):(?:[ \t]*(.*))?$"
 TOP_LEVEL_DIRECT_KEYS = {"name", "on", "permissions", "jobs", "defaults"}
 JOB_DIRECT_KEYS = {"runs-on", "permissions", "steps", "if", "continue-on-error", "defaults"}
 PERMISSION_DIRECT_KEYS = {"contents"}
-STEP_DIRECT_KEYS = {"name", "uses", "run", "if", "continue-on-error", "shell", "defaults"}
+STEP_DIRECT_KEYS = {"name", "uses", "with", "run", "if", "continue-on-error", "shell", "defaults"}
 
 
 class WorkflowError(ValueError):
@@ -2358,6 +2384,19 @@ required_inventory="$(bash "$repo_root/scripts/verify-clean-checkout.sh" --list-
   echo "clean-checkout inventory must include scripts/lib/process_supervisor.py exactly once" >&2
   exit 1
 }
+for inventory_path in \
+  .github/workflows/ci.yml \
+  documentation/product/platform-scope.md \
+  scripts/run-playwright-gate.py \
+  scripts/check-documentation-hygiene.py \
+  tests/operations/platform_scope_test.py \
+  tests/operations/frontend_types_gate_test.sh \
+  tests/operations/ci_workflow_contract_test.py; do
+  [[ "$(grep -Fxc "$inventory_path" <<<"$required_inventory")" -eq 1 ]] || {
+    echo "clean-checkout inventory must include $inventory_path exactly once" >&2
+    exit 1
+  }
+done
 
 make_inventory_fixture() {
   local fixture="$1"

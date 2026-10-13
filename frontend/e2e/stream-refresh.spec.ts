@@ -53,9 +53,11 @@ async function mockStreamNode(page: Page, options: MockScanOptions) {
       }
       return;
     }
-    if (path === "/api/v1/media") {
+    // The gateway lists libraries at /media/items and a library's children at
+    // /media/items?parentId=<library id>; the client reads both from one path.
+    if (path === "/api/v1/media/items" && !new URL(request.url()).searchParams.has("parentId")) {
       await route.fulfill({
-        json: [{ id: "movies", name: "Movies", type: "video" }],
+        json: [{ id: "movies", name: "Movies", type: "video", collectionType: "movies" }],
       });
       return;
     }

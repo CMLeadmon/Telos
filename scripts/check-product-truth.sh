@@ -461,6 +461,31 @@ if contract_valid and isinstance(catalog, dict):
     for gate_id in sorted(deferred & required_closure):
         fail("platform", f"deferred client {gate_id} blocks initial delivery")
 
+    # The scope policy is only enforced if its own test is a required catalog
+    # gate that the aggregate cannot omit; a green script no one runs proves nothing.
+    scope_gate_command = ["python3", "tests/operations/platform_scope_test.py"]
+    if gate_ids.count("platform-scope") != 1:
+        fail("platform", "platform-scope gate must exist exactly once in the catalog")
+    else:
+        scope_gate = gate_by_id["platform-scope"]
+        expectations = {
+            "required": True,
+            "phase": 1,
+            "scope": "local",
+            "command": scope_gate_command,
+            "subjectKind": "source",
+            "prerequisites": [],
+        }
+        for key, value in expectations.items():
+            actual = scope_gate.get(key)
+            if actual != value or type(actual) is not type(value):
+                fail("platform", f"platform-scope gate {key} must be {value!r}, found {actual!r}")
+        if scope_gate.get("timeoutSeconds") != 120:
+            fail("platform", "platform-scope gate timeoutSeconds must be 120")
+        certification = gate_by_id.get("beta-certification", {})
+        if "platform-scope" not in certification.get("prerequisites", []):
+            fail("platform", "beta-certification must list platform-scope as a prerequisite")
+
 
 def shipped_files(relative):
     directory = (root / relative).resolve()

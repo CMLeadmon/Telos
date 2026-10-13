@@ -228,7 +228,17 @@ export default function LoginPage() {
     e.preventDefault();
     if (busy) return;
 
-    const validationFeedback = validate(mode, username, password, token);
+    // Read the inputs themselves, not only React state: browser autofill, password
+    // managers and typing that lands before hydration never fire a React change
+    // event, and a stale empty state would reject a form the member filled in.
+    const enteredUsername = usernameRef.current?.value ?? username;
+    const enteredPassword = passwordRef.current?.value ?? password;
+    const enteredToken = tokenRef.current?.value ?? token;
+    setUsername(enteredUsername);
+    setPassword(enteredPassword);
+    setToken(enteredToken);
+
+    const validationFeedback = validate(mode, enteredUsername, enteredPassword, enteredToken);
     if (validationFeedback) {
       setFeedback(validationFeedback);
       focusField(validationFeedback.focusField);
@@ -249,11 +259,11 @@ export default function LoginPage() {
 
     try {
       if (mode === "login")
-        await login(username, password, controller.signal);
+        await login(enteredUsername, enteredPassword, controller.signal);
       else if (mode === "bootstrap")
-        await bootstrap(username, password, token.trim(), controller.signal);
+        await bootstrap(enteredUsername, enteredPassword, enteredToken.trim(), controller.signal);
       else
-        await acceptInvite(username, password, token.trim(), controller.signal);
+        await acceptInvite(enteredUsername, enteredPassword, enteredToken.trim(), controller.signal);
       window.clearTimeout(timeout);
       setFeedback({
         kind: "success",
