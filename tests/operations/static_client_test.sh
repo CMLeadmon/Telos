@@ -26,8 +26,8 @@ podman build -f frontend/Dockerfile -t "$image" frontend
 
 # Same hardening Compose applies, with tmpfs owned by the unprivileged worker.
 cid="$(podman run -d --read-only --cap-drop=all --security-opt=no-new-privileges \
-  --tmpfs /var/cache/nginx:size=16m,mode=0750,uid=101,gid=101 \
-  --tmpfs /var/run:size=1m,mode=0750,uid=101,gid=101 \
+  --tmpfs /var/cache/nginx:size=16m,mode=1777 \
+  --tmpfs /var/run:size=1m,mode=1777 \
   -p 127.0.0.1::8080 "$image")"
 
 uid="$(podman exec "$cid" id -u)"

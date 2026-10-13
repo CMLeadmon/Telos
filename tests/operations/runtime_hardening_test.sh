@@ -218,7 +218,7 @@ python3 - "$fixture/docker-compose.yml" <<'PY'
 import sys
 path = sys.argv[1]
 text = open(path, encoding="utf-8").read()
-open(path, "w", encoding="utf-8").write(text.replace("  jellyfin:\n    image: jellyfin/jellyfin:latest\n", "  jellyfin:\n    ports:\n      - \"8096:8096\"\n    image: jellyfin/jellyfin:latest\n", 1))
+open(path, "w", encoding="utf-8").write(text.replace("  jellyfin:\n    image: docker.io/jellyfin/jellyfin:latest\n", "  jellyfin:\n    ports:\n      - \"8096:8096\"\n    image: docker.io/jellyfin/jellyfin:latest\n", 1))
 PY
 set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
 [[ $status -ne 0 ]] || { echo "a production model publishing Jellyfin was accepted" >&2; exit 1; }

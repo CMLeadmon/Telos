@@ -6,7 +6,7 @@ ARG EMBED_FRONTEND=false
 # Build the static frontend export. Only reached when EMBED_FRONTEND=true;
 # nothing depends on this stage in a headless build, so the backend image can
 # be built without a working Node toolchain at all.
-FROM node:24.18.0-alpine AS frontend
+FROM docker.io/library/node:24.18.0-alpine AS frontend
 WORKDIR /fe
 # Copy only the dependency manifests first so the install layer is cacheable
 # and reproducible from the lockfile alone.
@@ -16,7 +16,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Shared Go build context for both variants.
-FROM golang:1.26.5-alpine AS builder-base
+FROM docker.io/library/golang:1.26.5-alpine AS builder-base
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -tags embedfrontend -trimpath -o telos-cor
 FROM builder-${EMBED_FRONTEND} AS builder
 
 # Final Image
-FROM alpine:3.22.2
+FROM docker.io/library/alpine:3.22.2
 # Fixed, unprivileged identity shared with the Compose `user:` setting.
 RUN addgroup -g 10001 -S telos && adduser -S -u 10001 -G telos -H -h /app telos
 WORKDIR /app

@@ -32,7 +32,7 @@ volumes:
 
 services:
   traefik:
-    image: traefik:v3.3
+    image: docker.io/library/traefik:v3.3
     container_name: telos-traefik
     restart: unless-stopped
     security_opt:
@@ -192,8 +192,8 @@ services:
       - ALL
     read_only: true
     tmpfs:
-      - /var/cache/nginx:size=16m,mode=0750,uid=101,gid=101
-      - /var/run:size=1m,mode=0750,uid=101,gid=101
+      - /var/cache/nginx:size=16m,mode=1777
+      - /var/run:size=1m,mode=1777
     networks:
       - telos-ingress
     healthcheck:
@@ -203,7 +203,7 @@ services:
       retries: 3
 
   postgres:
-    image: postgres:16.14-alpine
+    image: docker.io/library/postgres:16.14-alpine
     container_name: telos-postgres
     restart: unless-stopped
     # Enable query statistics with parameter redaction and no statement logging.
@@ -239,7 +239,7 @@ services:
       retries: 5
 
   redis:
-    image: redis:7-alpine
+    image: docker.io/library/redis:7-alpine
     container_name: telos-redis
     restart: unless-stopped
     security_opt:
@@ -281,7 +281,7 @@ services:
       retries: 3
 
   clamav:
-    image: clamav/clamav:latest
+    image: docker.io/clamav/clamav:latest
     container_name: telos-clamav
     restart: unless-stopped
     security_opt:
@@ -302,7 +302,7 @@ services:
       retries: 5
 
   jellyfin:
-    image: jellyfin/jellyfin:latest
+    image: docker.io/jellyfin/jellyfin:latest
     container_name: telos-jellyfin
     restart: unless-stopped
     user: "${APP_UID}:${APP_GID}"
@@ -322,7 +322,7 @@ services:
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
 
   grimmory-db:
-    image: mariadb:10.11
+    image: docker.io/library/mariadb:10.11
     container_name: telos-grimmory-db
     restart: unless-stopped
     networks:
@@ -341,7 +341,7 @@ services:
       retries: 3
 
   grimmory:
-    image: grimmory/grimmory:latest
+    image: docker.io/grimmory/grimmory:latest
     container_name: telos-grimmory
     restart: unless-stopped
     depends_on:

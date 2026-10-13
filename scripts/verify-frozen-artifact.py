@@ -125,7 +125,7 @@ def smoke_static_client(path):
         image = loaded.stdout.strip().splitlines()[-1].split()[-1]
         started = subprocess.run(
             [podman, "run", "-d", "--read-only", "--cap-drop=all", "--security-opt=no-new-privileges",
-             "--tmpfs", "/var/cache/nginx:uid=101,gid=101,mode=0750", "--tmpfs", "/var/run:uid=101,gid=101,mode=0750",
+             "--tmpfs", "/var/cache/nginx:size=16m,mode=1777", "--tmpfs", "/var/run:size=1m,mode=1777",
              "-p", "127.0.0.1::8080", image],
             capture_output=True, text=True, timeout=PODMAN_TIMEOUT, check=True)
         container = started.stdout.strip()
