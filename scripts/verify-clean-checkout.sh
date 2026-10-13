@@ -92,6 +92,8 @@ cli/lib/node_config.py
 frontend/.dockerignore
 frontend/Dockerfile
 frontend/nginx.conf
+frontend/e2e/hosted-node.spec.ts
+frontend/e2e/module-outage.spec.ts
 frontend/package.json
 frontend/package-lock.json
 frontend/next.config.ts
@@ -104,6 +106,7 @@ scripts/backup.sh
 scripts/check-documentation-hygiene.py
 scripts/enroll-release-signer.py
 scripts/verify-frozen-artifact.py
+scripts/lib/browser_node_smoke.py
 scripts/lib/evidence.py
 scripts/lib/gate_producers.py
 scripts/lib/release_graph.py
@@ -111,7 +114,9 @@ scripts/lib/schema_check.py
 scripts/lib/signing.py
 scripts/lib/process_supervisor.py
 scripts/not-run.py
+scripts/rehearse-browser-node.sh
 scripts/run-playwright-gate.py
+scripts/smoke-browser-node.sh
 scripts/restore.sh
 scripts/run-gates.py
 scripts/verify-clean-checkout.sh
@@ -120,8 +125,12 @@ scripts/tests/verify-clean-checkout-test.sh
 tests/fixtures/gates/fixture_producer.py
 tests/fixtures/product-truth/transitional-routes.yaml
 tests/helpers/compose_double/podman
+tests/helpers/fake_node_server.py
 tests/helpers/pty_drive.py
 tests/helpers/compose_double/render_compose.py
+tests/operations/browser_node_fixtures_test.sh
+tests/operations/browser_node_rehearsal_test.sh
+tests/operations/browser_node_smoke_test.sh
 tests/operations/ci_workflow_contract_test.py
 tests/operations/frozen_artifact_test.py
 tests/operations/gate_runner_v2_test.py

@@ -90,6 +90,14 @@ EXPECTED_JOBS = {
             run("bash tests/operations/static_client_test.sh"),
         ],
     },
+    "browser-node-fixtures": {
+        "min_timeout_minutes": 15,
+        "steps": [
+            CHECKOUT,
+            run("sudo apt-get update", "sudo apt-get install -y nginx-core"),
+            {"run": ["bash tests/operations/browser_node_fixtures_test.sh"], "env": {"TELOS_NGINX": "/usr/sbin/nginx"}},
+        ],
+    },
     "check-headless-build": {
         "steps": [
             CHECKOUT, GO,

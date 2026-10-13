@@ -133,6 +133,22 @@ jobs:
       - name: Build and inspect the static client image
         run: bash tests/operations/static_client_test.sh
 
+  # The hosted-browser probe and outage controller against an HTTPS fixture node, plus
+  # the static client's nginx contract (needs a real nginx binary).
+  browser-node-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install nginx
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nginx-core
+      - name: Run the browser-node fixture suite
+        env:
+          TELOS_NGINX: /usr/sbin/nginx
+        run: bash tests/operations/browser_node_fixtures_test.sh
+
   # backend/out/ is gitignored, so a fresh checkout has never contained it.
   # Before the embedfrontend build tag, compiling from a clean tree failed with
   # "pattern all:out: no matching files found" -- which means backend-gates,
