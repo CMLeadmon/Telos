@@ -6,7 +6,7 @@
 # telos subcommand.
 #
 # Scope is deliberately narrow. It installs the CLI; it does NOT set up a node.
-# Generating secrets, writing .env, and creating the storage tree are `telos
+# Generating secrets, writing node.env, and creating the storage tree are `telos
 # init`, which needs no privileges and is safely re-runnable. Keeping the two
 # apart means the sudo step happens once and never again.
 #
@@ -206,13 +206,15 @@ case ":$PATH:" in
 esac
 
 printf '%sNext:%s\n' "$C_BOLD" "$C_OFF"
-if [ -f "$INSTALL_DIR/.env" ]; then
+# A node's configuration lives outside the checkout (production /var/lib/telos,
+# development $INSTALL_DIR/.telos), so reinstalling never touches it.
+if [ -f "${TELOS_NODE_PATH:-/var/lib/telos}/node.env" ] || [ -f "$INSTALL_DIR/.telos/node.env" ]; then
   printf '    telos doctor   %sthis node is already initialized — check it%s\n' "$C_DIM" "$C_OFF"
   printf '    telos start    %sbring the stack up%s\n\n' "$C_DIM" "$C_OFF"
 else
-  printf '    telos init     %sgenerate .env and create the storage tree%s\n' "$C_DIM" "$C_OFF"
-  printf '    telos start    %sbring the stack up%s\n' "$C_DIM" "$C_OFF"
-  printf '    telos status   %scheck what came up%s\n\n' "$C_DIM" "$C_OFF"
+  printf '    sudo telos init   %screate node.env, signing keys and the storage tree%s\n' "$C_DIM" "$C_OFF"
+  printf '    sudo telos configure integrations --setup   %sConfigure Jellyfin and Grimmory%s\n' "$C_DIM" "$C_OFF"
+  printf '    sudo telos start  %sbring the stack up%s\n\n' "$C_DIM" "$C_OFF"
 fi
 
 if [ "$LINK_ONLY" -eq 1 ]; then

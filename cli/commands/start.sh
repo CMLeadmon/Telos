@@ -29,7 +29,17 @@ run() {
     shift
   done
 
-  require_env_file
+  require_node_env
+  # Refuse before Compose runs: a node with placeholder credentials, missing
+  # library IDs or unreadable signing files must never come up half-configured.
+  local env_file mode
+  env_file="$(node_env_path)"
+  mode="$(node_mode)"
+  if ! validate_node_config "$env_file" "$mode"; then
+    warn "refusing to start: $env_file is not ready for $mode (each defect is listed above)"
+    note "telos doctor names one repair per defect; it never regenerates credentials or keys."
+    return 1
+  fi
 
   local args=(up -d)
   [ "$build" -eq 1 ] && args+=(--build)

@@ -81,6 +81,9 @@ backend/go.sum
 backend/Dockerfile
 backend/main.go
 ci/phase-gates.json
+cli/lib/common.sh
+cli/lib/config.sh
+cli/lib/node_config.py
 frontend/.dockerignore
 frontend/Dockerfile
 frontend/nginx.conf
@@ -116,6 +119,7 @@ tests/operations/ci_workflow_contract_test.py
 tests/operations/frozen_artifact_test.py
 tests/operations/gate_runner_v2_test.py
 tests/operations/release_graph_test.py
+tests/operations/node_config_test.sh
 tests/operations/release_test.sh
 tests/operations/runtime_hardening_test.sh
 tests/operations/signer_trust_test.py

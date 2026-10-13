@@ -11,6 +11,9 @@ docker-compose.override.yml
 .vscode/
 *.local
 
+# Development node state (node.env, signing keys, journals)
+/.telos/
+
 # Dependency and build output
 node_modules/
 .next/

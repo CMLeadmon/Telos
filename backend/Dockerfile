@@ -39,7 +39,10 @@ FROM builder-${EMBED_FRONTEND} AS builder
 
 # Final Image
 FROM alpine:3.22.2
+# Fixed, unprivileged identity shared with the Compose `user:` setting.
+RUN addgroup -g 10001 -S telos && adduser -S -u 10001 -G telos -H -h /app telos
 WORKDIR /app
 COPY --from=builder /app/telos-core .
+USER 10001:10001
 EXPOSE 8080
 CMD ["./telos-core"]

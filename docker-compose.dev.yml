@@ -2,6 +2,10 @@
 # deploy this override as part of the production stack.
 services:
   telos-core:
+    # Rootless development maps container root to the invoking host user, which is
+    # the only identity that can read the user-owned signing files under ./.telos.
+    # Production keeps the fixed 10001:10001 gateway identity from the base file.
+    user: "0:0"
     environment:
       - TELOS_ENV=development
       # Finite dev-origin allowlist for the cross-origin split (frontend on

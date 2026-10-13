@@ -19,7 +19,18 @@ class InterpolationError(Exception):
     pass
 
 
+def _single_quoted(body):
+    # python-dotenv: only \\ and \' are escapes inside single quotes.
+    return re.sub(r"\\([\\'])", r"\1", body)
+
+
+def _double_quoted(body):
+    escapes = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "'": "'", "$": "$"}
+    return re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), "\\" + m.group(1)), body)
+
+
 def load_env(path):
+    """Parse a Compose env file with python-dotenv (podman-compose) quoting rules."""
     values = {}
     for raw in open(path, encoding="utf-8").read().splitlines():
         line = raw.strip()
@@ -27,8 +38,10 @@ def load_env(path):
             continue
         key, value = line.split("=", 1)
         value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
+        if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+            value = _single_quoted(value[1:-1])
+        elif value.startswith('"') and value.endswith('"') and len(value) >= 2:
+            value = _double_quoted(value[1:-1])
         values[key.strip()] = value
     return values
 

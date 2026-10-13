@@ -127,6 +127,12 @@ services:
         condition: service_healthy
       telos-migrate:
         condition: service_completed_successfully
+    # Fixed non-root identity. group_add lets the gateway write the storage tree
+    # that `telos init` created for the operator's group; existing storage is
+    # never recursively chowned (see documentation/operations/install.md).
+    user: "10001:10001"
+    group_add:
+      - "${APP_GID}"
     networks:
       - telos-ingress
       - telos-backend
@@ -159,6 +165,9 @@ services:
       # One controlled shared root; the gateway confines all physical I/O
       # beneath it via openat2 (RESOLVE_BENEATH|NO_SYMLINKS|NO_MAGICLINKS).
       - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z
+      # Signing roots (cursor keyring + HLS key), read-only and mounted nowhere
+      # else: not Traefik, the client, databases, Jellyfin, Grimmory or ClamAV.
+      - ${TELOS_CONFIG_PATH:?Run telos init first}:/run/telos:ro,z
     healthcheck:
       # Readiness reflects every required dependency; a failing dep returns 503.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health/ready"]

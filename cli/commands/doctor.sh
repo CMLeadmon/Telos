@@ -25,15 +25,32 @@ Usage:
 
 Checks three layers:
   host      container runtime, compose driver, kernel and storage support
-  config    .env presence, permissions, unreplaced placeholders, storage tree
+  config    node.env presence/mode/syntax, signing files, upstream
+            integrations, storage tree
   node      container state and gateway reachability
 
 Options:
-  --fix   Apply the safe, reversible fixes only — creating missing storage
-          directories and tightening .env permissions. It will never install
-          system packages, edit credentials, or touch your data; anything
-          outside that boundary is printed for you to run yourself.
+  --fix   Apply the safe, reversible fixes only — tightening permissions on
+          node.env and the signing files and creating missing, empty storage
+          directories. It never generates or edits credentials or keys, never
+          installs packages and never touches your data; everything else is
+          printed as one exact command for you to run yourself.
 EOF
+}
+
+# dx_defects LABEL REPAIR_FALLBACK — read defect lines on stdin; each becomes one
+# problem with a repair taken from the message itself when it carries one.
+dx_defects() {
+  local label="$1" fallback="$2" line repair
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    repair="$fallback"
+    case "$line" in
+      *"(chmod "*|*"(chown "*) repair="${line##*(}"; repair="${repair%)}" ;;
+      *"never regenerate"*|*"never regenerated"*) repair="restore the file from your node backup (keys are never regenerated)" ;;
+    esac
+    dx_bad "$label: $line" "$repair"
+  done
 }
 
 # --- configuration layer ---------------------------------------------------
@@ -41,46 +58,87 @@ check_config() {
   local do_fix="$1"
   printf '\n%sConfiguration%s\n\n' "$C_BOLD" "$C_OFF"
 
-  local env_file="$REPO_ROOT/.env"
-  if [ ! -f "$env_file" ]; then
-    dx_bad ".env is missing — this node is not initialized" "telos init"
+  local node env_file config mode_name
+  node="$(node_path)" || return
+  env_file="$node/node.env"
+  config="$node/config"
+  mode_name="$(node_mode)"
+
+  if [ -e "$REPO_ROOT/.env" ] && [ ! -e "$env_file" ]; then
+    dx_bad "a checkout .env exists but this node has no node.env" \
+           "telos init --import-env $REPO_ROOT/.env    (copies your credentials unchanged; never regenerate them)"
     return
   fi
-  dx_ok ".env present"
+  if [ ! -f "$env_file" ]; then
+    dx_bad "node.env is missing at $env_file — this node is not initialized" "telos init"
+    return
+  fi
+  dx_ok "node.env present ($env_file)"
 
-  # Mode. It holds every credential on the node.
+  # Mode and syntax. It holds every credential on the node.
   local mode; mode="$(stat -c '%a' "$env_file" 2>/dev/null || echo '???')"
   if [ "$mode" = "600" ] || [ "$mode" = "400" ]; then
-    dx_ok ".env permissions ($mode)"
+    dx_ok "node.env permissions ($mode)"
   elif [ "$do_fix" -eq 1 ]; then
-    chmod 600 "$env_file" && dx_ok ".env permissions tightened to 600 (was $mode)"
+    chmod 600 "$env_file" && dx_ok "node.env permissions tightened to 600 (was $mode)"
   else
-    dx_bad ".env is mode $mode — it holds every credential on this node" \
+    dx_bad "node.env is mode $mode — it holds every credential on this node" \
            "chmod 600 $env_file    (or: telos doctor --fix)"
   fi
+  local parse_err; parse_err="$(mktemp)"
+  if ! node_config_py parse "$env_file" 2>"$parse_err"; then
+    dx_bad "node.env does not parse: $(cat "$parse_err")" "edit $env_file by hand (values are single-quoted or plain; no \$ or backticks)"
+    rm -f "$parse_err"
+    return
+  fi
+  rm -f "$parse_err"
+  dx_ok "node.env parses"
 
-  # Unreplaced placeholders are the single most common broken-node cause.
-  local placeholders
-  placeholders="$(grep -nE '=(change-me|generate-me)' "$env_file" 2>/dev/null | cut -d: -f2 | cut -d= -f1 | tr '\n' ' ')"
-  if [ -n "$placeholders" ]; then
-    dx_bad "unreplaced placeholder values: $placeholders" \
-           "telos init --force   (regenerates secrets; only safe on a node with no data yet)"
+  # Signing directory and files, reported one by one.
+  if [ "$do_fix" -eq 1 ] && [ -d "$config" ]; then
+    local fixed=0 path
+    if [ "$(stat -c '%a' "$config")" != "700" ]; then chmod 700 "$config" && fixed=1; fi
+    for path in "$config/cursor-keys.json" "$config/hls-key"; do
+      [ -f "$path" ] && [ ! -L "$path" ] && [ "$(stat -c '%a' "$path")" != "600" ] && chmod 600 "$path" && fixed=1
+    done
+    [ "$fixed" -eq 0 ] || dx_ok "signing directory and file modes tightened (contents untouched)"
+  fi
+  local signing_out signing_status
+  signing_out="$(validate_signing_files "$env_file" 2>&1)"; signing_status=$?
+  if [ "$signing_status" -eq 0 ]; then
+    dx_ok "signing files: directory 0700, two distinct keys, readable"
   else
-    dx_ok "no placeholder credentials"
+    printf '%s\n' "$signing_out" | dx_defects "signing" "inspect $config; keys are never regenerated on an existing node"
+  fi
+  if [ "$(id -u)" -ne 0 ] && [ "$mode_name" = "production" ]; then
+    dx_warn "signing-file ownership is only verifiable as root; re-run with sudo"
+  fi
+
+  # Upstream integrations (production completeness).
+  if [ "$mode_name" = "production" ]; then
+    local integration_out integration_status
+    integration_out="$(validate_integrations "$env_file" 2>&1)"; integration_status=$?
+    if [ "$integration_status" -eq 0 ]; then
+      dx_ok "credentials, upstream integrations and library IDs are complete"
+    else
+      printf '%s\n' "$integration_out" | dx_defects "integrations" "telos configure integrations --setup"
+    fi
+  else
+    note "      development node: upstream credentials may be blank (the gateway reports them degraded)"
   fi
 
   # Storage tree.
   local storage
-  storage="$(grep -E '^STORAGE_PATH=' "$env_file" | head -1 | cut -d= -f2-)"
+  storage="$(env_value "$env_file" STORAGE_PATH)"
   if [ -z "$storage" ]; then
-    dx_bad "STORAGE_PATH is not set in .env" "telos init --force"
+    dx_bad "STORAGE_PATH is not set in node.env" "set STORAGE_PATH to an absolute host path in $env_file"
   else
     local d missing=0
     for d in "" /media /books /bookdrop; do
       local path="${storage}${d}"
       if [ ! -d "$path" ]; then
         if [ "$do_fix" -eq 1 ] && mkdir -p "$path" 2>/dev/null; then
-          dx_ok "created missing $path"
+          dx_ok "created missing $path (empty)"
         else
           missing=1
           dx_bad "missing storage directory: $path" "mkdir -p $path    (or: telos doctor --fix)"
@@ -88,17 +146,28 @@ check_config() {
       fi
     done
     [ "$missing" -eq 0 ] && dx_ok "storage tree under $storage"
-    if [ -d "$storage" ] && [ ! -w "$storage" ]; then
-      dx_bad "$storage is not writable by $(id -un)" "sudo chown -R $(id -u):$(id -g) $storage"
+    if [ -d "$storage" ] && [ "$mode_name" = "development" ] && [ ! -w "$storage" ]; then
+      dx_bad "$storage is not writable by $(id -un)" "chmod u+w $storage"
     fi
   fi
 
-  # A production node on loopback ports is almost certainly a mistake.
+  # The compose model must mount exactly this configuration directory.
+  local mounted
+  mounted="$(env_value "$env_file" TELOS_CONFIG_PATH)"
+  if [ -n "$mounted" ] && [ "$mounted" != "$config" ]; then
+    dx_bad "TELOS_CONFIG_PATH ($mounted) is not this node's config directory ($config)" \
+           "set TELOS_CONFIG_PATH=$config in $env_file"
+  else
+    dx_ok "Compose mounts $config read-only at /run/telos"
+  fi
+
+  # A production node on alternate ports cannot obtain certificates.
   local telos_env http_port
-  telos_env="$(grep -E '^TELOS_ENV=' "$env_file" | head -1 | cut -d= -f2-)"
-  http_port="$(grep -E '^TRAEFIK_HTTP_PORT=' "$env_file" | head -1 | cut -d= -f2-)"
+  telos_env="$(env_value "$env_file" TELOS_ENV)"
+  http_port="$(env_value "$env_file" TRAEFIK_HTTP_PORT)"
   if [ "$telos_env" = "production" ] && [ -n "$http_port" ] && [ "$http_port" != "80" ]; then
-    dx_warn "production node with TRAEFIK_HTTP_PORT=$http_port — Let's Encrypt HTTP-01 needs public :80"
+    dx_bad "production node with TRAEFIK_HTTP_PORT=$http_port — Let's Encrypt HTTP-01 needs public :80" \
+           "set TRAEFIK_HTTP_PORT=80 and TRAEFIK_HTTPS_PORT=443 in $env_file and free those ports"
   fi
 }
 
