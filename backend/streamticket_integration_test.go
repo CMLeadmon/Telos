@@ -25,6 +25,11 @@ func TestStreamTicketDiesWithItsSession(t *testing.T) {
 	).Scan(&userID); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
+	// The ticket is spent against the member's CURRENT permissions, so the member
+	// has to hold view_library for a live authority to get past the check.
+	if _, err := f.DB.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Member')`, userID); err != nil {
+		t.Fatalf("grant role: %v", err)
+	}
 	deviceID, _, access, err := registerDevice(ctx, userID, "Phone", "ios", "1.0.0")
 	if err != nil {
 		t.Fatalf("registerDevice: %v", err)
@@ -35,13 +40,13 @@ func TestStreamTicketDiesWithItsSession(t *testing.T) {
 		Item:  "11111111-1111-4111-8111-111111111111",
 		Track: 0,
 		User:  userID,
-		Sess:  sessionHash,
+		Auth:  mediaAuthority{Kind: authorityDevice, ID: deviceID},
 		Exp:   time.Now().Add(streamTicketTTL).Unix(),
 	})
 
-	// Before revocation the session behind the ticket resolves. Playback itself
+	// Before revocation the device behind the ticket resolves. Playback itself
 	// needs Grimmory, which this fixture has no upstream for, so the assertion
-	// is on the boundary the ticket exists to cross: the session lookup.
+	// is on the boundary the ticket exists to cross: the authority lookup.
 	if _, err := LoadAuthenticatedUser(ctx, f.DB, sessionHash); err != nil {
 		t.Fatalf("session should be live before revocation: %v", err)
 	}
@@ -73,7 +78,7 @@ func TestStreamTicketDiesWithItsSession(t *testing.T) {
 // other so a ticket cannot be re-pointed at another account by editing the
 // claim — which the signature already prevents, but the two claims must also
 // agree, or a valid ticket for one user could name another.
-func TestStreamTicketRejectsUserSessionMismatch(t *testing.T) {
+func TestStreamTicketRejectsUserAuthorityMismatch(t *testing.T) {
 	f := withFixture(t)
 	ctx := context.Background()
 	withStreamTicketKey(t)
@@ -89,7 +94,7 @@ func TestStreamTicketRejectsUserSessionMismatch(t *testing.T) {
 	).Scan(&userB); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
-	_, _, access, err := registerDevice(ctx, userA, "Phone", "ios", "1.0.0")
+	deviceA, _, _, err := registerDevice(ctx, userA, "Phone", "ios", "1.0.0")
 	if err != nil {
 		t.Fatalf("registerDevice: %v", err)
 	}
@@ -98,7 +103,7 @@ func TestStreamTicketRejectsUserSessionMismatch(t *testing.T) {
 	ticket := signStreamTicket(streamTicket{
 		Item: "11111111-1111-4111-8111-111111111111",
 		User: userB,
-		Sess: sha256Hex(access),
+		Auth: mediaAuthority{Kind: authorityDevice, ID: deviceA},
 		Exp:  time.Now().Add(streamTicketTTL).Unix(),
 	})
 

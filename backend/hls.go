@@ -1,10 +1,8 @@
 package main
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -56,19 +54,24 @@ func loadHLSSigningKey(path, env string) ([]byte, error) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Opaque HLS resource locator (HMAC-bound to item/user/session/resource/expiry)
+// Opaque HLS resource locator (HMAC-bound to item/user/authority/resource/expiry)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const hlsLocatorTTL = 2 * time.Minute
+// hlsLocatorTTL is the longest an HLS locator lives. It is long because a media
+// element re-requests segments over a whole viewing session and cannot refresh
+// its own URL; it is safe because every spend re-checks the minting authority
+// (see media_authority.go). Nested locators never outlive their parent.
+const hlsLocatorTTL = mediaCapabilityTTL
 
 // hlsLocator is the sealed claim set an opaque locator carries. Field names are
 // terse to keep tokens short; the token is never parsed by the browser.
 type hlsLocator struct {
-	Item string `json:"i"`
-	User string `json:"u"`
-	Sess string `json:"s"`
-	Res  string `json:"r"`
-	Exp  int64  `json:"e"`
+	Type string         `json:"y"`
+	Item string         `json:"i"`
+	User string         `json:"u"`
+	Auth mediaAuthority `json:"a"`
+	Res  string         `json:"r"`
+	Exp  int64          `json:"e"`
 }
 
 var (
@@ -76,44 +79,22 @@ var (
 	errHLSLocatorExpired = errors.New("hls locator expired")
 )
 
-// hlsSessionBinding derives a stable, non-reversible binding from a session
-// token so a locator minted for one session cannot be replayed by another.
-func hlsSessionBinding(sessionToken string) string {
-	h := sha256.Sum256([]byte("telos-hls-session|" + sessionToken))
-	return base64.RawURLEncoding.EncodeToString(h[:12])
-}
-
-// signHLSLocator seals a locator into base64url(body).base64url(HMAC).
+// signHLSLocator seals a locator into base64url(body).base64url(HMAC) under the
+// HLS family key.
 func signHLSLocator(loc hlsLocator) string {
-	body, _ := json.Marshal(loc)
-	mac := hmac.New(sha256.New, hlsSigningKey)
-	mac.Write(body)
-	return base64.RawURLEncoding.EncodeToString(body) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	loc.Type = typeHLS
+	return sealClaims(labelHLSLocator, loc)
 }
 
-// verifyHLSLocator authenticates and de-seals a locator, rejecting tamper and
-// expiry in constant time on the signature.
+// verifyHLSLocator authenticates and de-seals a locator, rejecting tamper, the
+// wrong capability type and expiry. The signature is checked in constant time
+// and before anything in the body is believed.
 func verifyHLSLocator(token string, now time.Time) (hlsLocator, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return hlsLocator{}, errHLSLocatorInvalid
-	}
-	body, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return hlsLocator{}, errHLSLocatorInvalid
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return hlsLocator{}, errHLSLocatorInvalid
-	}
-	mac := hmac.New(sha256.New, hlsSigningKey)
-	mac.Write(body)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return hlsLocator{}, errHLSLocatorInvalid
-	}
 	var loc hlsLocator
-	if err := json.Unmarshal(body, &loc); err != nil {
+	if !openClaims(labelHLSLocator, token, &loc) {
+		return hlsLocator{}, errHLSLocatorInvalid
+	}
+	if loc.Type != typeHLS || loc.Item == "" || loc.User == "" || loc.Auth.Kind == "" || loc.Auth.ID == "" || loc.Res == "" {
 		return hlsLocator{}, errHLSLocatorInvalid
 	}
 	if now.Unix() > loc.Exp {
@@ -342,14 +323,15 @@ func hlsItemPrefix(itemID string) string {
 	return "/jellyfin/Videos/" + itemID + "/"
 }
 
-// mintHLSLocatorURL builds the opaque browser-facing URL for a resource path.
-func mintHLSLocatorURL(itemID, userID, sessBinding, resourcePath string, now time.Time) string {
+// mintHLSLocatorURL builds the opaque media-element-facing URL for a resource
+// path, bound to the authority that is allowed to keep it alive.
+func mintHLSLocatorURL(itemID, userID string, authority mediaAuthority, resourcePath string, exp time.Time) string {
 	loc := hlsLocator{
 		Item: itemID,
 		User: userID,
-		Sess: sessBinding,
+		Auth: authority,
 		Res:  resourcePath,
-		Exp:  now.Add(hlsLocatorTTL).Unix(),
+		Exp:  exp.Unix(),
 	}
 	return "/api/v1/hls/" + signHLSLocator(loc)
 }

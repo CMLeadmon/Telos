@@ -20,10 +20,11 @@ func TestStreamTicketRoundTrip(t *testing.T) {
 	now := time.Now()
 
 	want := streamTicket{
+		Type:  typeGrimmoryAudiob,
 		Item:  "11111111-1111-4111-8111-111111111111",
 		Track: 3,
 		User:  "22222222-2222-4222-8222-222222222222",
-		Sess:  "deadbeef",
+		Auth:  mediaAuthority{Kind: authorityDevice, ID: "deadbeef"},
 		Exp:   now.Add(time.Hour).Unix(),
 	}
 	got, err := verifyStreamTicket(signStreamTicket(want), now)
@@ -40,7 +41,7 @@ func TestStreamTicketRejectsTamperAndExpiry(t *testing.T) {
 	now := time.Now()
 
 	valid := signStreamTicket(streamTicket{
-		Item: "item-a", Track: 0, User: "user-a", Sess: "sess-a",
+		Item: "item-a", Track: 0, User: "user-a", Auth: mediaAuthority{Kind: authoritySession, ID: "sess-a"},
 		Exp: now.Add(time.Hour).Unix(),
 	})
 
@@ -68,7 +69,7 @@ func TestStreamTicketRejectsTamperAndExpiry(t *testing.T) {
 	}
 
 	expired := signStreamTicket(streamTicket{
-		Item: "item-a", User: "user-a", Sess: "sess-a",
+		Item: "item-a", User: "user-a", Auth: mediaAuthority{Kind: authoritySession, ID: "sess-a"},
 		Exp: now.Add(-time.Second).Unix(),
 	})
 	if _, err := verifyStreamTicket(expired, now); err == nil {
@@ -95,7 +96,7 @@ func TestStreamTicketAndHLSLocatorAreNotInterchangeable(t *testing.T) {
 	loc := hlsLocator{
 		Item: "11111111-1111-4111-8111-111111111111",
 		User: "22222222-2222-4222-8222-222222222222",
-		Sess: "binding",
+		Auth: mediaAuthority{Kind: authoritySession, ID: "binding"},
 		Res:  "master.m3u8",
 		Exp:  now.Add(time.Hour).Unix(),
 	}
@@ -111,16 +112,33 @@ func TestStreamTicketAndHLSLocatorAreNotInterchangeable(t *testing.T) {
 	if asTicket.Item != loc.Item || asTicket.Track != 0 {
 		t.Fatalf("unexpected cross-decode: %+v", asTicket)
 	}
+	asAudio := audioTicket{}
+	if err := json.Unmarshal(body, &asAudio); err != nil || asAudio.Item != loc.Item {
+		t.Fatalf("the audio-ticket confusion is not even possible: %+v %v", asAudio, err)
+	}
+	if _, err := verifyAudioTicket(hlsToken, now); err == nil {
+		t.Fatal("an HLS locator was accepted as a direct audio ticket")
+	}
 
 	if _, err := verifyStreamTicket(hlsToken, now); err == nil {
 		t.Fatal("an HLS locator was accepted as an audiobook stream ticket")
 	}
 
 	ticketToken := signStreamTicket(streamTicket{
-		Item: loc.Item, Track: 2, User: loc.User, Sess: "sess", Exp: loc.Exp,
+		Item: loc.Item, Track: 2, User: loc.User, Auth: mediaAuthority{Kind: authoritySession, ID: "sess"}, Exp: loc.Exp,
 	})
 	if _, err := verifyHLSLocator(ticketToken, now); err == nil {
 		t.Fatal("a stream ticket was accepted as an HLS locator")
+	}
+	if _, err := verifyAudioTicket(ticketToken, now); err == nil {
+		t.Fatal("an audiobook ticket was accepted as a direct audio ticket")
+	}
+	audioToken := signAudioTicket(audioTicket{Item: loc.Item, User: loc.User, Auth: mediaAuthority{Kind: authorityDevice, ID: "dev"}, Exp: loc.Exp})
+	if _, err := verifyStreamTicket(audioToken, now); err == nil {
+		t.Fatal("a direct audio ticket was accepted as an audiobook ticket")
+	}
+	if _, err := verifyHLSLocator(audioToken, now); err == nil {
+		t.Fatal("a direct audio ticket was accepted as an HLS locator")
 	}
 }
 
@@ -131,10 +149,12 @@ func TestStreamTicketRequiresIdentifyingClaims(t *testing.T) {
 	now := time.Now()
 	exp := now.Add(time.Hour).Unix()
 
+	auth := mediaAuthority{Kind: authorityDevice, ID: "d"}
 	for _, incomplete := range []streamTicket{
-		{Item: "", User: "u", Sess: "s", Exp: exp},
-		{Item: "i", User: "", Sess: "s", Exp: exp},
-		{Item: "i", User: "u", Sess: "", Exp: exp},
+		{Item: "", User: "u", Auth: auth, Exp: exp},
+		{Item: "i", User: "", Auth: auth, Exp: exp},
+		{Item: "i", User: "u", Auth: mediaAuthority{}, Exp: exp},
+		{Item: "i", User: "u", Auth: mediaAuthority{Kind: authorityDevice}, Exp: exp},
 	} {
 		if _, err := verifyStreamTicket(signStreamTicket(incomplete), now); err == nil {
 			t.Fatalf("a ticket missing an identifying claim verified: %+v", incomplete)

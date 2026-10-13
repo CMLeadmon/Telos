@@ -966,6 +966,16 @@
         }
       }
     },
+    "/api/v1/stream/audio-ticket/{ticket}": {
+      "get": {
+        "operationId": "get_stream_audio_ticket_ticket",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/stream/audio/{id}": {
       "get": {
         "operationId": "get_stream_audio_id",
@@ -976,9 +986,29 @@
         }
       }
     },
+    "/api/v1/stream/audio/{id}/stream-ticket": {
+      "post": {
+        "operationId": "post_stream_audio_id_stream_ticket",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
     "/api/v1/stream/video/{id}": {
       "get": {
         "operationId": "get_stream_video_id",
+        "responses": {
+          "200": {
+            "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/stream/video/{id}/playback-locator": {
+      "post": {
+        "operationId": "post_stream_video_id_playback_locator",
         "responses": {
           "200": {
             "description": "Success"

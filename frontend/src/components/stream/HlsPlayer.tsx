@@ -4,14 +4,24 @@ import { useEffect, useRef, useState } from "react";
 import { PictureInPicture2 } from "lucide-react";
 import type Hls from "hls.js";
 import { getServerConfig } from "@/lib/serverConfig";
+import { mintAudioTicket, mintVideoLocator } from "@/lib/mediaLocator";
 
 const RATES = [1, 1.25, 1.5, 2] as const;
 
-// HlsPlayer plays a Jellyfin stream. Video items are HLS: the gateway resolves
-// PlaybackInfo and 302s to a main.m3u8 sub-path; hls.js follows the redirect and
-// resolves segments against the final URL, while Safari plays it natively. Audio
-// is a static proxy the element can load directly.
-export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
+// HlsPlayer plays a Jellyfin item. It never loads a protected route directly: a
+// media element fetches its own source and cannot attach an Authorization header,
+// so it first asks the node (authenticated) for a self-authorizing URL --
+// an HLS locator for video, a stream ticket for audio -- and loads that. hls.js
+// gets the same URL and no bearer injection, because the locator is the
+// credential. If minting fails, nothing is assigned to the element: falling back
+// to the protected route would just produce a silent 401.
+//
+// A locator lives at most 12 hours. If a long session outlives one, a fatal
+// network error re-mints and resumes where playback stopped, a bounded number of
+// times, rather than leaving a dead player.
+const MAX_REMINTS = 3;
+
+export function HlsPlayer({ itemId, audio }: { itemId: string; audio: boolean }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [rate, setRate] = useState(1);
@@ -41,56 +51,74 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
     if (!video) return;
     setError(null);
 
-    // Token mode does not reach this path. A media element fetches its own
-    // source and there is no hook to attach an Authorization header, so audio
-    // and native HLS (Safari) can only authenticate by cookie or by a
-    // credential carried in the URL itself. The xhrSetup below covers hls.js
-    // because that goes through XHR; this branch does not. Remote playback
-    // needs a signed locator — the gateway already signs HLS locators — and
-    // that belongs to S4, not here.
-    if (audio || video.canPlayType("application/vnd.apple.mpegurl")) {
-      video.src = src;
-      return () => {
-        video.removeAttribute("src");
-        video.load();
-      };
-    }
-
-    let hls: Hls | null = null;
+    const controller = new AbortController();
     let cancelled = false;
-    void import("hls.js").then(({ default: HlsCtor }) => {
-      if (cancelled) return;
-      if (!HlsCtor.isSupported()) {
-        setError("hls playback is not supported in this browser");
+    let hls: Hls | null = null;
+    let reminted = 0;
+
+    const mint = () => (audio ? mintAudioTicket(itemId, controller.signal) : mintVideoLocator(itemId, controller.signal));
+    const fail = (message: string) => {
+      if (!cancelled) setError(message);
+    };
+
+    void (async () => {
+      let locator;
+      try {
+        locator = await mint();
+      } catch {
+        // Bounded and generic: the address itself is a credential and the node's
+        // reason is not the member's business to decode.
+        fail("playback could not be authorized");
         return;
       }
-      const cfg = getServerConfig();
-      hls = new HlsCtor({
-        xhrSetup: (xhr) => {
-          if (cfg.mode === "token") {
-            if (cfg.accessToken) {
-              xhr.setRequestHeader("Authorization", `Bearer ${cfg.accessToken}`);
-            }
-          } else {
-            xhr.withCredentials = true;
-          }
-        },
-      });
+      if (cancelled) return;
+
+      // Audio and native HLS (Safari, WebKitGTK with GStreamer) play the URL
+      // directly: the locator carries its own authority.
+      if (audio || video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = locator.url;
+        return;
+      }
+
+      const { default: HlsCtor } = await import("hls.js");
+      if (cancelled) return;
+      if (!HlsCtor.isSupported()) {
+        fail("hls playback is not supported in this browser");
+        return;
+      }
+      // No xhrSetup: the locator is the credential, and attaching the access
+      // token to a bare locator request would only leak it for nothing.
+      hls = new HlsCtor();
       hls.on(HlsCtor.Events.ERROR, (_event, data) => {
-        if (data.fatal) {
-          setError(`stream failed: ${data.details}`);
-          hls?.destroy();
+        if (!data.fatal) return;
+        const resumeAt = video.currentTime;
+        const network = data.type === HlsCtor.ErrorTypes.NETWORK_ERROR;
+        if (network && reminted < MAX_REMINTS) {
+          reminted += 1;
+          void mint()
+            .then((next) => {
+              if (cancelled || !hls) return;
+              hls.loadSource(next.url);
+              hls.startLoad(resumeAt);
+            })
+            .catch(() => fail(`stream failed: ${data.details}`));
+          return;
         }
+        fail(`stream failed: ${data.details}`);
+        hls?.destroy();
       });
-      hls.loadSource(src);
+      hls.loadSource(locator.url);
       hls.attachMedia(video);
-    });
+    })();
 
     return () => {
       cancelled = true;
+      controller.abort();
       hls?.destroy();
+      video.removeAttribute("src");
+      video.load();
     };
-  }, [src, audio]);
+  }, [itemId, audio]);
 
   return (
     <div className="playerstage">
@@ -103,13 +131,7 @@ export function HlsPlayer({ src, audio }: { src: string; audio: boolean }) {
             controls
             autoPlay
             playsInline
-            crossOrigin={
-              getServerConfig().baseUrl
-                ? getServerConfig().mode === "token"
-                  ? "anonymous"
-                  : "use-credentials"
-                : undefined
-            }
+            crossOrigin={getServerConfig().baseUrl ? "anonymous" : undefined}
             data-testid="stream-video"
           />
           <div className="player-extras">

@@ -1,6 +1,7 @@
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect, useState } from "react";
 import { Play, X } from "lucide-react";
-import { api, assetUrl } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   type MediaDetail,
   type MediaItem,
@@ -131,8 +132,7 @@ export function StreamItemDetail({ itemId, onClose, onPlay }: StreamItemDetailPr
         <div className="idetail-body">
           {detail.coverUrl && (
             <div className="idetail-cover">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={assetUrl(detail.coverUrl)} alt="" aria-hidden="true" />
+              <AuthenticatedImage path={detail.coverUrl} alt="" aria-hidden="true" />
             </div>
           )}
 

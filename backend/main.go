@@ -3107,6 +3107,50 @@ func handleStreamAudio(w http.ResponseWriter, r *http.Request) {
 	proxyRequest(w, r, targetURL, token, nil)
 }
 
+// negotiatePlaybackSession asks Jellyfin for PlaybackInfo and returns the play
+// session ID a manifest request must carry. The HTTP status is the one to answer
+// with on failure.
+func negotiatePlaybackSession(ctx context.Context, upstreamID string) (string, int, error) {
+	userID, err := getJellyfinUserID(ctx)
+	if err != nil {
+		return "", http.StatusServiceUnavailable, fmt.Errorf("Failed to resolve Jellyfin user ID: %w", err)
+	}
+
+	token := getJellyfinAdminToken()
+	playbackInfoURL := fmt.Sprintf("%s/Items/%s/PlaybackInfo?UserId=%s", jellyfinBaseURL, upstreamID, userID)
+
+	requestCtx, cancel := upstreamRequestContext(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, "POST", playbackInfoURL, strings.NewReader("{}"))
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Emby-Token", token)
+	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
+
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		return "", http.StatusServiceUnavailable, fmt.Errorf("PlaybackInfo request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", http.StatusServiceUnavailable, fmt.Errorf("Jellyfin PlaybackInfo error: %s", resp.Status)
+	}
+
+	var jResp struct {
+		PlaySessionId string `json:"PlaySessionId"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
+		return "", http.StatusInternalServerError, errors.New("Failed to decode playback info")
+	}
+	if jResp.PlaySessionId == "" {
+		jResp.PlaySessionId = fmt.Sprintf("telos-session-%d", time.Now().UnixNano())
+	}
+	return jResp.PlaySessionId, http.StatusOK, nil
+}
+
 func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	rawID := r.PathValue("id")
 	if !validJellyfinID(rawID) {
@@ -3117,53 +3161,12 @@ func handleStreamVideo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-
-	ctx := r.Context()
-	userID, err := getJellyfinUserID(ctx)
+	playSession, status, err := negotiatePlaybackSession(r.Context(), resolution.UpstreamID)
 	if err != nil {
-		http.Error(w, "Failed to resolve Jellyfin user ID: "+err.Error(), http.StatusServiceUnavailable)
+		http.Error(w, err.Error(), status)
 		return
 	}
-
-	token := getJellyfinAdminToken()
-	playbackInfoURL := fmt.Sprintf("%s/Items/%s/PlaybackInfo?UserId=%s", jellyfinBaseURL, resolution.UpstreamID, userID)
-
-	requestCtx, cancel := upstreamRequestContext(ctx)
-	defer cancel()
-	req, err := http.NewRequestWithContext(requestCtx, "POST", playbackInfoURL, strings.NewReader("{}"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Emby-Token", token)
-	req.Header.Set("Authorization", fmt.Sprintf("MediaBrowser Token=\"%s\"", token))
-
-	resp, err := upstreamHTTPClient.Do(req)
-	if err != nil {
-		http.Error(w, "PlaybackInfo request failed: "+err.Error(), http.StatusServiceUnavailable)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "Jellyfin PlaybackInfo error: "+resp.Status, http.StatusServiceUnavailable)
-		return
-	}
-
-	var jResp struct {
-		PlaySessionId string `json:"PlaySessionId"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&jResp); err != nil {
-		http.Error(w, "Failed to decode playback info", http.StatusInternalServerError)
-		return
-	}
-
-	if jResp.PlaySessionId == "" {
-		jResp.PlaySessionId = fmt.Sprintf("telos-session-%d", time.Now().UnixNano())
-	}
-
-	redirectURL := fmt.Sprintf("/api/v1/stream/video/%s/main.m3u8?PlaySessionId=%s", resolution.ID, jResp.PlaySessionId)
+	redirectURL := fmt.Sprintf("/api/v1/stream/video/%s/main.m3u8?PlaySessionId=%s", resolution.ID, playSession)
 	http.Redirect(w, r, redirectURL, http.StatusFound)
 }
 
@@ -3182,7 +3185,12 @@ func handleStreamVideoSubpath(w http.ResponseWriter, r *http.Request) {
 	// becomes an opaque, token-free Telos locator; only non-manifest binaries
 	// reached directly here are proxied (segments now arrive via /api/v1/hls).
 	if strings.HasSuffix(subpath, ".m3u8") {
-		serveRewrittenManifest(w, r, resolution.UpstreamID, subpath, r.URL.RawQuery)
+		mint, ok := hlsMintFor(r, resolution.UpstreamID)
+		if !ok {
+			writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+			return
+		}
+		serveRewrittenManifest(w, r, resolution.UpstreamID, subpath, r.URL.RawQuery, mint)
 		return
 	}
 	release, ok := acquireStreamSlot(w, r)

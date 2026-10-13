@@ -1,9 +1,11 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ImageOff, Info, Music, Settings, Share2 } from "lucide-react";
-import { api, apiBase, assetUrl, libraryContentUrl, libraryCoverUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { libraryCoverPath } from "@/lib/nodePaths";
 import {
   asList,
   type LibraryBook,
@@ -13,6 +15,7 @@ import { useMediaStore, type MediaItem } from "@/stores/useMediaStore";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { hasCapability } from "@/lib/capabilities";
 import { openNodeResource } from "@/lib/platform";
+import { mintAudioTicket } from "@/lib/mediaLocator";
 import { BookReader } from "@/components/library/BookReader";
 import { BookManageModal } from "@/components/library/BookManageModal";
 import { AudiobookPlayer } from "@/components/library/AudiobookPlayer";
@@ -27,6 +30,25 @@ function AudiobookRow({
   playing: boolean;
   onToggle: () => void;
 }) {
+  // A media element cannot send credentials, so it plays a ticket the node mints
+  // for this member -- never the protected stream route. Keyed by item so a stale
+  // ticket stops matching instead of needing a synchronous reset.
+  const [ticket, setTicket] = useState<{ id: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!playing) return;
+    const controller = new AbortController();
+    let active = true;
+    mintAudioTicket(item.id, controller.signal)
+      .then((minted) => {
+        if (active) setTicket({ id: item.id, url: minted.url });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [playing, item.id]);
+  const src = playing && ticket?.id === item.id ? ticket.url : null;
   return (
     <div className="audiorow">
       <Music size={15} />
@@ -39,14 +61,7 @@ function AudiobookRow({
       >
         {playing ? "playing" : "play"}
       </button>
-      {playing && (
-        <audio
-          controls
-          autoPlay
-          data-testid="audiobook-player"
-          src={`${apiBase()}/api/v1/stream/audio/${encodeURIComponent(item.id)}`}
-        />
-      )}
+      {src && <audio controls autoPlay data-testid="audiobook-player" src={src} />}
     </div>
   );
 }
@@ -179,8 +194,8 @@ function BookCard({
         {coverBroken ? (
           <ImageOff size={28} />
         ) : (
-          <img
-            src={assetUrl(libraryCoverUrl(book.id))}
+          <AuthenticatedImage
+            path={libraryCoverPath(book.id)}
             alt=""
             loading="lazy"
             onError={() => setCoverBroken(true)}

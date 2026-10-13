@@ -435,21 +435,27 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr, token st
 	proxyUpstream(w, r, target, policy, func(context.Context) error { return nil })
 }
 
-// hlsMintFor returns a locator-minting closure bound to this request's item,
-// user, and session, so every rewritten URI is unforgeable and non-replayable.
+// hlsMintFor returns a locator-minting closure bound to this authenticated
+// request's item and stable authority, so every rewritten URI is unforgeable and
+// dies with the session or device that asked for it. Locators it mints end no
+// later than the authority itself.
 func hlsMintFor(r *http.Request, itemID string) (func(resourcePath string) string, bool) {
 	user, _ := r.Context().Value(userContextKey).(*UserContext)
-	if user == nil {
-		return nil, false
-	}
-	token, err := sessionTokenFromRequest(r)
+	authority, err := authorityFromUser(user)
 	if err != nil {
 		return nil, false
 	}
-	sess := hlsSessionBinding(token)
 	now := time.Now()
+	_, authorityEnd, err := loadAuthorizedMediaUser(r.Context(), authority, user.ID, "view_media", now)
+	if err != nil {
+		return nil, false
+	}
+	exp, err := capabilityExpiry(now, authorityEnd)
+	if err != nil {
+		return nil, false
+	}
 	return func(resourcePath string) string {
-		return mintHLSLocatorURL(itemID, user.ID, sess, resourcePath, now)
+		return mintHLSLocatorURL(itemID, user.ID, authority, resourcePath, exp)
 	}, true
 }
 
@@ -457,12 +463,7 @@ func hlsMintFor(r *http.Request, itemID string) (func(resourcePath string) strin
 // rewrites every URI to an opaque Telos locator (stripping upstream tokens), and
 // serves it. The browser never sees an upstream hostname, path credential, or
 // admin token.
-func serveRewrittenManifest(w http.ResponseWriter, r *http.Request, itemID, subpath, rawQuery string) {
-	mint, ok := hlsMintFor(r, itemID)
-	if !ok {
-		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
-		return
-	}
+func serveRewrittenManifest(w http.ResponseWriter, r *http.Request, itemID, subpath, rawQuery string, mint func(resourcePath string) string) {
 
 	target := fmt.Sprintf("%s/Videos/%s/%s", jellyfinBaseURL, itemID, subpath)
 	if filtered := filterHLSQuery(rawQuery); filtered != "" {
@@ -506,28 +507,28 @@ func serveRewrittenManifest(w http.ResponseWriter, r *http.Request, itemID, subp
 	}
 }
 
-// handleHLSResource serves an opaque HLS locator: it authenticates the locator,
-// re-checks that it belongs to the current user and session, reauthorizes the
-// item, and proxies (or re-rewrites, for a sub-manifest) the bound resource.
+// handleHLSResource serves an opaque HLS locator. The route is bare: a media
+// element cannot attach credentials, so the locator IS the credential. Every
+// request re-checks the authority that minted it, the account and the current
+// permission before any upstream work; any failure is the same 404.
+//
+// Nested manifests are re-rewritten from the VERIFIED claims, not from anything
+// on the bare request, and every locator they mint keeps the same authority and
+// ends no later than this one.
 func handleHLSResource(w http.ResponseWriter, r *http.Request) {
-	locator := r.PathValue("locator")
-	loc, err := verifyHLSLocator(locator, time.Now())
+	w = withCapabilityHeaders(w)
+	now := time.Now()
+	loc, err := verifyHLSLocator(r.PathValue("locator"), now)
 	if err != nil {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	// Bind to the current session and user; a locator minted for another
-	// session or user is indistinguishably not found.
-	token, terr := sessionTokenFromRequest(r)
-	if terr != nil || hlsSessionBinding(token) != loc.Sess {
+	user, authorityEnd, err := loadAuthorizedMediaUser(r.Context(), loc.Auth, loc.User, "view_media", now)
+	if err != nil {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
 	}
-	user, _ := r.Context().Value(userContextKey).(*UserContext)
-	if user == nil || user.ID != loc.User {
-		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
-		return
-	}
+	r = r.WithContext(context.WithValue(r.Context(), userContextKey, user))
 	if !validJellyfinID(loc.Item) {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 		return
@@ -544,7 +545,10 @@ func handleHLSResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.HasSuffix(subpath, ".m3u8") {
-		serveRewrittenManifest(w, r, loc.Item, subpath, rawQuery)
+		nested := nestedCapabilityExpiry(loc.Exp, authorityEnd)
+		serveRewrittenManifest(w, r, loc.Item, subpath, rawQuery, func(resourcePath string) string {
+			return mintHLSLocatorURL(loc.Item, loc.User, loc.Auth, resourcePath, nested)
+		})
 		return
 	}
 	// Binary segment/key/map: admit against long-stream capacity before opening

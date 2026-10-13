@@ -1,10 +1,10 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import React, { useState } from "react";
 import { Smile, Edit2, Trash2, Pin, MessagesSquare } from "lucide-react";
 import { ChatMessage as ChatMessageType, useChatSessionStore } from "@/stores/useChatSessionStore";
 import { useAuthStore } from "@/stores/useAuthStore";
-import { apiBase } from "@/lib/api";
 import { Reactions } from "./Reactions";
 import { MessageBody } from "./MessageBody";
 import { EmojiPicker } from "./EmojiPicker";
@@ -117,8 +117,7 @@ export function ChatMessage({ message, canModerate }: ChatMessageProps) {
 
       <div className="av" style={{ background: avatarHue(message.sender) }}>
         {message.avatarUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img className="msgav" src={`${apiBase()}${message.avatarUrl}`} alt="" />
+          <AuthenticatedImage className="msgav" path={message.avatarUrl} alt="" />
         ) : (
           message.avatar
         )}

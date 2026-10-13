@@ -1,5 +1,6 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -19,7 +20,8 @@ import { useAuthStore } from "@/stores/useAuthStore";
 import { useChatSessionStore, type Channel } from "@/stores/useChatSessionStore";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { usePreferencesStore } from "@/stores/usePreferencesStore";
-import { api, avatarUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { avatarPath } from "@/lib/nodePaths";
 import { openNodeResource } from "@/lib/platform";
 import { hasCapability } from "@/lib/capabilities";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -262,8 +264,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <>
                   <span className="search-avatar-wrapper">
                     {(item as unknown as SearchUser).avatarUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={(item as unknown as SearchUser).avatarUrl} alt="" className="search-avatar" />
+                      <AuthenticatedImage path={(item as unknown as SearchUser).avatarUrl} alt="" className="search-avatar" />
                     ) : (
                       <span className="search-avatar-placeholder" />
                     )}
@@ -405,8 +406,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </span>
           <span className="chip">
             {user?.HasAvatar ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img className="chipav" src={avatarUrl(user.ID)} alt="" />
+              <AuthenticatedImage className="chipav" path={avatarPath(user.ID)} alt="" />
             ) : (
               <span className="dot" />
             )}{" "}

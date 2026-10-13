@@ -1,7 +1,9 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useRef, useState } from "react";
-import { api, avatarUrl, ApiError } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
+import { avatarPath } from "@/lib/nodePaths";
 import { uploadFile } from "@/lib/upload";
 import { useAuthStore } from "@/stores/useAuthStore";
 
@@ -64,10 +66,9 @@ export function ProfileSection() {
       <div className="setcard">
         <div className="setrow">
           {user.HasAvatar ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
+            <AuthenticatedImage
               className="setava"
-              src={`${avatarUrl(user.ID)}?v=${cacheBust}`}
+              path={`${avatarPath(user.ID)}?v=${cacheBust}`}
               alt="Your avatar"
             />
           ) : (

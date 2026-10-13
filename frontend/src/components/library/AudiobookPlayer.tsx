@@ -1,7 +1,9 @@
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Pause, Play, RotateCcw, RotateCw, X } from "lucide-react";
 import { useMediaProgress } from "@/hooks/useMediaProgress";
-import { api, apiBase, assetUrl } from "@/lib/api";
+import { api, assetUrl } from "@/lib/api";
+import { libraryCoverPath } from "@/lib/nodePaths";
 import { getServerConfig } from "@/lib/serverConfig";
 
 export interface AudiobookTrack {
@@ -70,6 +72,7 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [coverHidden, setCoverHidden] = useState(false);
 
   // The saved position is applied once, on the first loadedmetadata for the
   // resumed track. Without this the member's track is restored but playback
@@ -259,15 +262,18 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
         // keyed by the item, the same one this dialog renders. Absolutized
         // because the OS fetches artwork itself, outside the document, where a
         // relative path resolves against the native bundle rather than the node.
-        artwork: [
-          {
-            src: assetUrl(
-              `/api/v1/library/books/${encodeURIComponent(itemId)}/cover`,
-            ),
-            sizes: "512x512",
-            type: "image/jpeg",
-          },
-        ],
+        // Only in cookie mode: the OS fetches artwork outside the document, where
+        // a token-mode client has no way to authenticate the request.
+        artwork:
+          getServerConfig().mode === "token"
+            ? []
+            : [
+                {
+                  src: assetUrl(libraryCoverPath(itemId)),
+                  sizes: "512x512",
+                  type: "image/jpeg",
+                },
+              ],
       });
     }
 
@@ -391,13 +397,12 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
       <div className="abp-body">
         <div className="abp-cover">
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={`${apiBase()}/api/v1/library/books/${encodeURIComponent(itemId)}/cover`}
+          <AuthenticatedImage
+            path={libraryCoverPath(itemId)}
             alt=""
             aria-hidden="true"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
+            onError={() => setCoverHidden(true)}
+            style={coverHidden ? { display: "none" } : undefined}
           />
         </div>
 

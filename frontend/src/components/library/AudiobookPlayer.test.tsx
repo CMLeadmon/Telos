@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/api", () => ({
   api: vi.fn(),
   apiBase: () => "https://telos.example.com",
+  // The cover is fetched through the authenticated client in token mode.
+  apiBlob: vi.fn().mockResolvedValue(new Blob(["x"], { type: "image/png" })),
   // Stands in for the real one, which prepends apiBase to a relative path.
   assetUrl: (p: string) => (p?.startsWith("http") ? p : `https://telos.example.com${p}`),
 }));

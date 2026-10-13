@@ -1,9 +1,9 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import React from "react";
 import { useChatSessionStore } from "@/stores/useChatSessionStore";
 import { avatarHue } from "./ChatMessage";
-import { apiBase } from "@/lib/api";
 
 export function ChatAside() {
   const { online, onlineCount, messages } = useChatSessionStore();
@@ -99,10 +99,9 @@ export function ChatAside() {
                   }}
                 >
                   {u.avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <AuthenticatedImage
                       className="msgav"
-                      src={`${apiBase()}${u.avatarUrl}`}
+                      path={u.avatarUrl}
                       alt=""
                       style={{
                         width: "100%",

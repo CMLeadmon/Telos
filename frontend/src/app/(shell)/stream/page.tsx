@@ -1,5 +1,6 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect, useState } from "react";
 import {
   AlertCircle,
@@ -10,7 +11,7 @@ import {
   Share2,
   X,
 } from "lucide-react";
-import { api, ApiError, apiBase, assetUrl } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import {
   useMediaStore,
   type MediaItem,
@@ -40,11 +41,6 @@ function isAudioItem(item: MediaItem, library: MediaLibrary): boolean {
   );
 }
 
-function streamUrl(item: MediaItem, library: MediaLibrary): string {
-  const kind = isAudioItem(item, library) ? "audio" : "video";
-  return `${apiBase()}/api/v1/stream/${kind}/${encodeURIComponent(item.id)}`;
-}
-
 function PosterGrid({
   items,
   status,
@@ -72,8 +68,7 @@ function PosterGrid({
               onClick={() => onOpen(item)}
             >
               {item.coverUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img className="pcover" src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
+                <AuthenticatedImage className="pcover" path={item.coverUrl} alt="" aria-hidden="true" />
               ) : (
                 <div className="motif" />
               )}
@@ -236,7 +231,7 @@ export default function StreamPage() {
             </span>
           </div>
           <HlsPlayer
-            src={streamUrl(nowPlaying.item, nowPlaying.library)}
+            itemId={nowPlaying.item.id}
             audio={isAudioItem(nowPlaying.item, nowPlaying.library)}
           />
           <CommentaryPanel

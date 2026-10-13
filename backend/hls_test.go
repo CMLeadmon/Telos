@@ -21,7 +21,7 @@ func recordingMint(seen *[]string) func(string) string {
 
 func TestHLSLocatorRoundTrip(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	loc := hlsLocator{Item: "item1", User: "u1", Sess: "s1", Res: "hls/0.ts", Exp: now.Add(hlsLocatorTTL).Unix()}
+	loc := hlsLocator{Type: typeHLS, Item: "item1", User: "u1", Auth: mediaAuthority{Kind: authorityDevice, ID: "dev1"}, Res: "hls/0.ts", Exp: now.Add(hlsLocatorTTL).Unix()}
 	token := signHLSLocator(loc)
 
 	got, err := verifyHLSLocator(token, now)
@@ -46,15 +46,6 @@ func TestHLSLocatorRoundTrip(t *testing.T) {
 	// Wrong number of parts.
 	if _, err := verifyHLSLocator("nodot", now); err != errHLSLocatorInvalid {
 		t.Fatalf("expected invalid, got %v", err)
-	}
-}
-
-func TestHLSSessionBindingDistinct(t *testing.T) {
-	if hlsSessionBinding("tokenA") == hlsSessionBinding("tokenB") {
-		t.Fatal("session bindings collide across tokens")
-	}
-	if hlsSessionBinding("tokenA") != hlsSessionBinding("tokenA") {
-		t.Fatal("session binding is not stable")
 	}
 }
 

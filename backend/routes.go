@@ -114,7 +114,13 @@ func registerRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/stream/audio/{id}", withAuth(http.HandlerFunc(handleStreamAudio), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}", withAuth(http.HandlerFunc(handleStreamVideo), "view_media"))
 	mux.Handle("GET /api/v1/stream/video/{id}/{path...}", withAuth(http.HandlerFunc(handleStreamVideoSubpath), "view_media"))
-	mux.Handle("GET /api/v1/hls/{locator}", withAuth(http.HandlerFunc(handleHLSResource), "view_media"))
+	// Capability minting is authenticated; spending is bare, because a media
+	// element cannot attach credentials. Each spend re-checks the minting
+	// authority, the account and the permission (see media_authority.go).
+	mux.Handle("POST /api/v1/stream/video/{id}/playback-locator", withAuth(http.HandlerFunc(handleMintPlaybackLocator), "view_media"))
+	mux.Handle("POST /api/v1/stream/audio/{id}/stream-ticket", withAuth(http.HandlerFunc(handleMintAudioTicket), "view_media"))
+	mux.HandleFunc("GET /api/v1/hls/{locator}", handleHLSResource)
+	mux.HandleFunc("GET /api/v1/stream/audio-ticket/{ticket}", handleTicketedJellyfinAudio)
 	// Library module routes (Grimmory-backed catalog)
 	mux.Handle("GET /api/v1/library/books", withAuth(http.HandlerFunc(handleLibraryBooks), "view_library"))
 	mux.Handle("GET /api/v1/library/books/{id}", withAuth(http.HandlerFunc(handleLibraryBookByID), "view_library"))

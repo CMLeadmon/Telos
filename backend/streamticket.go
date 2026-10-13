@@ -2,14 +2,10 @@ package main
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -17,35 +13,40 @@ import (
 // Signed stream tickets
 // ═══════════════════════════════════════════════════════════════════════════
 //
-// A media element fetches its own source. There is no hook to attach an
-// Authorization header to what an <audio> or a native <video> requests, and a
-// token-mode client holds no cookie, so a plain stream URL comes back 401 no
-// matter what the surrounding page is authenticated as. hls.js escapes this
-// through xhrSetup; nothing else does.
+// A media element fetches its own source, so the URL has to carry its own
+// authority (see media_authority.go for the model). Two ticket families live
+// here, each with its own key and type claim:
 //
-// So the URL has to carry its own authority. A ticket names one audiobook, one
-// track, one user and the session it was minted from, and is sealed with an
-// HMAC. It is a capability, and the usual objection to capabilities — that they
-// cannot be taken back — is answered by the session: the ticket carries the hash
-// of the session that minted it, and using it goes through the same
-// LoadAuthenticatedUser the cookie and bearer paths do. Log out, disable the
-// account, revoke the device, and every outstanding ticket dies with the
-// session, on the next range request.
+//   - grimmory-audiobook: one audiobook, one track or the whole book;
+//   - jellyfin-audio: one Jellyfin audio item.
 //
-// That revocability is what buys the long TTL. A media element re-requests over
-// the whole of a listening session — ranges, seeks, a resume hours later — so a
-// two-minute window like the HLS locator's would break playback constantly.
+// Both name the stable AUTHORITY that minted them -- a browser session or a
+// device, never a rotating access token -- and are re-checked against it on every
+// range request, so logout, a revoked device, a disabled account or a removed role
+// ends playback at the next request. That revocability is what buys the 12-hour
+// lifetime: a media element re-requests over a whole listening session (ranges,
+// seeks, a resume hours later).
 
-const streamTicketTTL = 12 * time.Hour
+const streamTicketTTL = mediaCapabilityTTL
 
-// streamTicket is the sealed claim set. Field names are terse to keep the URL
-// short; nothing but this file parses one.
+// streamTicket is the sealed audiobook claim set. Field names are terse to keep
+// the URL short; nothing but this file parses one.
 type streamTicket struct {
-	Item  string `json:"i"`
-	Track int    `json:"t"` // -1 for the whole book rather than one track
-	User  string `json:"u"`
-	Sess  string `json:"s"` // session token hash, so revocation reaches the ticket
-	Exp   int64  `json:"e"`
+	Type  string         `json:"y"`
+	Item  string         `json:"i"`
+	Track int            `json:"t"` // -1 for the whole book rather than one track
+	User  string         `json:"u"`
+	Auth  mediaAuthority `json:"a"`
+	Exp   int64          `json:"e"`
+}
+
+// audioTicket is the sealed direct Jellyfin audio claim set.
+type audioTicket struct {
+	Type string         `json:"y"`
+	Item string         `json:"i"`
+	User string         `json:"u"`
+	Auth mediaAuthority `json:"a"`
+	Exp  int64          `json:"e"`
 }
 
 var (
@@ -53,58 +54,43 @@ var (
 	errStreamTicketExpired = errors.New("stream ticket expired")
 )
 
-// streamTicketKey derives a subkey from the HLS signing secret rather than
-// adding another operator-managed file.
-//
-// The derivation is not decoration. Both locators are JSON objects sealed with
-// the same primitive, and an hlsLocator body unmarshals cleanly into a
-// streamTicket — the field sets overlap on i, u, s and e, and the absent "t"
-// would simply read as track 0. Signing both with one key would therefore let an
-// HLS locator be spent as an audiobook ticket. A distinct key makes the two
-// families unforgeable in each other's terms.
-func streamTicketKey() []byte {
-	mac := hmac.New(sha256.New, hlsSigningKey)
-	mac.Write([]byte("telos-stream-ticket-v1"))
-	return mac.Sum(nil)
-}
-
 func signStreamTicket(t streamTicket) string {
-	body, _ := json.Marshal(t)
-	mac := hmac.New(sha256.New, streamTicketKey())
-	mac.Write(body)
-	return base64.RawURLEncoding.EncodeToString(body) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	t.Type = typeGrimmoryAudiob
+	return sealClaims(labelStreamTicket, t)
 }
 
-// verifyStreamTicket authenticates and de-seals a ticket. The signature is
-// compared in constant time and before anything in the body is believed.
+// verifyStreamTicket authenticates and de-seals an audiobook ticket. The
+// signature is compared in constant time and before anything in the body is
+// believed; the type claim keeps every other family out even if a key ever leaked.
 func verifyStreamTicket(token string, now time.Time) (streamTicket, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 2 {
-		return streamTicket{}, errStreamTicketInvalid
-	}
-	body, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return streamTicket{}, errStreamTicketInvalid
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return streamTicket{}, errStreamTicketInvalid
-	}
-	mac := hmac.New(sha256.New, streamTicketKey())
-	mac.Write(body)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return streamTicket{}, errStreamTicketInvalid
-	}
 	var t streamTicket
-	if err := json.Unmarshal(body, &t); err != nil {
+	if !openClaims(labelStreamTicket, token, &t) {
 		return streamTicket{}, errStreamTicketInvalid
 	}
-	if t.Item == "" || t.User == "" || t.Sess == "" {
+	if t.Type != typeGrimmoryAudiob || t.Item == "" || t.User == "" || t.Auth.Kind == "" || t.Auth.ID == "" {
 		return streamTicket{}, errStreamTicketInvalid
 	}
 	if now.Unix() > t.Exp {
 		return streamTicket{}, errStreamTicketExpired
+	}
+	return t, nil
+}
+
+func signAudioTicket(t audioTicket) string {
+	t.Type = typeJellyfinAudio
+	return sealClaims(labelJellyfinAudio, t)
+}
+
+func verifyAudioTicket(token string, now time.Time) (audioTicket, error) {
+	var t audioTicket
+	if !openClaims(labelJellyfinAudio, token, &t) {
+		return audioTicket{}, errStreamTicketInvalid
+	}
+	if t.Type != typeJellyfinAudio || t.Item == "" || t.User == "" || t.Auth.Kind == "" || t.Auth.ID == "" {
+		return audioTicket{}, errStreamTicketInvalid
+	}
+	if now.Unix() > t.Exp {
+		return audioTicket{}, errStreamTicketExpired
 	}
 	return t, nil
 }
@@ -121,9 +107,21 @@ func handleAudiobookStreamTicket(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
 		return
 	}
-	if user.SessionHash == "" {
-		// Nothing to bind revocation to. Minting an unrevocable 12-hour
-		// capability is not a thing to do quietly.
+	// Nothing to bind revocation to means no ticket: minting an unrevocable
+	// 12-hour capability is not a thing to do quietly.
+	authority, err := authorityFromUser(user)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	now := time.Now()
+	_, authorityEnd, err := loadAuthorizedMediaUser(r.Context(), authority, user.ID, "view_library", now)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	exp, err := capabilityExpiry(now, authorityEnd)
+	if err != nil {
 		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
 		return
 	}
@@ -165,19 +163,21 @@ func handleAudiobookStreamTicket(w http.ResponseWriter, r *http.Request) {
 		Item:  resolution.ID,
 		Track: track,
 		User:  user.ID,
-		Sess:  user.SessionHash,
-		Exp:   time.Now().Add(streamTicketTTL).Unix(),
+		Auth:  authority,
+		Exp:   exp.Unix(),
 	})
 
+	w = withCapabilityHeaders(w)
 	writeJSON(w, map[string]interface{}{
 		"url":       "/api/v1/library/audiobook-stream/" + ticket,
-		"expiresIn": int(streamTicketTTL.Seconds()),
+		"expiresIn": int(exp.Sub(now).Seconds()),
 	})
 }
 
 // handleTicketedAudiobookStream serves audio to a request that carries no
 // credential of its own beyond the ticket in its path.
 func handleTicketedAudiobookStream(w http.ResponseWriter, r *http.Request) {
+	w = withCapabilityHeaders(w)
 	raw := r.PathValue("ticket")
 	if raw == "" {
 		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
@@ -192,29 +192,13 @@ func handleTicketedAudiobookStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The session the ticket was minted from has to still be live. This is what
-	// makes a 12-hour capability revocable, and it is the same lookup the cookie
-	// and bearer paths perform.
-	if dbPool == nil {
-		writeAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "The request could not be completed.")
-		return
-	}
-	user, err := LoadAuthenticatedUser(r.Context(), dbPool, ticket.Sess)
-	if err != nil || user == nil || user.ID != ticket.User {
-		writeAPIError(w, r, http.StatusUnauthorized, "invalid_ticket", "This link is no longer valid.")
-		return
-	}
-	user.SessionHash = ticket.Sess
-
-	// Permission is re-checked at use, not assumed from mint time: a role can be
-	// taken away inside the ticket's lifetime.
-	allowed, err := hasPermission(r.Context(), user, "view_library", nil)
+	// The authority that minted the ticket has to still be live, the account
+	// active and the permission still held -- re-checked at use, not assumed from
+	// mint time. This is what makes a 12-hour capability revocable. Every failure
+	// is the same answer.
+	user, _, err := loadAuthorizedMediaUser(r.Context(), ticket.Auth, ticket.User, "view_library", time.Now())
 	if err != nil {
-		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
-		return
-	}
-	if !allowed {
-		writeAPIError(w, r, http.StatusForbidden, "forbidden", "Forbidden.")
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_ticket", "This link is no longer valid.")
 		return
 	}
 
@@ -237,4 +221,126 @@ func handleTicketedAudiobookStream(w http.ResponseWriter, r *http.Request) {
 			"/track/" + strconv.Itoa(ticket.Track) + "/stream"
 	}
 	proxyGrimmoryBinary(w, r, upstreamPath, "")
+}
+
+// handleMintAudioTicket mints a direct-stream ticket for a Jellyfin audio item.
+// The caller is authenticated and holds view_media (the route's gate); the item
+// is resolved and authorized now, because the ticket exists to be spent without
+// that check being repeated by the client.
+func handleMintAudioTicket(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	authority, err := authorityFromUser(user)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_id", "Item ID required.")
+		return
+	}
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	_, authorityEnd, err := loadAuthorizedMediaUser(r.Context(), authority, user.ID, "view_media", now)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	exp, err := capabilityExpiry(now, authorityEnd)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	ticket := signAudioTicket(audioTicket{Item: resolution.UpstreamID, User: user.ID, Auth: authority, Exp: exp.Unix()})
+	w = withCapabilityHeaders(w)
+	writeJSON(w, map[string]interface{}{
+		"url":       "/api/v1/stream/audio-ticket/" + ticket,
+		"expiresIn": int(exp.Sub(now).Seconds()),
+	})
+}
+
+// handleTicketedJellyfinAudio serves audio to a request that carries no
+// credential of its own beyond the ticket in its path. Range and HEAD requests
+// work as the media proxy supports them; every request re-checks the minting
+// authority and the item before any upstream work.
+func handleTicketedJellyfinAudio(w http.ResponseWriter, r *http.Request) {
+	w = withCapabilityHeaders(w)
+	ticket, err := verifyAudioTicket(r.PathValue("ticket"), time.Now())
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_ticket", "This link is no longer valid.")
+		return
+	}
+	user, _, err := loadAuthorizedMediaUser(r.Context(), ticket.Auth, ticket.User, "view_media", time.Now())
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_ticket", "This link is no longer valid.")
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), userContextKey, user))
+	if !validJellyfinID(ticket.Item) {
+		writeAPIError(w, r, http.StatusUnauthorized, "invalid_ticket", "This link is no longer valid.")
+		return
+	}
+	resolution, ok := resolveJellyfinItemHTTP(w, r, ticket.Item)
+	if !ok || resolution.UpstreamID != ticket.Item {
+		return
+	}
+	release, ok := acquireStreamSlot(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	target := fmt.Sprintf("%s/Audio/%s/stream?static=true", jellyfinBaseURL, resolution.UpstreamID)
+	proxyRequest(w, r, target, getJellyfinAdminToken(), nil)
+}
+
+// handleMintPlaybackLocator negotiates playback with Jellyfin and returns the
+// first locator of an HLS session: a bare URL a native <video> or hls.js can load
+// with no credential. It names the negotiated manifest resource (never the
+// caller's choice of path), the caller's stable authority, and an expiry no later
+// than that authority's.
+func handleMintPlaybackLocator(w http.ResponseWriter, r *http.Request) {
+	user, _ := r.Context().Value(userContextKey).(*UserContext)
+	authority, err := authorityFromUser(user)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	rawID := r.PathValue("id")
+	if !validJellyfinID(rawID) {
+		writeAPIError(w, r, http.StatusBadRequest, "invalid_id", "Item ID required.")
+		return
+	}
+	resolution, ok := resolveJellyfinItemHTTP(w, r, rawID)
+	if !ok {
+		return
+	}
+	now := time.Now()
+	_, authorityEnd, err := loadAuthorizedMediaUser(r.Context(), authority, user.ID, "view_media", now)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	exp, err := capabilityExpiry(now, authorityEnd)
+	if err != nil {
+		writeAPIError(w, r, http.StatusUnauthorized, "unauthorized", "Unauthorized.")
+		return
+	}
+	playSession, status, err := negotiatePlaybackSession(r.Context(), resolution.UpstreamID)
+	if err != nil {
+		code := "upstream_unavailable"
+		if status == http.StatusInternalServerError {
+			code = "internal_error"
+		}
+		writeAPIError(w, r, status, code, "Playback could not be prepared.")
+		return
+	}
+	locator := mintHLSLocatorURL(resolution.UpstreamID, user.ID, authority, "main.m3u8?PlaySessionId="+playSession, exp)
+	w = withCapabilityHeaders(w)
+	writeJSON(w, map[string]interface{}{
+		"url":       locator,
+		"expiresIn": int(exp.Sub(now).Seconds()),
+	})
 }

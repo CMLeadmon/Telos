@@ -1,9 +1,11 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ImageOff, X } from "lucide-react";
-import { api, assetUrl, libraryCoverUrl } from "@/lib/api";
+import { api } from "@/lib/api";
+import { libraryCoverPath } from "@/lib/nodePaths";
 import {
   asList,
   type LibraryBook,
@@ -465,8 +467,8 @@ export function BookManageModal({
                 {coverBroken ? (
                   <ImageOff size={28} />
                 ) : (
-                  <img
-                    src={assetUrl(`${libraryCoverUrl(book.id)}?v=${coverRevision}`)}
+                  <AuthenticatedImage
+                    path={`${libraryCoverPath(book.id)}?v=${coverRevision}`}
                     alt={`Cover of ${freshBook.title}`}
                     onError={() => setCoverBroken(true)}
                   />

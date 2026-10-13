@@ -1,7 +1,7 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import React from "react";
-import { apiBase } from "@/lib/api";
 
 export interface SearchUser {
   id: string;
@@ -76,9 +76,8 @@ export function MentionAutocomplete({ users, selectedIndex, onSelect }: MentionA
               }}
             >
               {user.avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={`${apiBase()}${user.avatarUrl}`}
+                <AuthenticatedImage
+                  path={user.avatarUrl}
                   alt=""
                   style={{ width: "100%", height: "100%", objectFit: "cover" }}
                 />

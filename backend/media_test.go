@@ -350,11 +350,15 @@ func TestCanonicalHLSRouteKeepsUpstreamIDInsideOpaqueLocator(t *testing.T) {
 	t.Cleanup(func() { jellyfinBaseURL, hlsSigningKey = oldBase, oldKey })
 
 	userID := "00000000-0000-4000-8000-000000000111"
+	oldLoad := loadAuthorizedMediaUser
+	loadAuthorizedMediaUser = func(_ context.Context, authority mediaAuthority, uid, _ string, now time.Time) (*UserContext, time.Time, error) {
+		return &UserContext{ID: uid}, now.Add(2 * time.Hour), nil
+	}
+	t.Cleanup(func() { loadAuthorizedMediaUser = oldLoad })
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/stream/video/"+canonicalID+"/main.m3u8", nil)
 	req.SetPathValue("id", canonicalID)
 	req.SetPathValue("path", "main.m3u8")
-	req.AddCookie(&http.Cookie{Name: "telos_session", Value: "session19"})
-	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID}))
+	req = req.WithContext(context.WithValue(req.Context(), userContextKey, &UserContext{ID: userID, SessionHash: "session19-hash"}))
 	rec := httptest.NewRecorder()
 	handleStreamVideoSubpath(rec, req)
 	if rec.Code != http.StatusOK || upstreamPath != "/Videos/movie-19/main.m3u8" {

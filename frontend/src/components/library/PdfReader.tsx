@@ -98,20 +98,16 @@ export function PdfReader({
         const progress = await api<Progress>(
           `/api/v1/library/books/${encodeURIComponent(book.id)}/progress`,
         );
-        // PDF.js issues its own range requests, so it has to be handed the same
-        // credential the fetch helper would have attached. Hardcoding
-        // withCredentials sent cookies in token mode, where they do not apply,
-        // and no Authorization header at all.
-        const cfg = getServerConfig();
-        const usesToken = cfg.mode === "token";
-        const doc = (await pdfjs.getDocument({
-          url: libraryContentUrl(book.id),
-          withCredentials: !usesToken,
-          httpHeaders:
-            usesToken && cfg.accessToken
-              ? { Authorization: `Bearer ${cfg.accessToken}` }
-              : undefined,
-        }).promise) as unknown as PdfDoc;
+        // In the browser PDF.js streams the document itself, riding the session
+        // cookie. The native client has no cookie and PDF.js's own requests would
+        // carry an access token captured now and expired mid-read, so there the
+        // bytes come through the authenticated client (which refreshes the token)
+        // and PDF.js is handed the document, never a protected URL.
+        const usesToken = getServerConfig().mode === "token";
+        const source = usesToken
+          ? { data: new Uint8Array(await api<ArrayBuffer>(`/api/v1/library/books/${encodeURIComponent(book.id)}/content`)) }
+          : { url: libraryContentUrl(book.id), withCredentials: true };
+        const doc = (await pdfjs.getDocument(source).promise) as unknown as PdfDoc;
         if (disposed) {
           void doc.destroy();
           return;

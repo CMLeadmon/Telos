@@ -30,6 +30,8 @@ var publicRouteAllowlist = []string{
 	"POST /api/v1/auth/invites/accept",
 	"POST /api/v1/auth/login",
 	"GET /api/v1/library/audiobook-stream/{ticket}",
+	"GET /api/v1/hls/{locator}",
+	"GET /api/v1/stream/audio-ticket/{ticket}",
 }
 
 // bareRoutes parses routes.go and returns every pattern registered with

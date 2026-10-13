@@ -1,8 +1,8 @@
 "use client";
 
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import React, { useState } from "react";
 import { BookOpen, Film, Download } from "lucide-react";
-import { apiBase } from "@/lib/api";
 import { openNodeResource } from "@/lib/platform";
 import { useRouter } from "next/navigation";
 
@@ -42,7 +42,7 @@ export function ShareCard({ embed }: ShareCardProps) {
     }
   };
 
-  const coverSrc = snap.cover ? `${apiBase()}${snap.cover}` : "";
+  const coverPath = snap.cover ?? "";
 
   return (
     <div
@@ -75,10 +75,9 @@ export function ShareCard({ embed }: ShareCardProps) {
           border: "1px solid var(--line-2)",
         }}
       >
-        {coverSrc && !coverBroken ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={coverSrc}
+        {coverPath && !coverBroken ? (
+          <AuthenticatedImage
+            path={coverPath}
             alt=""
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
             onError={() => setCoverBroken(true)}

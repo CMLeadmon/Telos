@@ -1,7 +1,7 @@
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import type { LibraryItem } from "@/stores/useLibraryStore";
-import { assetUrl } from "@/lib/api";
 
 interface LibraryItemDetailProps {
   item: LibraryItem | null;
@@ -68,8 +68,7 @@ export function LibraryItemDetail({ item, onClose, onOpenItem }: LibraryItemDeta
         <div className="idetail-body">
           <div className="idetail-cover">
             {item.coverUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
+              <AuthenticatedImage path={item.coverUrl} alt="" aria-hidden="true" />
             ) : (
               <span className="nocover">no cover</span>
             )}

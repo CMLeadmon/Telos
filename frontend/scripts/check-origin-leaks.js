@@ -118,6 +118,34 @@ for (const file of allFiles) {
   }
 }
 
+// Rule 4: a raw <img> may not be bound to the gateway at all.
+//
+// In the native client an <img> cannot authenticate: it holds no cookie and an
+// image element cannot send an Authorization header, so an absolutized cover or
+// avatar URL is a bare 401 in token mode. Rule 2 only checks that the URL leaves
+// for the node; it cannot see that it will arrive unauthenticated. Protected
+// images go through <AuthenticatedImage path=...>, which fetches them with the
+// bearer and shows a blob URL. The component itself is the one place a gateway
+// path is allowed to reach an <img> src.
+for (const file of allFiles) {
+  if (!file.endsWith(".tsx") || file.endsWith(".test.tsx")) continue;
+  const relPath = path.relative(srcDir, file);
+  if (relPath === path.join("components", "AuthenticatedImage.tsx")) continue;
+  const content = fs.readFileSync(file, "utf8");
+  for (const { expr, index } of boundExpressions(content)) {
+    const open = content.lastIndexOf("<", index);
+    const tag = content.slice(open + 1, index).match(/^([A-Za-z][\w.]*)/);
+    if (!tag || tag[1] !== "img") continue;
+    const resolved = expr + "\n" + (declarationOf(expr, content) ?? "");
+    if (!(/cover/i.test(resolved) || resolved.includes("/api/v1/") || /avatar/i.test(resolved))) continue;
+    const line = content.slice(0, index).split("\n").length;
+    console.error(
+      `Violation in ${relPath}:${line}: <img> bound to a gateway resource; use <AuthenticatedImage path=...>: ${expr.trim().replace(/\s+/g, " ")}`,
+    );
+    violations++;
+  }
+}
+
 // Rule 3: no window.open() may point at the gateway.
 //
 // Rule 2 only inspects src=/poster= JSX attributes, and a live leak sat outside

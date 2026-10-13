@@ -2,6 +2,7 @@
 // the Go gateway. The development server proxies these same paths to the local
 // gateway, so browsers never need direct access to an additional port.
 
+import { avatarPath, libraryCoverPath } from "@/lib/nodePaths";
 import { getServerConfig, normalizeBaseUrl } from "@/lib/serverConfig";
 
 export function apiBase(): string {
@@ -9,11 +10,11 @@ export function apiBase(): string {
 }
 
 export function avatarUrl(userId: string): string {
-  return `${apiBase()}/api/v1/users/${userId}/avatar`;
+  return `${apiBase()}${avatarPath(userId)}`;
 }
 
 export function libraryCoverUrl(bookId: string): string {
-  return `${apiBase()}/api/v1/library/books/${encodeURIComponent(bookId)}/cover`;
+  return `${apiBase()}${libraryCoverPath(bookId)}`;
 }
 
 export function libraryContentUrl(bookId: string): string {

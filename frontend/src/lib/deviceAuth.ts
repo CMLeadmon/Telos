@@ -31,6 +31,7 @@ import {
   saveConnectionProfile,
   type ConnectionProfile,
 } from "./connectionProfile";
+import { revokeAllTrackedObjectUrls } from "./objectUrls";
 import { getServerConfig, setServerConfig } from "./serverConfig";
 import {
   CredentialStoreError,
@@ -86,6 +87,8 @@ export function invalidateAuthGeneration(): number {
   generation += 1;
   inFlight.clear();
   accessDeadline = null;
+  // Protected images fetched under the previous authority must not stay readable.
+  revokeAllTrackedObjectUrls();
   return generation;
 }
 

@@ -1,6 +1,6 @@
+import { AuthenticatedImage } from "@/components/AuthenticatedImage";
 import { Share2 } from "lucide-react";
 import type { MediaItem } from "@/stores/useMediaStore";
-import { assetUrl } from "@/lib/api";
 import { DARK_TEXT, posterClass, posterMeta } from "./poster";
 
 interface MediaShelfProps {
@@ -35,8 +35,7 @@ export function MediaShelf({ title, items, onSelectItem }: MediaShelfProps) {
                 aria-label={`open ${item.title}`}
               >
                 {item.coverUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img className="pcover" src={assetUrl(item.coverUrl)} alt="" aria-hidden="true" />
+                  <AuthenticatedImage className="pcover" path={item.coverUrl} alt="" aria-hidden="true" />
                 ) : (
                   <div className="motif" />
                 )}
