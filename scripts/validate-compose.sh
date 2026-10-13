@@ -40,6 +40,17 @@ if [ -z "$env_file" ] || [ ! -f "$env_file" ]; then
 	exit 2
 fi
 
+# A missing container runtime or Compose provider is an unavailable prerequisite
+# (exit 3, not_run), never a failed model: nothing was rendered or judged.
+if ! command -v podman >/dev/null 2>&1; then
+	echo "not_run: podman is required to render the Compose model" >&2
+	exit 3
+fi
+if ! podman compose version >/dev/null 2>&1; then
+	echo "not_run: a podman compose provider (podman-compose) is required" >&2
+	exit 3
+fi
+
 rendered="$(mktemp)"
 chmod 0600 "$rendered"
 cleanup() { rm -f "$rendered"; }
