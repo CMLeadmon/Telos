@@ -41,7 +41,8 @@ good_bin="$work/good-bin"
 make_bin "$good_bin" "${optional_tools[@]}"
 stub "$good_bin" ss ':'
 podman_stub "$good_bin" 5.0.0
-stub "$good_bin" podman-compose 'echo "podman-compose version 1.6.0"'
+# The real provider prints Podman's own version first; the policy must read its own line.
+stub "$good_bin" podman-compose 'printf "podman version 5.7.0\npodman-compose version 1.6.0\n"'
 provider="$good_bin/podman-compose"
 echo "Linux version 6.8.0-generic (buildd@lcy02) #1 SMP" >"$work/proc-version"
 
@@ -59,7 +60,7 @@ run_preflight() { # BIN_DIR [VAR=value ...] -> prints output, returns the prefli
   local bin="$1"; shift
   env -i HOME="$work" PATH="$bin" NO_COLOR=1 \
     REPO_ROOT="$repo_root" CLI_DIR="$repo_root/cli" \
-    TELOS_OS_RELEASE_FILE="$(os_release "Ubuntu 24.04.1 LTS" ubuntu 24.04 debian)" TELOS_HOST_ARCH=x86_64 \
+    TELOS_OS_RELEASE_FILE="$(os_release "Ubuntu 26.04.1 LTS" ubuntu 26.04 debian)" TELOS_HOST_ARCH=x86_64 \
     TELOS_KERNEL_RELEASE=6.8.0-31-generic TELOS_PROC_VERSION="$work/proc-version" \
     PODMAN_COMPOSE_PROVIDER="$provider" "$@" \
     "$(type -P bash)" -c '. "$CLI_DIR/lib/common.sh"; . "$CLI_DIR/lib/preflight.sh"; run_preflight'
@@ -91,13 +92,17 @@ last_has() { grep -Fq -- "$1" "$work/last.out"; }
 last_lacks() { ! grep -Fq -- "$1" "$work/last.out"; }
 
 # --- supported ----------------------------------------------------------------------------
-expect_pass "Ubuntu 24.04 x86_64 Podman 5.0.0" "$good_bin"
-last_has 'reference release' || fail "24.04 is not labeled as the reference release"
+expect_pass "Ubuntu 26.04 x86_64 Podman 5.0.0" "$good_bin" \
+  "TELOS_OS_RELEASE_FILE=$(os_release 'Ubuntu 26.04.1 LTS' ubuntu 26.04 debian)"
+last_has 'reference release' || fail "26.04 is not labeled as the reference release"
 last_lacks 'not yet a verified combination' || fail "the reference release was labeled unverified"
-expect_pass "Ubuntu 26.04 (newer: supported but unverified)" "$good_bin" \
-  "TELOS_OS_RELEASE_FILE=$(os_release 'Ubuntu 26.04 LTS' ubuntu 26.04 debian)"
+expect_pass "Ubuntu 24.04 (policy floor: supported but unverified)" "$good_bin" \
+  "TELOS_OS_RELEASE_FILE=$(os_release 'Ubuntu 24.04.1 LTS' ubuntu 24.04 debian)"
+last_has 'not yet a verified combination' || fail "the policy-floor release was not labeled unverified"
+last_lacks 'reference release' || fail "the policy-floor release was labeled the reference release"
+expect_pass "a future Ubuntu release" "$good_bin" \
+  "TELOS_OS_RELEASE_FILE=$(os_release 'Ubuntu 28.04 LTS' ubuntu 28.04 debian)"
 last_has 'not yet a verified combination' || fail "a newer Ubuntu release was not labeled unverified"
-last_lacks 'reference release' || fail "a newer Ubuntu release was labeled the reference release"
 
 # --- unsupported hosts: no best-effort path -------------------------------------------------
 for version in 22.04 23.10 20.04 18.04; do
@@ -153,7 +158,7 @@ if [[ $(id -u) -ne 0 ]]; then
 fi
 
 # --- the pinned Compose provider -----------------------------------------------------------------
-mkdir -p "$work/old-provider"; stub "$work/old-provider" podman-compose 'echo "podman-compose version 1.0.6"'
+mkdir -p "$work/old-provider"; stub "$work/old-provider" podman-compose 'printf "podman version 5.7.0\npodman-compose version 1.0.6\n"'
 expect_fail "podman-compose 1.0.6 in production" "certified pin is 1.6.0" "$good_bin" "PODMAN_COMPOSE_PROVIDER=$work/old-provider/podman-compose"
 last_has '1.0.6 on 24.04' || fail "the Ubuntu archive version is not explained"
 observe "podman-compose 1.0.6 in development" "$good_bin" TELOS_DEV=1 "PODMAN_COMPOSE_PROVIDER=$work/old-provider/podman-compose"
@@ -202,11 +207,11 @@ set -e
 [[ $installer_status -ne 0 ]] || fail "install.sh --check accepted Fedora"
 grep -Fq 'unsupported host' <<<"$installer_output" || fail "install.sh did not apply the shared policy: $installer_output"
 ! grep -Eiq 'pacman|dnf install|zypper|yum install' <<<"$installer_output" || fail "the installer printed a package recipe for another distribution"
-installer_output="$(installer "$(os_release 'Ubuntu 24.04.1 LTS' ubuntu 24.04 debian)" --check 2>&1)" || fail "install.sh --check rejected a supported host: $installer_output"
+installer_output="$(installer "$(os_release 'Ubuntu 26.04.1 LTS' ubuntu 26.04 debian)" --check 2>&1)" || fail "install.sh --check rejected a supported host: $installer_output"
 grep -Fq 'All prerequisites satisfied' <<<"$installer_output" || fail "install.sh --check did not report success: $installer_output"
 
 grep -Fq 'run_preflight' "$repo_root/cli/commands/doctor.sh" || fail "doctor does not call the shared preflight"
 grep -Fq 'run_preflight' "$repo_root/install.sh" || fail "install.sh does not call the shared preflight"
 ! grep -Eq 'distro_family|pacman|dnf |zypper' "$repo_root/cli/lib/preflight.sh" || fail "preflight still carries other-distribution package logic"
 
-echo "install preflight: Ubuntu 24.04+, x86_64, Podman 5+, pinned provider, public ports and tools enforced; unsupported hosts refused"
+echo "install preflight: Ubuntu 24.04+ (26.04 verified reference), x86_64, Podman 5+, pinned provider, public ports and tools enforced; unsupported hosts refused"

@@ -60,7 +60,7 @@ def good_facts():
     return {
         "schemaVersion": 1, "mode": "install", "observedAt": "2026-10-13T10:30:00Z",
         "host": {"machineIdSha256": NODE_HOST, "bootId": "0" * 8 + "-0000-0000-0000-" + "0" * 12, "osId": "ubuntu",
-                 "osVersion": "24.04", "arch": "x86_64", "kernel": "6.8.0-31-generic", "euid": 0},
+                 "osVersion": "26.04", "arch": "x86_64", "kernel": "6.8.0-31-generic", "euid": 0},
         "tools": {"podman": {"version": "5.0.3", "rootless": False}, "provider": {"path": "/opt/telos/bin/podman-compose", "version": "1.6.0"}},
         "node": {
             "path": "/var/lib/telos", "dir": stat_row("/var/lib/telos", "dir", 0, 0, "0755"),

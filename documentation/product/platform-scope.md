@@ -21,6 +21,16 @@ Ubuntu/runtime combination has already been tested. Certify the baseline on
 Ubuntu releases before advertising those combinations as verified. Select and
 document a reproducible Podman 5+ installation source during deployment work.
 
+**Amendment (2026-10-13), verified reference release.** The release on which the
+live installation, journey, storage, upgrade, and recovery checks run is **Ubuntu
+26.04 LTS**: its archive ships Podman 5.7.0, so a Podman 5+ source is reproducible
+there, whereas no Podman 5 source has been verified for 24.04. The policy floor is
+unchanged (24.04 or newer passes the preflight), but the preflight labels every
+release other than 26.04 as "not yet a verified combination", and the certification
+evidence names the release it ran on. Moving the reference earlier or later is a
+documented change here, in `cli/lib/preflight.sh` (`TELOS_UBUNTU_REFERENCE`), and in
+the drill (`scripts/lib/clean_install_drill.py`).
+
 Linux kernel storage primitives and systemd are legitimate server assumptions.
 Do not spend delivery effort on Windows/macOS server installers, runtime
 adapters, cross-compilation gates, or non-Ubuntu packaging. Existing experimental

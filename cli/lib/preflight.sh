@@ -5,8 +5,9 @@
 # Policy (documentation/product/platform-scope.md): the server runs on Ubuntu 24.04
 # or newer, x86_64, with Podman 5.0.0 or newer. Anything else -- Windows, macOS,
 # WSL/Docker Desktop, other distributions and Ubuntu derivatives, Docker-only hosts,
-# ARM -- is unsupported with no best-effort path. A newer Ubuntu release passes the
-# policy but is reported as not yet verified.
+# ARM -- is unsupported with no best-effort path. The VERIFIED reference release is
+# 26.04 (its archive ships Podman 5.7, and the install, journey and recovery checks
+# run there); any other release that meets the policy is reported as not yet verified.
 #
 # Design rule: DETECT AND REPORT, NEVER AUTO-INSTALL. Every failure names what is
 # wrong and what the operator must provide; this file never invents a package recipe.
@@ -16,6 +17,7 @@
 # through PATH, so a test supplies stubs.
 
 TELOS_UBUNTU_MIN="24.04"
+TELOS_UBUNTU_REFERENCE="26.04"   # the release the live checks are run on (see platform-scope.md)
 TELOS_PODMAN_MIN="5.0.0"
 TELOS_COMPOSE_PIN="1.6.0"
 TELOS_KERNEL_MIN="5.6"   # openat2(2), which the storage layer's confinement requires
@@ -85,10 +87,10 @@ check_host_support() {
             "Upgrade to Ubuntu $TELOS_UBUNTU_MIN or newer."
     return
   fi
-  if [ "$version" = "$TELOS_UBUNTU_MIN" ]; then
+  if [ "$version" = "$TELOS_UBUNTU_REFERENCE" ]; then
     pf_ok "host: Ubuntu $version (reference release)"
   else
-    pf_warn "host: Ubuntu $version meets the support policy but is not yet a verified combination; clean-install, storage, upgrade and recovery checks must be repeated on it"
+    pf_warn "host: Ubuntu $version meets the support policy but is not yet a verified combination (the verified reference is Ubuntu $TELOS_UBUNTU_REFERENCE); clean-install, storage, upgrade and recovery checks must be repeated on it"
   fi
 
   arch="$(host_arch)"
@@ -154,12 +156,14 @@ check_compose() {
     pf_fail "the compose provider $provider is not executable" "chmod +x $provider"
     return
   fi
-  local version; version="$(first_version "$("$provider" --version 2>/dev/null | head -n1)")"
+  # The real provider prints Podman's own version first ("podman version 5.7.0"),
+  # then "podman-compose version 1.6.0"; read the provider's line, not the first.
+  local version; version="$(first_version "$("$provider" --version 2>/dev/null | grep -i 'podman-compose' | head -n1)")"
   if [ "$version" = "$TELOS_COMPOSE_PIN" ]; then
     pf_ok "compose provider: podman-compose $version ($provider)"
   elif preflight_is_production; then
     pf_fail "compose provider is podman-compose ${version:-unknown}; the certified pin is $TELOS_COMPOSE_PIN" \
-            "Install podman-compose $TELOS_COMPOSE_PIN and point PODMAN_COMPOSE_PROVIDER at it. Ubuntu's archive version (1.0.6 on 24.04) is not accepted."
+            "Install podman-compose $TELOS_COMPOSE_PIN and point PODMAN_COMPOSE_PROVIDER at it. The Ubuntu archive's podman-compose (1.0.6 on 24.04, 1.5.0 on 26.04) is not accepted."
   else
     pf_warn "compose provider is podman-compose ${version:-unknown}, not the certified pin $TELOS_COMPOSE_PIN (acceptable for development only)"
   fi

@@ -154,7 +154,9 @@ def tool_facts():
                 break
     if candidate:
         code, out = run([candidate, "--version"])
-        provider = {"path": candidate, "version": first_version(out.splitlines()[0] if out else "") if code == 0 else None}
+        # The real provider prints Podman's version first; read the podman-compose line.
+        line = next((l for l in out.splitlines() if "podman-compose" in l.lower()), "")
+        provider = {"path": candidate, "version": first_version(line) if code == 0 else None}
     return {"podman": podman, "provider": provider}
 
 

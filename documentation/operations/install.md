@@ -7,9 +7,9 @@ path. See the binding [platform policy](../product/platform-scope.md). The
 authoritative operator entry point is the Bash `telos` command; `backend/cmd/telos/`
 is experimental.
 
-> **Status:** this procedure is implemented and covered by hermetic tests. It has
-> **not yet been executed on a clean Ubuntu 24.04 reference host** with trusted public
-> HTTPS. That live run is the `clean-install` gate; follow
+> **Status:** this procedure is implemented and covered by hermetic tests, and its
+> prerequisites were verified on an Ubuntu 26.04.1 VM. The full install has
+> **not yet been executed on a clean reference host** with trusted public HTTPS. That live run is the `clean-install` gate; follow
 > [clean-install-evidence.md](clean-install-evidence.md) to produce its evidence.
 > Until it passes on a frozen candidate, treat this guide as a procedure under test.
 
@@ -17,8 +17,8 @@ is experimental.
 
 | Requirement | Enforced by | Status of the source |
 |---|---|---|
-| Ubuntu 24.04+ (`ID=ubuntu`, `VERSION_ID` ≥ 24.04), x86-64, kernel ≥ 5.6 | `telos doctor`, `install.sh` | 24.04 is the reference release. A newer release passes the policy but is reported as **not yet a verified combination** until its own install, storage, upgrade and recovery checks run. |
-| Podman **5.0.0+**, rootful (`sudo telos …`) | `telos doctor`, every compose call | **No verified Podman 5 source for Ubuntu 24.04 is recorded here.** See below. |
+| Ubuntu 24.04+ (`ID=ubuntu`, `VERSION_ID` ≥ 24.04), x86-64, kernel ≥ 5.6 | `telos doctor`, `install.sh` | **26.04 is the verified reference release.** Any other release that meets the policy (including the 24.04 floor) is reported as **not yet a verified combination** until its own install, storage, upgrade and recovery checks run. |
+| Podman **5.0.0+**, rootful (`sudo telos …`) | `telos doctor`, every compose call | Verified on 26.04 (archive 5.7.0); none for 24.04. See below. |
 | `podman-compose` **1.6.0** at an absolute path in `PODMAN_COMPOSE_PROVIDER` | `telos doctor`, every compose call | Pinned artifact recorded below. |
 | `openssl`, `python3`, `flock` (util-linux), `ss` (iproute2) | `telos doctor` | Ubuntu archive. `curl` is optional. |
 | Free public ports **80 and 443** (or held by this node's own running Traefik) | `telos doctor`, `install.sh --check` | Production never falls back to alternate ports; only a development node (`TELOS_DEV=1`, rootless) may. |
@@ -33,26 +33,27 @@ else; it changes nothing:
 ./install.sh --check
 ```
 
-### Podman 5 on Ubuntu 24.04: unavailable until verified
+### Podman 5
 
-Ubuntu's normal archive does not satisfy the Podman 5 floor on 24.04, so
-`apt install podman` **alone must not be assumed to work**; check what your archive
-actually offers with `apt-cache policy podman` and compare against the
-[Ubuntu package index](https://packages.ubuntu.com/search?keywords=podman&searchon=names&suite=noble)
-and the [Podman installation documentation](https://podman.io/docs/installation).
-For reference, a 26.04 host's archive offers Podman 5.7.0 and podman-compose 1.5.0
-(observed with `apt-cache policy` on 2026-10-13; this is not a verification of that
-release).
+| Release | Podman from the Ubuntu archive | Status |
+|---|---|---|
+| **26.04 (verified reference)** | 5.7.0 (`apt-cache policy podman`) | Verified: installed with `apt` on a 26.04.1 host, `sudo podman run` works (rootful, netavark, overlay). |
+| 24.04 (policy floor) | below 5 | **No verified Podman 5 source.** `apt install podman` alone does not satisfy the floor; the preflight refuses it. |
 
-This repository does **not** ship an installation recipe for Podman 5 on 24.04 because
-none has been verified on a disposable 24.04 VM, and inventing one would be worse than
-saying so. Do not mix distribution repositories and do not lower the floor. When a
-source is verified, record in this file, in the same change: the exact package or
-source URL, version, signing key or checksum, and the installation commands, together
-with the VM evidence (see *Prerequisite validation* in
-[clean-install-evidence.md](clean-install-evidence.md)). Until then, an operator who
-supplies Podman 5+ by their own means takes responsibility for that provenance; the
-drill records the installed version either way.
+On 26.04:
+
+```bash
+sudo apt-get install -y podman skopeo buildah uidmap
+sudo podman run --rm docker.io/library/alpine:3.20 echo ok      # rootful smoke
+```
+
+For 24.04 this repository does not ship a recipe because none has been verified, and
+inventing one would be worse than saying so. Do not mix distribution repositories and do
+not lower the floor. When a source is verified, record the exact package or source URL,
+version, signing key or checksum and install commands here, with the VM evidence (see
+*Prerequisite validation* in [clean-install-evidence.md](clean-install-evidence.md)). Compare
+against the [Ubuntu package index](https://packages.ubuntu.com/search?keywords=podman) and
+[Podman's instructions](https://podman.io/docs/installation).
 
 ### The Compose provider
 
@@ -68,9 +69,11 @@ podman_compose-1.6.0-py3-none-any.whl
 sha256 98e48af25d44c10ecef948163bfcca002e32aa8bbb7e66593fbd4faff7270c30
 ```
 
-A candidate installation into a root-owned virtual environment, **not yet verified on
-a 24.04 host** (its two dependencies, `pyyaml` and `python-dotenv`, are taken from the
-Ubuntu archive here; a fully hash-pinned closure belongs to the Phase 4 tool lock):
+Installation into a root-owned virtual environment, **verified on an Ubuntu 26.04.1 host**
+(Podman 5.7.0): the wheel installs by hash and `podman-compose --version` prints
+`podman version 5.7.0` then `podman-compose version 1.6.0` (the preflight reads the second
+line). Its two dependencies, `pyyaml` and `python-dotenv`, come from the Ubuntu archive here;
+a fully hash-pinned closure belongs to the Phase 4 tool lock:
 
 ```bash
 sudo apt-get install -y python3-venv python3-yaml python3-dotenv
@@ -155,6 +158,6 @@ Everything below runs on the node. Production is **rootful**: use `sudo telos �
 - Windows and macOS applications are future clients, never server targets. The first
   native client is a Linux desktop application that connects to a node.
 
-Certify a clean installation on Ubuntu 24.04, then repeat the installation, storage,
-upgrade and recovery checks on any newer Ubuntu release before calling it verified.
+Certify a clean installation on Ubuntu 26.04, then repeat the installation, storage,
+upgrade and recovery checks on any other release (including the 24.04 floor) before calling it verified.
 Record the exact OS, runtime and candidate versions tested.

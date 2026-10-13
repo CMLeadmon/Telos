@@ -37,6 +37,7 @@ import release_graph as rg  # noqa: E402
 GATE_ID = "clean-install"
 SMOKE = Path(__file__).resolve().parent.parent / "smoke-browser-node.sh"
 PRODUCTION_NODE_PATH = "/var/lib/telos"
+REFERENCE_RELEASE = (26, 4)   # the release the live checks run on; 24.04 is the policy floor
 RUNTIME_UID = RUNTIME_GID = 10001
 CLIENT_USER = {"101", "101:101"}
 SIGNING_FILES = ("cursor-keys.json", "hls-key")
@@ -102,9 +103,9 @@ def evaluate_platform(facts):
     out = []
     version = version_tuple(host.get("osVersion"))
     ubuntu = host.get("osId") == "ubuntu" and version is not None and version >= (24, 4)
-    reference = ubuntu and version == (24, 4)
+    reference = ubuntu and version == REFERENCE_RELEASE
     out.append(check("host.platform", "Ubuntu 24.04+ on x86_64", ubuntu and host.get("arch") == "x86_64",
-                     f"Ubuntu {host.get('osVersion')} {host.get('arch')}" + ("" if reference else " (not the 24.04 reference release: unverified combination)"),
+                     f"Ubuntu {host.get('osVersion')} {host.get('arch')}" + ("" if reference else " (not the 26.04 verified reference release: unverified combination)"),
                      f"{host.get('osId')} {host.get('osVersion')} {host.get('arch')} is outside the support policy"))
     podman = tools.get("podman")
     pv = version_tuple((podman or {}).get("version"))

@@ -1,6 +1,6 @@
 # Clean-install evidence (the `clean-install` gate)
 
-This runbook produces the evidence that a **fresh Ubuntu 24.04 x86-64 host** installs,
+This runbook produces the evidence that a **fresh Ubuntu 26.04 x86-64 host** (the verified reference release) installs,
 configures and serves all four Telos modules in a browser over platform-trusted HTTPS.
 It is the only way the `clean-install` gate can pass. The gate observes a real node;
 nothing in this repository can pass it by itself.
@@ -12,7 +12,7 @@ nothing in this repository can pass it by itself.
 | Drill, collector, evaluator and result contract | Implemented and covered by hermetic tests (`tests/operations/clean_install_drill_test.py`). |
 | Run against a real Ubuntu 24.04 node with public DNS and TLS | **Not run.** No such host was available to the implementer. |
 | Collector output against a real Podman 5 | **Unverified.** `node_observe.py` parses `podman inspect` / `podman volume ls` / `ss` output shaped as documented; the shape was not captured from a live Podman 5 host. The first live run must confirm it (a parse failure fails closed). |
-| Podman 5 source for Ubuntu 24.04 | **Unavailable** — no verified recipe; see [install.md](install.md). |
+| Podman 5 source | **Verified on Ubuntu 26.04** (archive Podman 5.7.0 + the pinned podman-compose 1.6.0 wheel, on a 26.04.1 KVM VM). **Unavailable for 24.04** — no verified recipe; see [install.md](install.md). |
 
 A rehearsal record (`recordKind: rehearsal`) can prove the procedure works on a
 rehearsal host. It can never satisfy the gate: final import rejects any rehearsal
@@ -22,7 +22,7 @@ artifacts in Phase 5.
 ## Prerequisite validation (do this once, before the first live attempt)
 
 Podman 5 and the Compose provider are prerequisites the repository cannot assume.
-On a *disposable* Ubuntu 24.04 VM, record and verify:
+On a *disposable* Ubuntu 26.04 VM (for 24.04, only once a source exists), record and verify:
 
 1. The exact package or source URL, version and signing key or checksum of the Podman
    5+ installation, and the commands that install it. Compare with the
@@ -40,7 +40,7 @@ implementation ledger. Local development continues; the gate stays `not_run`.
 
 ## What the live attempt needs
 
-- A newly provisioned Ubuntu 24.04 x86-64 node (**no** pre-existing Telos volume, container
+- A newly provisioned Ubuntu 26.04 x86-64 node (**no** pre-existing Telos volume, container
   or `/var/lib/telos`; **no** reused evidence directory — either one invalidates the run),
   with the verified Podman and provider above.
 - A DNS name pointing at the node and **inbound 80 and 443 reachable from the internet**
@@ -138,7 +138,7 @@ a wrong host stops with exit 2.
 
 | Assertion | Meaning |
 |---|---|
-| `host.platform` | Ubuntu ≥ 24.04, x86-64 (a release newer than 24.04 is noted as an unverified combination) |
+| `host.platform` | Ubuntu ≥ 24.04, x86-64 (any release other than the verified 26.04 reference is noted as an unverified combination) |
 | `runtime.podman`, `runtime.provider` | rootful Podman ≥ 5.0.0; `podman-compose` 1.6.0 at an absolute path |
 | `node.path`, `node.env`, `node.secrets`, `node.libraries` | `/var/lib/telos` root-owned under root-owned, non-writable, non-symlink ancestors; `node.env` root `0600`; every production secret set and not a placeholder (values are never read); `TELOS_ENV=production` with Jellyfin and Grimmory library IDs |
 | `node.signing`, `node.state` | `config/` is `10001:10001` `0700` holding exactly the cursor and HLS files (`0600`, non-trivial size); `state/` root `0700` |
