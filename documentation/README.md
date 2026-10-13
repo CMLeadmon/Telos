@@ -1,5 +1,9 @@
 # Telos Documentation
 
+> **Active implementation handoff (2026-10-13):** Start at the [cold handoff](../docs/superpowers/plans/2026-10-13-standalone-beta-cold-handoff.md). It supersedes historical sequencing and shared interfaces for standalone beta work; code describes current behavior, while this plan defines the requested target. Implementation and certification remain unfinished.
+
+> **Current platform policy (2026-10-12):** [Ubuntu 24.04+ server; browser and Linux clients first](product/platform-scope.md). This policy takes precedence over older architecture and platform plans. Windows/Mac native clients are future work; their server platforms are out of scope.
+
 > Spec for AI coding agents and human developers. Statements are normative unless marked *(informative)*.
 
 > **⚠ These specs predate most of the code, and every `architecture/*.md` file carries its own "Superseded in part" banner.** They remain the statement of intent; they are not a description of the running system. **Where code and docs disagree, the code wins** — flag the discrepancy rather than following the doc. For what is actually built, start at [`../CLAUDE.md`](../CLAUDE.md).
@@ -42,6 +46,7 @@ Telos merges Discord-style chat, Jellyfin-style streaming, Grimmory-style public
 
 | Document | Purpose |
 |---|---|
+| [`product/platform-scope.md`](./product/platform-scope.md) | Binding server/client platform decision and delivery sequence. |
 | [`product/beta-feature-status.md`](./product/beta-feature-status.md) | What is actually shipped vs. planned. Enforced by `scripts/check-product-truth.sh`. |
 
 ### Operations Runbooks

@@ -1,5 +1,7 @@
 # Tauri Shell — Design
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 The Tauri Shell sub-project packages the Telos Next.js frontend as native desktop and mobile applications targeting Windows, macOS, Linux, iOS, and Android using Tauri v2. By wrapping the existing static export without refactoring application components, Telos delivers lightweight native binaries (~5 MB footprint vs Electron's ~120 MB) while preserving 100% of the UI design system. This spec defines platform integration shims (external links, clipboard, mobile file pickers, background audio media sessions), routing adjustments, static asset handling, and explicit fallbacks if the platform de-risking spike (S0) fails.
 
 ## 1. Purpose

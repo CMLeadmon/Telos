@@ -66,15 +66,16 @@ expected = {
     "architecture": "standalone-client-server",
     "modules": ["chat", "stream", "library", "files"],
     "settingsSurface": "settings",
-    "server": {"os": "ubuntu-24.04", "arch": "x86_64", "podmanMinimum": "5.0.0"},
-    "desktop": ["linux-x86_64", "windows-x86_64", "macos-universal"],
+    "server": {"os": "ubuntu-24.04", "versionPolicy": "24.04-or-newer", "arch": "x86_64", "podmanMinimum": "5.0.0"},
+    "desktop": ["linux-x86_64"],
+    "plannedDesktop": ["windows-x86_64", "macos-universal"],
     "browserService": "telos-client",
     "apiService": "telos-core",
     "removedFeatures": ["livekit", "voice-rooms", "watch-parties", "notification-inbox", "my-list"],
     "backupStatus": "blocked-until-operational-safety",
     "requiredExternalGates": [
-        "clean-install", "browser-matrix", "desktop-linux", "desktop-windows",
-        "desktop-macos", "separate-host-restore", "upgrade-rollback",
+        "clean-install", "browser-matrix", "desktop-linux",
+        "separate-host-restore", "upgrade-rollback",
         "capacity", "host-exposure", "controlled-egress",
     ],
 }
@@ -432,10 +433,33 @@ if contract_valid:
 
 catalog = document("ci/phase-gates.json", "requiredExternalGates")
 if contract_valid and isinstance(catalog, dict):
-    gate_ids = [gate.get("id") for gate in catalog.get("gates", []) if isinstance(gate, dict)]
+    gates = [gate for gate in catalog.get("gates", []) if isinstance(gate, dict)]
+    gate_ids = [gate.get("id") for gate in gates]
+    gate_by_id = {gate.get("id"): gate for gate in gates}
     for gate in contract["requiredExternalGates"]:
         if gate_ids.count(gate) != 1:
             fail("requiredExternalGates", f"gate {gate} must exist exactly once")
+        elif gate_by_id[gate].get("required") is not True:
+            fail("requiredExternalGates", f"gate {gate} must remain required")
+
+    deferred = {"desktop-windows", "desktop-macos"}
+    required_closure = set()
+
+    def visit_required(gate_id):
+        if gate_id in required_closure:
+            return
+        required_closure.add(gate_id)
+        for prerequisite in gate_by_id.get(gate_id, {}).get("prerequisites", []):
+            visit_required(prerequisite)
+
+    for gate in gates:
+        gate_id = gate.get("id", "")
+        if gate_id.startswith(("operator-cli-windows", "operator-cli-darwin")):
+            fail("platform", f"unsupported server gate {gate_id}")
+        if gate.get("required") is True:
+            visit_required(gate_id)
+    for gate_id in sorted(deferred & required_closure):
+        fail("platform", f"deferred client {gate_id} blocks initial delivery")
 
 
 def shipped_files(relative):

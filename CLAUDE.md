@@ -1,5 +1,9 @@
 # CLAUDE.md
 
+> **Active implementation handoff (2026-10-13):** Start at the [cold handoff](docs/superpowers/plans/2026-10-13-standalone-beta-cold-handoff.md). It supersedes historical sequencing and shared interfaces for standalone beta work; code describes current behavior, while this plan defines the requested target. Implementation and certification remain unfinished.
+
+> **Current platform scope (2026-10-12):** Ubuntu 24.04+ is the only server target. Deliver browser clients and a Linux application first; Windows and Mac applications are future clients, never server targets. Follow [Platform scope](documentation/product/platform-scope.md) over historical plans. The Bash CLI remains authoritative.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What Telos Is
@@ -124,4 +128,4 @@ Four further programs have since run, each with a design spec and execution plan
 | Less-is-more redesign (6 phases, `2026-07-27`) | Removed voice/LiveKit/Watch Parties/inbox/My List; design tokens; mobile-first rebuild |
 | Member experience (4 phases, `2026-07-31`) | Catalog continuity, normalized library items, Jellyfin stream enrichment, audiobook migration ops |
 
-Current work (branch `installer-cli-and-frontend`) is the `telos` operator CLI and installer. The surviving real-time paths are chat and the recipient-scoped user-event stream.
+The current delivery program is the standalone beta, narrowed by the 2026-10-12 platform decision. The `telos` operator CLI and installer are part of its Ubuntu deployment lane. The surviving real-time paths are chat and the recipient-scoped user-event stream.

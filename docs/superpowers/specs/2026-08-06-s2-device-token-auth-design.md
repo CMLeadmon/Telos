@@ -1,5 +1,7 @@
 # S2 — Device-Token Auth — Design
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 This sub-project delivers a dual-credential authentication architecture for the Telos core gateway (`backend/`). Browser sessions retain exact-origin HttpOnly `SameSite=Strict` cookies, while native desktop/mobile clients authenticate via OAuth-style bearer tokens and single-use WebSocket tickets. This unblocks cross-origin native client connections (S3, S4, S5) without compromising the web browser security posture or exposing backend proxy handlers to header leaks.
 
 ## 1. Purpose

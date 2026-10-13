@@ -1,8 +1,10 @@
 # Building Telos Native Clients
 
+> **Current delivery scope:** The first native deliverable is Linux x86_64. Windows and Mac clients are planned later; native mobile remains deferred. The server runs only on Ubuntu 24.04+. The commands below are developer build references, not certification of working native packages. Follow [platform scope](../product/platform-scope.md).
+
 How to compile the downloadable Telos client for desktop and mobile. The client
 is a Tauri v2 shell (`frontend/src-tauri/`) wrapping the **same** static export
-the Go gateway serves — there is no second frontend. `frontend/src-tauri/README.md`
+planned for the separate `telos-client` browser service — there is no second frontend. `frontend/src-tauri/README.md`
 covers *why* the shell exists and what its two `window` bridges do; this document
 covers producing binaries.
 
@@ -31,11 +33,13 @@ node whose `.env` lists neither answers `403 origin_forbidden` to device
 registration, token refresh, and every write the client attempts — the client
 reaches the node, reads fine, and cannot do anything.
 
-Set both on any node meant to serve native clients, so one `.env` works for
-every platform:
+The planned Linux client requires its exact Tauri origin. The following is a
+configuration reference; current Compose does not yet pass this variable and
+preflight handling remains incomplete. Broader Windows client origins belong
+to the deferred client phase:
 
 ```bash
-TELOS_ALLOWED_ORIGINS=https://telos.example.com,tauri://localhost,http://tauri.localhost
+TELOS_ALLOWED_ORIGINS=https://telos.example.com,tauri://localhost
 ```
 
 Restart `telos-core` after changing it.
@@ -55,11 +59,10 @@ separately. Bundles land in `frontend/src-tauri/target/release/bundle/`
 
 `bundle.targets` is `"all"`, which means *all targets valid for the host*.
 Tauri does not cross-compile between desktop OSes: a Windows installer is built
-on Windows, a `.dmg` on macOS. This is unlike the `telos` operator CLI, which is
-Go and does cross-compile — see the `check-cross-compile` job in
-`.github/workflows/ci.yml`.
+on Windows, a `.dmg` on macOS. Those are future client builds. The server
+operator CLI has no Windows or macOS delivery requirement.
 
-## Mobile
+## Deferred mobile developer reference
 
 Each target is initialized once per checkout, then built:
 
@@ -95,7 +98,7 @@ Android outputs land under
 ## What CI does and does not check
 
 `.github/workflows/ci.yml` builds the frontend, runs its unit tests, and
-cross-compiles the Go CLI for `linux` and `windows`. **It does not compile the
+builds the experimental Go CLI for Linux architectures only. **It does not compile the
 Tauri shell.** Nothing automated proves `frontend/src-tauri/` still builds, on
 any platform, so a Rust-side break surfaces only when someone runs the commands
 above. Run a desktop build by hand before cutting a release that claims a native

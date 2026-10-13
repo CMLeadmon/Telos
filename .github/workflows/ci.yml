@@ -71,14 +71,14 @@ jobs:
           cd backend
           go run ./cmd/genopenapi --check
 
-  # The operator CLI ships for Windows, so a Linux-only regression in it must
-  # fail here rather than at install time on someone's machine.
+  # Ubuntu 24.04+ is the only server target. Preserve Linux build coverage;
+  # future Windows/Mac client bundles have no server cross-compile requirement.
   check-cross-compile:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        goos: [linux, windows, darwin]
+        goos: [linux]
         goarch: [amd64, arm64]
     steps:
       - uses: actions/checkout@v4
@@ -107,6 +107,8 @@ jobs:
         run: bash tests/operations/ci_gates_test.sh
       - name: Verify accumulated suite behavior
         run: bash tests/operations/accumulated_suite_test.sh
+      - name: Verify platform scope
+        run: python3 tests/operations/platform_scope_test.py
       - name: Verify product-truth mutations
         run: bash tests/operations/product_truth_test.sh
       - name: Check product truth

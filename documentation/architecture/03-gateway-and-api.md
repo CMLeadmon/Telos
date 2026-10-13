@@ -1,5 +1,7 @@
 # Gateway & API Integration
 
+> **Platform override (2026-10-12):** [Current scope](../product/platform-scope.md) requires Ubuntu 24.04+ servers only, browser and Linux desktop clients first, and Windows/Mac native clients later. Older platform assumptions below are superseded.
+
 > **Superseded in part by the less-is-more redesign (2026-07).** The voice token
 > and LiveKit webhook endpoints, Watch Party routes, and notification-inbox
 > routes were removed; annotations were generalized to `(target_type, target_id)`

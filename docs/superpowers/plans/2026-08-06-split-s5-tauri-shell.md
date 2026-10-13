@@ -1,5 +1,7 @@
 # Tauri Shell Implementation Plan
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Package the Telos Next.js frontend as native desktop and mobile applications targeting Windows, macOS, Linux, iOS, and Android using Tauri v2 while preserving 100% of the visual design system and React component architecture.

@@ -1,5 +1,7 @@
 # Standalone Beta Phase 5: Candidate Certification Implementation Plan
 
+> **Active plan, remediated 2026-10-13:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browsers and Linux desktop first; Windows/Mac native clients deferred. Read the cold handoff and shared contracts before execution.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build, test, sign, and publish exactly one immutable Telos beta candidate whose server, browser client, desktop packages, recovery artifacts, and evidence all share one verifiable identity.
@@ -12,10 +14,10 @@
 
 ## Global Constraints
 
-- Begin only after Phase 1–4 implementations are merged and reviewed. Freeze from a clean, signed commit on the release branch; never certify a dirty checkout, merge preview, unpushed commit, or rebuilt substitute.
+- Execute Task 1a schemas and Task 4a runner/result contracts immediately after Phase 1, and Task 2a builder implementation as its product inputs become available. These support Phase 2–4 fixtures and rehearsals. Only Task 6 final freeze/certification waits for all Phase 1–4 implementations and Phase 5 tooling to be merged and reviewed. Freeze from a clean signed tag on the release branch; never certify a dirty checkout, merge preview, unpushed commit, or rebuilt substitute.
 - Version format is `0.1.0-beta.N` with positive integer `N`. The same version appears in the Git tag, release manifest, frontend package, Cargo package, Tauri config, desktop metadata, and artifact filenames.
 - A release build exports the signed tag with `git archive`; it does not build from the caller's working tree. `SOURCE_DATE_EPOCH` is the signed commit time.
-- Desktop packages are built on native Linux, Windows, and macOS runners from the same tag. The Linux assembler imports them only after verifying source commit, version, workflow run/attempt, platform, and raw SHA-256 sidecars.
+- The Linux AppImage is built on an Ubuntu native runner from the same tag. The Ubuntu assembler imports it only after verifying source commit, version, workflow run/attempt, platform, and raw SHA-256 sidecars.
 - Candidate hash graph is acyclic:
   1. payload bytes produce artifact digests;
   2. artifact index names those digests;
@@ -27,11 +29,11 @@
 - Candidate lock, evidence, signatures, and checksum files never claim to hash themselves or a downstream node.
 - A frozen candidate is never rebuilt after a failing gate. Fixes create a new commit, version/tag, build, candidate lock, and evidence set.
 - Candidate gates install/load only artifacts named by `candidate-lock.json`. Commands reject mutable image tags and paths not present in the artifact index.
-- Every required gate is exactly one fresh `passed` envelope. `failed`, `not_run`, duplicate, missing, stale, unknown, wrong-candidate, wrong-source, wrong-runtime, wrong-artifact, or invalidly signed evidence blocks certification.
-- Default maximum evidence age is 14 days. Clean install, runtime hardening, backup/restore, upgrade/rollback, exposure/egress, capacity, and supply-chain evidence is at most 7 days old when certification is signed. The catalog owns exact `maxAgeHours`.
+- For final certification, every required gate is exactly one fresh `passed` envelope. `failed`, `not_run`, duplicate, missing, stale, unknown, wrong-candidate, wrong-source, wrong-runtime, wrong-artifact, or invalidly signed evidence blocks certification.
+- Default maximum evidence age is 168 hours. Runtime hardening, host exposure, separate-host restore and upgrade/rollback expire at 72 hours; candidate supply-chain evidence expires at 24 hours. The catalog owns these exact `maxAgeHours`; compare freshness at certification and again at promotion.
 - Guided manual records are explicit per assertion and operator-signed. A checkbox left unanswered is `not_run`; a narrative claim cannot replace required fields.
 - Required browser matrix: current Chrome, Firefox, Edge, automated WebKit, desktop Safari, iOS Safari, and Android Chrome, with exact observed versions recorded. WebKit automation does not substitute for Safari device checks.
-- Required desktop matrix: the exact unsigned Linux AppImage, Windows NSIS installer, and macOS universal DMG. Build success does not substitute for install/restart/keychain/revocation/media journeys.
+- Required desktop matrix: the exact unsigned Linux x86-64 AppImage on Ubuntu. Windows/macOS native packages and gates are deferred and must not be indirect prerequisites. Build success does not substitute for install/restart/keychain/revocation/media journeys.
 - Private signing keys never enter the repository, CI logs, evidence archive, release archive, or command arguments as key material. Key file paths may be provided through environment and must be mode `0600`.
 - Public trusted signer files contain real OpenSSH public keys and no ellipses/synthetic values. If an authorized operator key has not been enrolled and reviewed, signing/certification is `not_run`.
 - Release publication has `contents: write` only in the promotion job. Candidate builds have `contents: read`; no job has `id-token: write` unless an implemented attestation verifier consumes it.
@@ -39,9 +41,27 @@
 
 ---
 
+
+## Cold-handoff subparts and ownership (2026-10-13)
+
+Read [shared contracts](2026-10-13-standalone-beta-handoff-contracts.md) and the [execution entry](2026-10-13-standalone-beta-cold-handoff.md) first. Existing Task numbers remain stable:
+
+| Subpart | When | Deliverable |
+|---|---|---|
+| Task 1a | After Phase 1 | Graph/result/guided/index/certification/generation schemas and fixture validators; no production key prerequisite |
+| Task 1b | When operator supplies approved keys | Reviewed real trust enrollment |
+| Task 4a | After Task 1a, before downstream result producers | Catalog v2 and envelope v2 integration, runner/result/subject adapters |
+| Task 2a | Schemas ready; integrate product paths as they land | Builder and non-certifying fixture/rehearsal support |
+| Tasks 3, 4b, 5 | May implement with fixtures while Phases 2–4 proceed | Collectors, import/sign/certify and stage/promote tools |
+| Task 6 | All product/tooling merged; external inputs supplied | One final freeze, candidate gates, signed certification and publication |
+
+Tooling implementation is not beta certification. Missing signer, second host, browser device, off-node repository or predecessor blocks that affected external action and final certification only. Run fixture suites and unrelated implementation work meanwhile. Do not fake a live result to complete an implementation checkpoint.
+
+**Review focus:** circular graph fields; runner/producers emitting duplicate evidence; local/external prerequisite duplication; secret-bearing attachments; production key enrollment blocking ordinary fixtures. Task 1 schema mutation tests, Task 4a adapter tests, Task 4b import tests and Task 3 secret-canary tests own these cases.
+
 ## Current-State Baseline
 
-The current evidence and release-manifest schemas accept only a few unconstrained fields (`release/evidence-envelope.schema.json:1-10`, `release/release-manifest.schema.json:1-11`). Release build, staging, and evidence-signing scripts only print completion (`scripts/build-release.sh:1-5`, `scripts/stage-release.sh:1-5`, `scripts/sign-evidence.sh:1-5`), and beta certification can announce success without verifying an artifact graph (`scripts/certify-beta.sh:18-24`). Phase 1 makes these paths fail closed; this phase replaces them with one immutable candidate graph and verified promotion.
+Phase 1 now supplies a strict envelope v2 (`scripts/lib/evidence.py:17-26,79-155`) and catalog v1 runner (`scripts/run-gates.py:27-33`). Preserve its fail-closed checks. Artifact/release schemas remain minimal and the complete graph/builder/certifier is this phase's work. Earlier step labels describing success-only placeholders are historical failure modes, not an instruction to restore a stub; check the present baseline and write a regression for the missing behavior. Task 4a explicitly migrates the implemented runner instead of assuming it already accepts artifact/runtime evidence.
 
 ---
 
@@ -56,7 +76,7 @@ The current evidence and release-manifest schemas accept only a few unconstraine
 - Create: `scripts/enroll-release-signer.py`, `tests/operations/signer_trust_test.sh` — safe public-key enrollment/validation.
 - Modify: `scripts/build-release.sh`, `scripts/tests/reproducible-build-test.sh`, `tests/operations/release_test.sh` — deterministic one-time candidate assembly.
 - Create: `scripts/lib/release_graph.py`, `docker-compose.release.yml` — manifest/hash graph and no-build release override.
-- Create: `.github/workflows/candidate.yml` — native multi-OS candidate build/assembly.
+- Create: `.github/workflows/candidate.yml` — Ubuntu candidate build/assembly.
 - Modify: `scripts/certify-browser-matrix.sh`, `tests/operations/browser_certification_test.sh` — real hosted-browser matrix.
 - Create: `scripts/record-guided-smoke.py`, `release/guided-smoke.schema.json`, `tests/operations/guided_smoke_test.sh` — structured browser/desktop manual records.
 - Create: `scripts/import-evidence.py` — immutable evidence bundle assembly.
@@ -91,7 +111,7 @@ The current evidence and release-manifest schemas accept only a few unconstraine
 
 - [ ] **Step 1: Write graph/schema/trust mutation tests**
 
-Create a complete tiny fixture graph and assert rejection of unknown fields, missing artifact, wrong path/digest/size/media type/platform, duplicate path/digest, path traversal, absolute path, symlink artifact, mismatched source/version, candidate hashing itself, evidence included in candidate payload, wrong candidate digest, missing required evidence, duplicate gate, invalid status, reversed times, expired record, guided assertion omission, invalid public key, repeated/fabricated key material, unauthorized principal, wrong SSH namespace, and signature over changed bytes.
+Create a complete tiny fixture graph and assert rejection of unknown fields, missing artifact, wrong path/digest/size/media type/platform, duplicate path, path traversal, absolute path, symlink artifact, mismatched source/version, candidate hashing itself, evidence included in candidate payload, wrong candidate digest, missing required evidence, duplicate gate, invalid status, reversed times, expired record, guided assertion omission, invalid public key, repeated/fabricated key material, unauthorized principal, wrong SSH namespace, and signature over changed bytes.
 
 - [ ] **Step 2: Run tests and expose current permissive schemas/invalid key material**
 
@@ -100,11 +120,11 @@ bash tests/operations/release_test.sh
 bash tests/operations/signer_trust_test.sh
 ```
 
-Expected: nonzero because existing schemas barely constrain content and committed trust files are not valid usable keys.
+Expected: new graph/trust mutation tests fail for missing strict graph behavior; existing envelope v2 regressions continue passing. Never weaken existing envelope checks.
 
 - [ ] **Step 3: Define strict schemas**
 
-Use JSON Schema 2020-12 with `additionalProperties: false` throughout. Core shapes:
+Use JSON Schema 2020-12 with `additionalProperties: false` throughout. Implement every required field and invariant in the [shared contracts](2026-10-13-standalone-beta-handoff-contracts.md), including generation descriptor/installed receipt, result/subject, guided record, evidence index, and certification; add round-trip fixtures for each. Core graph shapes:
 
 ```json
 {
@@ -149,7 +169,28 @@ Use JSON Schema 2020-12 with `additionalProperties: false` throughout. Core shap
 }
 ```
 
-Candidate lock repeats the complete artifact digest map so it can be verified without trusting index traversal. It excludes checksums, evidence, signatures, and itself.
+Candidate lock repeats the complete artifact digest map so it can be verified without trusting index traversal. It excludes checksums, evidence, signatures, and itself. `generation.json` contains no candidate digest or installed receipt. Artifact-bound SBOMs contain only payload artifact identity, never candidate identity. The examples above fix the graph field sets; the following table fixes remaining records. All objects are closed and all listed fields required unless explicitly nullable.
+
+### Closed record inventory (Task 1a)
+
+Implement schemas and semantic validators together. `D` below means prefixed SHA-256; `H` means raw 64-character lowercase hex; `T` means UTC timestamp; `P` means safe relative regular-file path; `C` means 40-character source commit. Collections are sorted by their identity key and reject duplicate identities. No array of hashes may include its own file or a downstream record.
+
+| File/schema | Required fields and rules |
+|---|---|
+| `artifact-index.json` | `schemaVersion:1`, `artifacts:[{path:P,kind,platform,size:nonnegative integer,sha256:H,contentDigest:D|null}]`. Kind enum `oci-image,desktop,static-client,source,sbom,config,generation,migrations`; platform `linux/amd64,linux-x86_64,any`. OCI contentDigest is the verified manifest digest; other kinds use null. Distinct files may have identical bytes; reject duplicate paths, not legitimate equal digests. |
+| `release-manifest.json` | Exact example above; `buildInputs` keys exactly `npmLock,cargoLock,goSum`, all D. Version/tag relation is `sourceTag = "v" + version`; epoch equals signed source commit time. |
+| `candidate-lock.json` | Exact example above; artifacts map is the complete index path→D mapping. Verify both manifest and index bytes, source/version agreement and every payload digest. |
+| `generation.json` / `generation-manifest.schema.json` | `schemaVersion:1,version,sourceCommit:C,artifactIndexSubset:[{path:P,sha256:H}],images:{service:D},migrations:{min:integer,current:integer,max:integer,checksumSetDigest:D},predecessorIds:[D],rollbackCompatibleThrough:integer`. Subset contains operational payload files only; excludes generation itself, outer index/manifest/lock, checksums, SBOMs, evidence and signatures. `min<=current<=max`; rollback bound is explicit and validated against predecessor. |
+| installed receipt / `installed-generation.schema.json` | `schemaVersion:1,candidateLockDigest:D,generationManifestDigest:D,generationPath:absolute path,installedAt:T`. Stored in node `state/installed-generation.json`; not release payload. |
+| `gate-result.schema.json` | Exact shared contract Section 5. Attachment kind enum `subject,report,guided-record,signature,artifact-identity`. Signed-record signatures are separate declared attachments. Subject file is declared with kind subject. |
+| `observed-subject.schema.json` | Runtime/external-host shapes in shared Section 6; artifact variant `{schemaVersion:1,kind:"artifact",sourceCommit:C,candidateLockDigest:D,selector:string,artifactDigest:D}`. Verify selector/digest against frozen index; result subjectFile holds this descriptor, while artifact envelope subject digest is actual selected artifact/index bytes. |
+| `artifact-identity.schema.json` | `schemaVersion:1,sourceCommit:C,version,platform:"linux-x86_64",size:integer,sha256:H,workflowRunId:positive integer,workflowRunAttempt:positive integer`. Produced with the Linux package; no downstream candidate digest. |
+| `guided-smoke.schema.json` | `schemaVersion:1,sourceCommit:C,candidateLockDigest:D,matrix:"browser"|"desktop",platform,artifactDigest:D,hostId,os,osVersion,applicationVersion,deviceModel,testerPrincipal,startedAt:T,finishedAt:T,assertions:[{id,answer:"pass"|"fail"|"not_run",notes:string}],attachments:[{path:P,sha256:H}]`. All identity/version strings nonempty; notes ≤1000 chars. No overall status field. Exact assertion IDs come from Task 3's checklist committed as `release/guided-assertions.json`; recorder and verifier consume that one inventory. |
+| `evidence-index.schema.json` | `schemaVersion:1,sourceCommit:C,candidateLockDigest:D,createdAt:T,gates:[{gateId,envelope:{path:P,sha256:H},log:{path:P,sha256:H},result:{path:P,sha256:H}|null,files:[{path:P,sha256:H,kind}]}]`. Source/fixture result null, others required. Files contain result attachments and signed records; exclude index/signatures/certification. Each path owned by one gate. |
+| `certification.schema.json` | `schemaVersion:1,sourceCommit:C,candidateLockDigest:D,evidenceIndexDigest:D,certifiedAt:T,status:"passed",signerPrincipal,signerFingerprint,requiredGates:{gateId:D}`. Map hashes envelope bytes; excludes beta-certification. Separate detached signature; no self/signature digest. |
+| `release-review.schema.json` | `schemaVersion:1,candidateLockDigest:D,evidenceIndexDigest:D,certificationDigest:D,reviewerPrincipal,reviewedAt:T,decision:"approved"`. Detached signature namespace `telos-beta-review-v1`; reviewer differs from certifier. |
+
+Create all schema files above under `release/`; add them to the Task 1 file list and commit. Tests must reject missing/extra fields, invalid enums and graph relationships as well as malformed JSON. Implement the bounded schema subset in Python standard library plus explicit semantic checks; merely declaring JSON Schema without executing validation is insufficient. Preserve existing evidence-envelope v2 as its own schema.
 
 - [ ] **Step 4: Implement canonical graph validation**
 
@@ -162,13 +203,13 @@ release_graph.py build-candidate-lock --root PATH --out PATH
 release_graph.py verify --root PATH
 ```
 
-Every writer uses sibling temp, `fsync`, mode `0600`, and atomic rename.
+Every writer uses sibling temp, `fsync`, mode `0600`, and atomic rename. Canonical bytes and digest semantics come from the shared contract; assert the emitted candidate file is canonical because `scripts/lib/evidence.py:229-239` hashes its raw bytes. `release_graph.py verify` validates schemas plus cross-document relationships, not just JSON syntax.
 
 - [ ] **Step 5: Implement public-key enrollment and remove invalid trust data**
 
 `enroll-release-signer.py --purpose tag|evidence --principal PRINCIPAL --public-key-file PATH` accepts only one valid `ssh-ed25519` or hardware-backed SSH signing public key, prints its SHA-256 fingerprint, rejects private keys/comments with control characters/duplicate key/fabricated ellipses, and atomically updates the matching allowed-signers file after explicit fingerprint confirmation. `--verify-files` parses both committed allowed-signers files, validates every key with `ssh-keygen`, rejects duplicate principals/keys, and prints fingerprints.
 
-Remove `telos-release.pub`. Before candidate work, an authorized operator runs enrollment with actual public key files and reviews the commit. If no real key is available, stop with `not_run`; do not generate or commit a private key for convenience.
+Remove `telos-release.pub`. Before candidate work, an authorized operator runs enrollment with actual public key files and reviews the commit. Keep Task 1a schema/tool fixture work independent of real keys. Tests generate ephemeral keys only under mode-`0700` test temp directories and remove them on exit; never commit them. Task 1b production enrollment and later signed rehearsal/final release actions return `not_run` if no reviewed operator key exists; unrelated implementation continues.
 
 - [ ] **Step 6: Run schema/trust tests**
 
@@ -179,7 +220,7 @@ python3 -m py_compile scripts/lib/release_graph.py scripts/enroll-release-signer
 python3 scripts/enroll-release-signer.py --verify-files
 ```
 
-Expected: tests exit `0`; both signer files parse and fingerprints match the reviewed change.
+Expected: fixture tests exit `0` using temporary trust anchors. Production `--verify-files` passes only after Task 1b real-key enrollment; until then record `not_run` for enrollment without blocking Task 1a.
 
 - [ ] **Step 7: Commit schemas and real trust anchors**
 
@@ -192,6 +233,7 @@ git add release/candidate-lock.schema.json release/artifact-index.schema.json \
   scripts/lib/release_graph.py scripts/enroll-release-signer.py \
   tests/operations/release_test.sh tests/operations/signer_trust_test.sh
 git commit -m "release: define candidate graph and signer trust"
+# Commit production trust-file changes only when separately enrolled/reviewed.
 ```
 
 ---
@@ -211,7 +253,7 @@ git commit -m "release: define candidate graph and signer trust"
 
 **Interfaces:**
 - Produces: `telos-${version}-candidate.tar.zst` and detached SHA-256 from one signed tag.
-- Produces payload: source archive, core/client OCI archives, three desktop packages, deploy generation, SBOMs, legal/runbooks, artifact index, manifest, candidate lock, and `SHA256SUMS`.
+- Produces payload: source archive, all required server OCI archives, one Linux AppImage, candidate-independent deploy generation, artifact-bound SBOMs, legal/runbooks, artifact index, manifest, candidate lock, and `SHA256SUMS`.
 - Consumes: Phase 3 desktop build contract and Phase 4 image/tool locks.
 
 - [ ] **Step 1: Add deterministic build and input-substitution tests**
@@ -241,7 +283,7 @@ services:
     image: ${TELOS_CORE_IMAGE:?candidate core image is required}
 ```
 
-The generation includes a mode-`0600` non-secret `images.env` containing digest-addressed local images after load. Candidate install/upgrade always layers the override and refuses `--build`.
+The payload includes a candidate-independent `generation.json` and mode-`0600` non-secret `images.env` containing digest-addressed images. The installed receipt is written outside payload only after lock verification and is never indexed back into the candidate. Candidate install/upgrade always layers the override and refuses `--build`. Test merged Compose, not the overlay text: generate a complete no-build manifest from the validated base, remove every service `build` key and replace every image with its locked digest; use the shared pinned provider to validate the result. Every core/client/migrate/validate-integrations/sanitize-restore service must use the correct candidate image; no inherited build key may survive.
 
 - [ ] **Step 4: Implement exact-source assembly**
 
@@ -252,24 +294,24 @@ scripts/build-release.sh --tag TAG --version VERSION \
   --desktop-dir PATH --out-dir ABSOLUTE_PATH
 ```
 
-Verify signed annotated tag with `release/telos-tag-signers`, require tag/version/source consistency, export with `git archive`, set deterministic locale/timezone/umask and `SOURCE_DATE_EPOCH`, and build core/client with locked bases plus `podman build --timestamp`. Export OCI archives without pulling after lock verification. Import/verify native artifacts. Copy only the tracked deployment/runtime/legal/runbook inventory. Generate SBOMs, run candidate scan, build graph documents, write deterministic `SHA256SUMS`, verify the graph, and package with normalized owner/group/mtime/order.
+Verify signed annotated tag with `release/telos-tag-signers`, require tag/version/source consistency, export with `git archive`, set deterministic locale/timezone/umask and `SOURCE_DATE_EPOCH`, and build core/client with locked bases plus `podman build --timestamp`. Export OCI archives without pulling after lock verification. Import/verify native artifacts. Copy only the tracked deployment/runtime/legal/runbook inventory. Write the content-only payload index, generate artifact-bound SBOMs, then build artifact index → release manifest → candidate lock. Write deterministic `SHA256SUMS`, verify the graph, and package with normalized owner/group/mtime/order. Do not run candidate-bound scan before the lock exists; run it after freeze and store scan evidence outside the candidate.
 
 Refuse `.env`, `.telos`, secrets, caches, node_modules, build targets, evidence, local volumes, Git metadata, or absolute paths.
 
 - [ ] **Step 5: Make reproducibility semantic and complete**
 
-Build twice from the tag in distinct temporary roots, second with no cache. Require identical Go binary, frontend static tree, OCI index/manifest/config/layer digests, deployment tree, SBOM package inventories (allow only generated-at field normalization), graph documents, candidate lock, and packaged file list. If outer archive compression bytes differ, diagnose and normalize; do not weaken comparison to filenames.
+Before freezing, build twice from the tag in distinct temporary roots, second with no cache; only one verified output becomes the candidate. This is builder reproducibility validation, not permission to substitute a rebuild after freeze. Require identical Go binary, frontend static tree, OCI index/manifest/config/layer digests, deployment tree, canonical SBOM bytes (set generated timestamps from SOURCE_DATE_EPOCH before indexing), graph documents, candidate lock, and packaged file list. If outer archive compression bytes differ, diagnose and normalize; do not weaken comparison to filenames.
 
 - [ ] **Step 6: Create the native candidate workflow**
 
 Workflow inputs: signed tag and version. Jobs:
 
 1. validate signed tag/locks/schemas on Ubuntu;
-2. build Linux AppImage on Ubuntu, Windows NSIS on Windows, macOS universal DMG on macOS;
-3. each writes source/version/run/attempt/platform/artifact digest identity and uploads immutable same-run artifact;
-4. Linux assembler downloads all three, verifies them, builds core/client once, creates candidate archive/checksum, verifies graph/reproducibility/SBOM/scan, and uploads candidate artifact.
+2. build the Linux x86-64 AppImage on Ubuntu;
+3. the native build writes the exact artifact-identity schema from Task 1a (including workflowRunId/workflowRunAttempt) and uploads immutable same-run artifact;
+4. Ubuntu assembler downloads the Linux package, verifies it, builds core/client, archives the exact third-party platform images, generates artifact-bound SBOMs, verifies pre-freeze reproducibility, creates candidate graph/archive/checksum, and uploads the frozen candidate. Candidate-bound vulnerability/secret/license scan evidence is generated only after this lock exists.
 
-Use `permissions: contents: read`, pinned actions by commit SHA, no signing secrets, and retention long enough for the 14-day certification window. Artifact names include version and candidate-lock digest after assembly.
+Use `permissions: contents: read`, pinned actions by commit SHA, no signing secrets, and retention of at least 14 days (retention does not extend evidence freshness). Artifact names include version and candidate-lock digest after assembly.
 
 - [ ] **Step 7: Run local fixture/reproducibility checks**
 
@@ -282,9 +324,9 @@ bash scripts/verify-clean-checkout.sh --inventory-only
 
 Expected: all exit `0`.
 
-- [ ] **Step 8: Build one non-release rehearsal tag**
+- [ ] **Step 8: Build one signed rehearsal tag when operator trust is available**
 
-Use an authorized signed rehearsal tag on a clean commit, run the full native workflow, download the assembled archive twice, verify its checksum/graph, load both OCI images, inspect version/source labels, and install each desktop artifact. Delete only the rehearsal workflow artifacts/draft after review; do not reuse them as beta evidence.
+Use an authorized signed rehearsal tag `v0.1.0-beta.N` on a clean commit with its matching version, reserve that N permanently, and mark the output non-certifying in the external run record and pass its fully verified lock through --rehearsal-lock (recordKind remains rehearsal) (do not invent an unsupported tag syntax), run the full native workflow, download the assembled archive twice, verify its checksum/graph, load both OCI images, inspect version/source labels, and install each desktop artifact. Delete only the rehearsal workflow artifacts/draft after review; do not reuse them as beta evidence.
 
 - [ ] **Step 9: Commit candidate building**
 
@@ -313,8 +355,8 @@ git commit -m "release: assemble one immutable standalone candidate"
 
 **Interfaces:**
 - Produces automated browser subrecords: Chrome, Firefox, Edge, WebKit.
-- Produces guided external subrecords: desktop Safari, iOS Safari, Android Chrome, Linux Tauri, Windows Tauri, macOS Tauri.
-- Produces aggregate evidence gates: `browser-matrix`, `desktop-linux`, `desktop-windows`, `desktop-macos`.
+- Produces guided external subrecords: desktop Safari, iOS Safari, Android Chrome, Linux Tauri.
+- Produces aggregate evidence gates: `browser-matrix`, `desktop-linux`.
 
 - [ ] **Step 1: Add guided-record adversarial tests**
 
@@ -342,13 +384,13 @@ record-guided-smoke.py --matrix browser|desktop --platform ID \
   --candidate-lock PATH --artifact PATH --out PATH
 ```
 
-It verifies candidate/artifact first, collects tool-detected OS/app/browser versions where possible, displays one numbered assertion at a time, accepts only `pass`, `fail`, or `not_run` plus bounded notes, hashes declared attachments, redacts credential-like input, and atomically writes a closed record. It cannot write overall `passed`; the aggregator derives it only when all assertions pass.
+It verifies candidate/artifact first, collects tool-detected OS/app/browser versions where possible, displays one numbered assertion at a time, accepts only `pass`, `fail`, or `not_run` plus bounded notes, hashes declared attachments, redacts credential-like input, and atomically writes a closed record. It cannot write overall `passed`; the aggregator derives it only when all assertions pass. Finish by signing canonical record bytes with namespace `telos-guided-smoke-v1` using `TELOS_EVIDENCE_SIGNING_KEY`; verify against the approved tester principal in `release/evidence-signers`. Without an enrolled tester/key, save an unsigned draft outside importable evidence and return `3`. Fixture tests use ephemeral keys. Guided browser `--artifact` selects the hosted-client artifact, while desktop selects the Linux AppImage; both must exist in the candidate index.
 
 Browser assertions cover trusted HTTPS, owner/invite/member auth, Chat, Stream video/audio, Library EPUB/PDF/audiobook, Files upload/download/delete, commentary, Settings/Admin, logout/login, upstream degradation, offline/reconnect, and responsive/accessibility-critical interactions. Desktop assertions use the Phase 3 install/connect/keychain/restart/refresh/revocation list plus all four modules.
 
 - [ ] **Step 5: Configure real automated browser projects**
 
-Run Playwright against the frozen candidate URL, never mock APIs. Projects are Chromium/Chrome, Firefox, WebKit, and Edge channel on a compatible runner. Record exact executable versions, candidate health identity, test result JSON, trace only on failure, and console/network error summaries with URL query redaction. Use unique invited accounts and clean them up.
+Run Playwright against the frozen candidate URL, never mock APIs. Projects are Chromium/Chrome, Firefox, WebKit, and Edge channel on a compatible runner. Record exact executable versions, candidate health identity, test result JSON, tracing/video/HAR disabled for credential-bearing journeys, and allowlisted console/network error summaries with full URL query/header/cookie/body redaction. Failure is not permission to publish a secret-bearing trace. Use unique invited accounts and clean them up.
 
 - [ ] **Step 6: Implement browser aggregation**
 
@@ -356,10 +398,10 @@ Expose:
 
 ```text
 certify-browser-matrix.sh --candidate-lock PATH --records-dir PATH \
-  --evidence-out PATH
+  --result-out PATH
 ```
 
-Validate automated/guided schemas, candidate identity, exact required set, journey completeness, version capture, timestamps/freshness, attachment hashes, and no duplicate substitutions. Write one Phase 1 envelope with a subject digest over the canonical matrix index. Any unavailable device/browser returns `3`/`not_run`.
+Validate automated/guided schemas, candidate identity, exact required set, journey completeness, version capture, timestamps/freshness, attachment hashes, and no duplicate substitutions. Write a producer result whose subjectFile is the shared external-host descriptor and whose attachments include the canonical matrix index plus signed records. The runner hashes that descriptor into envelope.subject.digest; do not hash the matrix index directly as a competing subject format. Any unavailable device/browser returns `3`/`not_run`.
 
 - [ ] **Step 7: Run fixture and automated checks**
 
@@ -374,7 +416,7 @@ Expected: fixture tests exit `0`; local Playwright passes against the declared c
 
 - [ ] **Step 8: Complete a rehearsal matrix**
 
-Run automated records against the rehearsal candidate and guided records on physical/hosted Safari, iOS, Android, and three desktop OSes. Aggregate, review redaction, restart/revocation behavior, and platform warning instructions. Any inaccessible platform remains `not_run`; this validates the workflow but cannot certify beta.
+Run automated records against the rehearsal candidate and guided records on physical/hosted Safari, iOS, Android, and Ubuntu Linux desktop. Aggregate, review redaction, restart/revocation behavior, and platform warning instructions. Any inaccessible platform remains `not_run`; this validates the workflow but cannot certify beta.
 
 - [ ] **Step 9: Commit guided certification tooling**
 
@@ -405,6 +447,47 @@ git commit -m "test: capture guided browser and desktop beta evidence"
 - Produces: immutable evidence bundle, canonical evidence index, detached SSH signature, certification JSON/signature.
 - Consumes: frozen candidate lock and every required Phase 1–4/local/external envelope.
 
+
+#### Task 4a: Extend the existing runner before downstream collectors are implemented
+
+**Files:** modify `scripts/run-gates.py`, `scripts/lib/evidence.py`, `release/evidence-envelope.schema.json`, `ci/phase-gates.json`, `tests/operations/run_gates_test.py`, `tests/operations/evidence_envelope_test.sh`; create `release/gate-result.schema.json`, `release/observed-subject.schema.json` and focused Python fixtures if the shell harness needs them. Task 1a owns schema shapes; this subpart owns their execution.
+
+- [ ] **4a.1 Pin current incompatibilities with failing tests.** Catalog v1 currently rejects extra fields (`scripts/run-gates.py:28-33,128-130`), forces artifact gates to fail (`:767-775`), and hashes runtime argv rather than runtime identity (`:580-589`). Add tests `catalog_v2_accepts_closed_fields`, `artifact_gate_verifies_indexed_bytes`, `runtime_gate_rejects_wrong_config_digest`, `result_gate_id_mismatch_fails`, `missing_result_is_not_success`, and `cross_scope_prerequisite_is_reused_once`.
+- [ ] **4a.2 Implement catalog schema v2.** Retain v1 gate fields and `subjectKind`; add required `subjectSelector`, positive integer `maxAgeHours`, and unique `requiredPlatforms` array. Selectors are `sourceCommit`, `completed-output`, `artifact:<index-relative-path>`, `artifact-index`, `observed-runtime`, `observed-host` with the kind combinations in the shared contract. Reject unknown fields/selectors/platforms, duplicate/cyclic dependencies and deferred native gates. Keep explicit legacy v1 parsing for Phase 1 fixture tests; v1 artifacts still cannot certify and final certification requires v2.
+- [ ] **4a.3 Implement producer input/result plumbing.** Add `--inputs PATH` and repeatable `--prior-evidence-dir PATH`. Inputs are a closed JSON object `{ "gateInputs": { "gate-id": { "targetFile": "/secure/target.json" } } }`; allowed keys per gate are fixed below, never arbitrary argv. Require absolute regular-file/directory paths, reject symlinks, unknown gates/keys and command/credential overrides. Reserve candidate-lock/result-out flags to the runner. Producers implement exactly the shared result/mode contract, writing `--result-out` while the runner alone emits envelopes and sanitized logs. Source/fixture commands need no sidecar.
+
+| Gate IDs | Allowed input keys → fixed option |
+|---|---|
+| `clean-install` | `targetFile`→`--target-file`, `fixtureManifest`→`--fixture-manifest` |
+| `browser-matrix`, `desktop-linux` | `recordsDir`→`--records-dir` |
+| `runtime-hardening`, `monitoring`, `encrypted-backup`, `separate-host-restore`, `upgrade-rollback`, `capacity`, `controlled-egress` | `targetFile`→`--target-file` |
+| `host-exposure` | `targetFile`→`--target-file`, `policyFile`→`--policy` |
+| `candidate-supply-chain` | `artifactRoot`→`--artifact-root`, `sbomDir`→`--sbom-dir` |
+
+Each listed input is required for that gate; source/fixture gates accept no injected input. Create `release/gate-inputs.schema.json` and `release/drill-target.schema.json`. Drill target is closed: `schemaVersion:1,origin:HTTPS origin,nodePath:absolute path,hostId:D,sshTarget:string|null,sshConfigFile:absolute path|null,credentialsFile:absolute path,restoreTargetFile:absolute path|null,predecessorGeneration:absolute path|null,capacityTargetFile:absolute path|null,confirmation:string|null`. Remote SSH targets require protected SSH config and known-host verification; restore requires a distinct target descriptor; upgrade requires predecessor; capacity requires its protected marker. Credentials file contains operator-local inputs only, is mode0600 and is never copied into evidence. Reject embedded passwords in origin/SSH strings. Destructive confirmation must match the task's exact token and declared host. A target descriptor is operational authorization input, not observed evidence. Verify machine identity before action. Add adapter support to each existing Phase 2/4 drill wrapper, translating this descriptor to its task-specific flags; do not broaden backup/restore primitives to execute arbitrary commands. Missing required inputs produce not_run; malformed or unsafe supplied inputs fail.
+
+Migrate catalog commands from placeholders to real collectors in their owning phase. `desktop-linux` gets `scripts/certify-desktop.sh` (same closed guided-record validation as browser aggregation, one Linux platform); `encrypted-backup` calls the verified backup collector; `controlled-egress` calls its live drill; `candidate-supply-chain` calls `scripts/scan-candidate.sh`, which includes SBOM validation. The runner supplies verified candidate-lock and fresh result-out paths to each. Add these adapters and a `gate_input_adapter_test.py` mutation suite to Task 4a's file inventory. Unknown/reserved option injection, wrong host and secret-canary tests must fail before runtime mutation.
+
+**Local artifact and policy mapping (same Task 4a migration):**
+
+| Gate | Kind / selector | Candidate command and assertions |
+|---|---|---|
+| `static-client-image` | artifact / `artifact:images/telos-client.oci.tar` | `python3 scripts/verify-frozen-artifact.py --gate-id static-client-image`; verify indexed OCI digest, static files, non-root image config, no secrets/source/dependencies and no published application port. Load/run the exact archive for HTTP smoke; never build it. |
+| `desktop-builds` | artifact / `artifact-index` | `python3 scripts/verify-frozen-artifact.py --gate-id desktop-builds`; require exactly one initial Linux AppImage artifact and matching artifact-identity sidecar; use Phase 3 inspection without executing input. Windows/Mac absence is valid. |
+| `image-lock` | source / `sourceCommit` | `python3 scripts/verify-image-lock.py --source`; inspect committed locks/Compose/external Dockerfile bases and local alias resolution. Effective images are checked by runtime-hardening separately. |
+| `supply-chain-policy` | source / `sourceCommit` | `bash scripts/check-supply-chain-policy.sh`; validate tool/license/risk-acceptance schemas, expiry and exact scanner policy fixtures; no live scan claim. Actual frozen scans belong to candidate-supply-chain. |
+
+Create the two named adapters and `tests/operations/frozen_artifact_test.py`. Frozen-artifact producer receives runner-owned `--candidate-lock` and `--result-out`, derives artifact root from the verified lock location, and emits the artifact descriptor from Task 1a. Require mutation cases for absent artifact, wrong digest/platform, substituted sidecar and attempted rebuild. Source adapters exit nonzero on failed assertions and require no sidecar. Add every new command to the catalog, CI inventory and structural checker in the same commit. Keep Phase 2/3 direct build tests as source development checks; they do not replace frozen-artifact verification.
+
+- [ ] **4a.4 Validate actual subjects.** Source hashes the verified source commit as today; fixture hashes its completed sanitized output; artifact hashes exact indexed bytes (or canonical full artifact index); runtime/host hashes a validated observed descriptor. Match host/runtime/service image identities to candidate graph and installed receipt. A missing/invalid result, nonzero producer exit, mismatch between result status and exit, wrong image/candidate/source, unsafe attachment path or absent declared file fails; missing external input yields `not_run`. Never convert command exit zero to a passed artifact/runtime gate without identity verification.
+- [ ] **4a.5 Preserve envelope v2 and extend known tools.** Update the helper and schema together because `scripts/lib/evidence.py:175-208` compares exact property definitions. Extend `toolVersions` to the agreed allowlist (adding exactly restic, k6, syft, trivy, gitleaks, skopeo, promtool, ssh-keygen, cargo, rustc, go, buildah and gh to existing keys); reject arbitrary keys. Attachments live in result/index, not envelope. Secret-key name checking alone is insufficient: test canary values in argv/logs/notes/attachment bytes before import.
+- [ ] **4a.6 Make prerequisite reuse deterministic.** Verify prior envelopes/results/subjects/logs against current candidate, freshness, exact gate ID and finish-before-dependent-start. Reuse each prerequisite once, without copying duplicate gate records into new output. Never run an external prerequisite implicitly from `--scope local`; report unavailable cross-scope input as `not_run`. Stop execution on first required failure; record remaining gates `not_run` with blocked reason. For certification, union verified prior/local/external roots once and reject duplicate IDs.
+- [ ] **4a.7 Verify the adapter independently.** Run `python3 tests/operations/run_gates_test.py` and `bash tests/operations/evidence_envelope_test.sh`; include one tiny indexed artifact whose exit-zero producer succeeds and whose one-byte mutation fails, and a runtime fixture whose container config ID differs legitimately from its manifest digest. Confirm no external environment/key is needed. Commit runner/schema/catalog changes as this subpart before collectors consume them.
+
+#### Task 4b: Import, sign and certify completed runner outputs
+
+The following numbered steps belong to Task 4b and consume Task 4a's closed contracts.
+
 - [ ] **Step 1: Add complete-set adversarial tests**
 
 From a valid fixture bundle, mutate one dimension at a time: missing/extra/duplicate gate, failed/not_run status, wrong candidate/source/subject, altered output log, unknown tool/runtime/artifact, expired evidence, dependency completed later than dependent, unsigned guided record, unauthorized signer/principal, invalid namespace, changed index after signature, dirty candidate graph, and certification created before last evidence. Every mutation must fail.
@@ -420,21 +503,23 @@ bash tests/operations/beta_certification_test.sh
 
 Expected: nonzero until exact-set and signature logic exists.
 
-- [ ] **Step 3: Add freshness and subject requirements to the gate catalog**
+- [ ] **Step 3: Use Task 4a catalog v2 freshness and subject requirements**
 
-Every gate entry has `maxAgeHours`, `subjectKind`, `requiredPlatforms` where applicable, and prerequisite IDs. The complete required set includes all master-plan local gates plus:
+Every gate entry has `maxAgeHours`, `subjectKind`, `subjectSelector`, `requiredPlatforms` (empty array when inapplicable), and prerequisite IDs under catalog schema v2. Set default `maxAgeHours=168`; use `72` for runtime-hardening, host-exposure, separate-host-restore and upgrade-rollback, and `24` for candidate-supply-chain. Keep these values in one shared contract table and assert catalog equality. No Windows/macOS native IDs may occur, including in prerequisite closure. The complete required set includes all master-plan local gates plus:
 
 ```text
-clean-install browser-matrix desktop-linux desktop-windows desktop-macos
+clean-install browser-matrix desktop-linux
 runtime-hardening monitoring encrypted-backup separate-host-restore
 upgrade-rollback capacity host-exposure controlled-egress candidate-supply-chain
 ```
 
-No cached `gatesPassed` or phase-level boolean exists.
+Update `documentation/product/beta-contract.json`, the checker's exact expected contract, its mutation fixtures, and `ci/phase-gates.json` in the same implementation commit so the required external set is exactly the list above.
+
+No cached `gatesPassed` or phase-level boolean exists. `beta-certification` is the terminal aggregator, never a required imported evidence input: excluding it from the evidence input set prevents certification depending on itself. The catalog retains only its declarative terminal ID/prerequisites. Every runner scope excludes `beta-certification`; explicit selection is rejected with guidance to the standalone certifier command in Step 6. That standalone command produces certification JSON/signature, not a gate result/envelope. Add runner and certifier tests for this exception and absence of self-reference.
 
 - [ ] **Step 4: Implement immutable evidence import/indexing**
 
-`import-evidence.py --candidate-lock PATH --catalog PATH --source-dir PATH --bundle-dir PATH` verifies each envelope/raw log/attachment/signature, copies regular files with safe deterministic names using exclusive creation, records raw digests, sets bundle files read-only, and writes `evidence-index.json` canonically. It refuses an existing nonempty bundle, symlinks, special files, path escape, secret-bearing keys, and records not tied to the candidate.
+`import-evidence.py --candidate-lock PATH --catalog PATH --source-dir PATH --bundle-dir PATH` verifies each envelope/raw log/attachment/signature, copies regular files with safe deterministic names using exclusive creation, records raw digests, sets bundle files read-only, and writes `evidence-index.json` canonically. Import runner envelopes/logs together with producer result, observed subject and all declared attachments; envelope v2 remains closed, so attachment references belong to result/index, never extra envelope keys. Resolve local/external directory input through one raw evidence root; reject duplicate gate IDs across subdirectories. It refuses an existing nonempty bundle, symlinks, special files, path escape, secret-bearing keys, and records not tied to the candidate.
 
 - [ ] **Step 5: Implement strict evidence signing/verification**
 
@@ -456,7 +541,7 @@ certify-beta.sh --candidate PATH --evidence-bundle PATH \
   --catalog ci/phase-gates.json --out-dir ABSOLUTE_PATH
 ```
 
-Verify candidate graph/checksums/tag, exact gate set, evidence signature, freshness/order, source/artifact/runtime/platform identities, supply-chain results, and no required `not_run`. Write canonical `certification.json` with candidate digest, required gate-to-envelope digest map, evidence-index digest, signer principal/fingerprint, certification time, and status `passed`; then sign it with namespace `telos-beta-certification-v1`. If any check fails, write only a non-certifying diagnostic outside the candidate/evidence bundle and exit nonzero.
+Verify candidate graph/checksums/tag, exact gate set, evidence signature, freshness/order, source/artifact/runtime/platform identities, supply-chain results, and no required `not_run`. Write canonical `certification.json` with candidate digest, required gate-to-envelope digest map, evidence-index digest, signer principal/fingerprint, certification time, and status `passed`; require `TELOS_EVIDENCE_SIGNING_KEY` and `TELOS_EVIDENCE_SIGNING_PRINCIPAL` for this invocation too, then sign it with namespace `telos-beta-certification-v1`. If any check fails, write only a non-certifying diagnostic outside the candidate/evidence bundle and exit nonzero.
 
 - [ ] **Step 7: Run certification fixtures**
 
@@ -486,6 +571,7 @@ git commit -m "release: certify only complete candidate-bound evidence"
 **Files:**
 - Modify: `scripts/stage-release.sh`
 - Modify: `.github/workflows/release.yml`
+- Create: `release/publisher-policy.json` — reviewed exact repository/login allowlist; tests use fixture values.
 - Modify: `tests/operations/release_test.sh`
 - Modify: `scripts/check-release-truth.sh`
 - Modify: `documentation/operations/release.md`
@@ -505,7 +591,7 @@ Assert stage rejects unsigned/nonexistent tag, wrong version/candidate, failed c
 bash tests/operations/release_test.sh
 ```
 
-Expected: nonzero because stage prints success and the release workflow calls the builder.
+Expected: new staging/no-rebuild assertions fail until implemented; existing fail-closed stubs may correctly return `not_run` and must not be changed to success merely for this test.
 
 - [ ] **Step 3: Implement non-overwriting draft staging**
 
@@ -513,16 +599,16 @@ Expose:
 
 ```text
 stage-release.sh --tag TAG --candidate PATH --evidence-bundle PATH \
-  --certification-dir PATH --notes PATH
+  --certification-dir PATH --review PATH --notes PATH
 ```
 
-Verify all inputs locally, require authenticated `gh` identity belongs to the authorized release group documented by operator policy, call `gh release create TAG --verify-tag --draft --prerelease`, and upload each uniquely named asset without `--clobber`. Download assets into a fresh temp directory immediately and reverify bytes/graph/signatures. If upload fails, leave the draft for diagnosis and report exact recoverable state; never replace an existing asset.
+Verify all inputs locally including the signed review sidecar, require authenticated `gh api user --jq .login` matches an entry in reviewed `release/publisher-policy.json` (`schemaVersion:1`, `githubRepository:owner/name`, `allowedLogins:[nonempty unique logins]`), verify target repository equality, call `gh release create TAG --verify-tag --draft --prerelease`, and upload each uniquely named asset without `--clobber`. Download assets into a fresh temp directory immediately and reverify bytes/graph/signatures. If upload fails, leave the draft for diagnosis and report exact recoverable state; never replace an existing asset.
 
 Release notes state reference server, browser/desktop matrix, platform-trusted HTTPS, unsigned package warnings, checksum/signature instructions, known limitations, backup/RPO/RTO contract, and upgrade path.
 
 - [ ] **Step 4: Replace release workflow with verification-only promotion**
 
-Workflow inputs: exact tag and candidate-lock digest. Checkout the tag with `contents: read`; promotion job receives `contents: write`. Download every draft asset, verify tag signer, candidate graph/checksums, evidence/certification signatures, exact digest input, required `passed` gate set, and asset list. Then run only:
+Workflow inputs: exact tag and candidate-lock digest. Checkout the tag with `contents: read`; promotion job receives `contents: write`. Download every draft asset, verify tag signer, candidate graph/checksums, evidence/certification/review signatures, authorized distinct reviewer, exact digest input, required `passed` gate set, and asset list. Then run only:
 
 ```text
 gh release edit "$TAG" --draft=false --prerelease=true
@@ -547,7 +633,7 @@ Stage the rehearsal candidate/evidence/certification as a draft prerelease, redo
 - [ ] **Step 7: Commit staging and promotion**
 
 ```bash
-git add scripts/stage-release.sh .github/workflows/release.yml \
+git add scripts/stage-release.sh .github/workflows/release.yml release/publisher-policy.json \
   tests/operations/release_test.sh scripts/check-release-truth.sh \
   documentation/operations/release.md README.md
 git commit -m "release: promote certified bytes without rebuilding"
@@ -592,7 +678,7 @@ cargo test
 cd ../..
 ```
 
-Expected: empty initial status and every command exits `0`. If a gate needs a local running stack, start the documented isolated stack and tear it down afterward.
+Expected: empty initial status and every command exits `0`. Use Phase 2's documented isolated fixture stack for source-level Playwright and Phase 3's pinned Rust/native prerequisites; these are pre-freeze implementation checks and may build disposable outputs. Stop/clean task-owned resources after checks. Final candidate local catalog gates verify frozen bytes or source/fixture contracts only; they must not rebuild/replace candidate artifacts. Version edits require repeating affected version/graph tests before tagging, not an untested final mutation.
 
 - [ ] **Step 2: Create and verify the signed beta tag**
 
@@ -600,14 +686,14 @@ Set the chosen `0.1.0-beta.N` consistently, commit the version-only change, crea
 
 - [ ] **Step 3: Build and freeze the candidate**
 
-Run `.github/workflows/candidate.yml` for the signed tag. Download the candidate archive, verify detached checksum and internal graph, extract to a read-only external directory, and record `candidateLockDigest`. From this point, do not rerun the build workflow for this version.
+Run `.github/workflows/candidate.yml` for the signed tag. Download the candidate archive, verify detached checksum and internal graph, extract to a read-only external directory, and record `candidateLockDigest`. From this point, do not rerun the build workflow for this version. Save expected public signer files/fingerprints from the reviewed release branch separately and verify the tag against that trust, not an untrusted signer file obtained solely from the candidate being verified.
 
 - [ ] **Step 4: Run all local catalog gates against the frozen artifacts**
 
 ```bash
 python3 scripts/run-gates.py --catalog ci/phase-gates.json --scope local \
   --candidate-lock /srv/telos-beta-candidate/candidate-lock.json \
-  --evidence-dir /srv/telos-beta-evidence/local
+  --evidence-dir /srv/telos-beta-evidence/raw/local
 ```
 
 Expected: every required local envelope is `passed`, current, and candidate-bound. Any failure invalidates this candidate; fix on a new version.
@@ -618,7 +704,7 @@ Install only the frozen archive/package bytes and complete, in dependency-safe o
 
 1. clean Ubuntu installation and guided integrations;
 2. automated and guided browser matrix;
-3. Linux/Windows/macOS desktop guided journeys;
+3. Linux desktop guided journeys;
 4. runtime hardening and monitoring;
 5. encrypted backup and separate-host restore;
 6. predecessor upgrade/rollback;
@@ -626,7 +712,7 @@ Install only the frozen archive/package bytes and complete, in dependency-safe o
 8. capacity;
 9. final candidate SBOM/vulnerability/license scan.
 
-Write each envelope/raw record into a new external evidence directory. Stop at first `failed`; preserve evidence and create a new candidate after remediation. If any environment is unavailable, record `not_run` and do not certify.
+Use `--inputs /secure/telos-beta/gate-inputs.json` plus repeatable `--prior-evidence-dir` for completed local/earlier external roots, with the runner's declared per-gate inputs file and producer result adapters; write all external gate directories beneath `/srv/telos-beta-evidence/raw/external`. Producers never forge their own successful envelopes. Stop at first `failed`; preserve evidence and create a new candidate after remediation. If any environment is unavailable, record `not_run` and do not certify.
 
 - [ ] **Step 6: Import, sign, and certify evidence**
 
@@ -643,6 +729,8 @@ bash scripts/sign-evidence.sh \
   --candidate-lock /srv/telos-beta-candidate/candidate-lock.json \
   --evidence-dir /srv/telos-beta-evidence/bundle
 
+TELOS_EVIDENCE_SIGNING_KEY=/secure/telos-release/id_ed25519 \
+TELOS_EVIDENCE_SIGNING_PRINCIPAL=release@telos.local \
 bash scripts/certify-beta.sh \
   --candidate /srv/telos-beta-candidate \
   --evidence-bundle /srv/telos-beta-evidence/bundle \
@@ -654,7 +742,7 @@ Expected: evidence/certification signatures verify, every required gate is `pass
 
 - [ ] **Step 7: Conduct a two-person release review**
 
-One reviewer who did not operate the primary candidate run independently verifies tag, archive/checksums, graph, signer fingerprints, exact gate set, evidence freshness/identity, external raw log digests, RPO/RTO, capacity thresholds, ports/egress, SBOM/scan policy, unsigned-client instructions, and absence of secrets. Record reviewer identity/time/signature as a certification attachment; it cannot change certification content.
+One reviewer who did not operate the primary candidate run independently verifies tag, archive/checksums, graph, signer fingerprints, exact gate set, evidence freshness/identity, external raw log digests, RPO/RTO, capacity thresholds, ports/egress, SBOM/scan policy, unsigned-client instructions, and absence of secrets. Write a separate canonical `release-review.json` containing candidate-lock digest, certification digest, reviewer principal, reviewedAt, and decision `approved`; sign with namespace `telos-beta-review-v1`. The reviewer must differ from the primary operator. This sidecar is not inserted into the already-signed evidence index or certification; stage/promotion verifies and requires it using approved evidence principals.
 
 - [ ] **Step 8: Stage and verify the draft prerelease**
 
@@ -662,7 +750,7 @@ Run `stage-release.sh` with candidate, signed evidence, certification, and revie
 
 - [ ] **Step 9: Publish by promotion only**
 
-Dispatch `.github/workflows/release.yml` with the exact tag and candidate-lock digest. Expected: workflow verifies and changes draft state; published assets retain the draft digests. If GitHub asset metadata differs, halt and leave the release draft/unpublished.
+Dispatch `.github/workflows/release.yml` with the exact tag and candidate-lock digest. Expected: workflow verifies and changes draft state; published assets retain the draft digests. Check metadata before promotion; mismatch must leave the release draft. If the post-publication readback differs, fail the job, preserve the inventory/diagnostics and record publication as failed verification; do not falsely claim the already-promoted release stayed unpublished. Recovery requires an explicit operator action under release policy.
 
 - [ ] **Step 10: Update product status after publication evidence**
 

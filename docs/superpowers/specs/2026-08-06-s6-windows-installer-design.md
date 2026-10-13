@@ -1,5 +1,7 @@
 # Windows Backend Installer — Design
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 The Windows Backend Installer sub-project enables node operators to deploy, run, and manage the containerized Telos backend on Windows hosts via Docker Desktop or WSL2. Rather than maintaining dual Bash and PowerShell script trees, this sub-project rewrites the operator CLI (`telos`) into a cross-platform Go binary compiled for Linux, macOS, and Windows (`GOOS=windows`). It adapts Docker Compose volume flags and default storage paths for non-SELinux Windows environments while preserving full containerization of the gateway and backend services. This sub-project is fully parallelizable and has zero dependencies on other sub-projects.
 
 ## 1. Purpose

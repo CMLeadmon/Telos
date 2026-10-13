@@ -1,5 +1,9 @@
 # Telos — Agent Guide
 
+> **Active implementation handoff (2026-10-13):** Start at the [cold handoff](docs/superpowers/plans/2026-10-13-standalone-beta-cold-handoff.md). It supersedes historical sequencing and shared interfaces for standalone beta work; code describes current behavior, while this plan defines the requested target. Implementation and certification remain unfinished.
+
+> **Platform decision (2026-10-12):** Server work targets **Ubuntu 24.04+ only**. Windows, macOS, WSL/Docker Desktop, and other Linux server distributions are out of scope. Initial clients are the hosted browser (including Windows/Mac browsers) and Linux desktop; Windows/Mac native clients are planned later and do not block initial delivery. [Platform scope](documentation/product/platform-scope.md) overrides all older platform plans and guidance.
+
 This repository contains the Telos platform: the Go core gateway (`backend/`), the Next.js client (`frontend/`), the container orchestration (`docker-compose.yml`), and the normative specification (`documentation/`). The docs remain the buildable specification; where code and docs disagree, flag the discrepancy. The project is guided by two core slogans: "your server, your community" (community-facing) and "be on the net, but not of the net" (philosophical/technical).
 
 > **Note (less-is-more redesign, 2026-07):** Telos is a community library for commentary on and storage of media — **four modules (Chat, Stream, Library, Files) plus Settings**. Voice rooms, LiveKit, Watch Parties, the notification inbox, and My List were removed; annotations were generalized to commentary on any media target. The redesign temporarily folded Files into Library, but Files has since graduated back to its own top-level module. Descriptions of removed features below are historical.

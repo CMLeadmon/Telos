@@ -1,5 +1,6 @@
-# Windows / Docker Desktop overlay. Layer this over docker-compose.yml when running
-# on Windows hosts via Docker Desktop or WSL2.
+# LEGACY / UNSUPPORTED since 2026-10-12. Windows, Docker Desktop and WSL
+# server hosting are out of scope. See documentation/product/platform-scope.md.
+# Retained only for historical experimental CLI references; not a deployment path.
 services:
   telos-audiobook-migrate:
     volumes:

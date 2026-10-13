@@ -1,5 +1,7 @@
 # System Overview
 
+> **Platform override (2026-10-12):** [Current scope](../product/platform-scope.md) requires Ubuntu 24.04+ servers only, browser and Linux desktop clients first, and Windows/Mac native clients later. Older platform assumptions below are superseded.
+
 > **Superseded in part by the less-is-more redesign (2026-07).** Voice rooms,
 > LiveKit/TURN, Watch Parties, the notification inbox, and My List were removed;
 > Files were folded into the Library module (`?view=files`); annotations were

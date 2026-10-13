@@ -1,5 +1,7 @@
 # Telos Backend/Frontend Split — Feasibility Report & Refactor Plan
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 **Status:** Approved program · **Date:** 2026-08-06 · **Branch:** `split/backend-and-universal-frontend` @ `6d1f6c0`
 
 This is the **parent program document** for the backend/client split. Each of the seven

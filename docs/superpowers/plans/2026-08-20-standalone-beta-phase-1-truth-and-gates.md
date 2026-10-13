@@ -1,703 +1,206 @@
-# Standalone Beta Phase 1: Truth and Gates Implementation Plan
+# Standalone Beta Phase 1: Truth and Gates Reconciliation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Reconciled 2026-10-13.** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ servers, browser and Linux desktop first, Windows/Mac native clients deferred. This document replaces the original create-from-scratch instructions. Task IDs 1–6 remain stable; existing implementations must be inspected and preserved.
 
-**Goal:** Eliminate false-green release paths and establish machine-checkable product, gate, and evidence truth before beta implementation continues.
+> **For agentic workers:** Use `superpowers:executing-plans` for sequential implementation, or the already-authorized execution method. Checkboxes below are remaining verification or remediation work, not evidence that the existing component is missing.
 
-**Architecture:** Introduce one versioned evidence writer/verifier, one declarative gate catalog, and one argv-safe gate runner. Convert every success-printing placeholder into either an implemented check or an explicit `not_run` result. Make the four-module standalone beta boundary a JSON contract and verify it structurally against routes, frontend navigation, Compose services, dependencies, and removed-feature inventories.
+**Goal:** Close the remaining Phase 1 catalog/CI gaps, verify the existing fail-closed foundation, and produce an honest source-verification checkpoint before Phase 2.
 
-**Tech Stack:** Bash, Python 3 standard library, JSON Schema draft 2020-12, Git, existing Go/TypeScript test suites, GitHub Actions.
+**Architecture:** Preserve evidence envelope v2, catalog schema v1, the argv-safe runner, and Linux process supervision. Reconcile their actual behavior with the handoff and CI. Final immutable-artifact verification belongs to Phase 5 Task 4a; do not retrofit its future schema or semantics into Phase 1.
 
-**Spec:** `docs/superpowers/specs/2026-08-20-standalone-beta-readiness-design.md`
+**Tech Stack:** Bash, Python 3, Git, Node 24.18.0, pinned Go containers, GitHub Actions. Python-only checks use the standard library; Compose validation additionally imports PyYAML.
 
-## Global Constraints
+**Spec:** [Standalone beta design](../specs/2026-08-20-standalone-beta-readiness-design.md). Begin with the [cold handoff](2026-10-13-standalone-beta-cold-handoff.md), [shared handoff contracts](2026-10-13-standalone-beta-handoff-contracts.md), [master](2026-08-20-standalone-beta-readiness-master.md), and platform policy. Discover the checkout through Git rather than hardcoding its previous location.
 
-- Complete this plan before deployment, desktop, operations, or release scripts are allowed to emit beta success.
-- A command that did not perform its declared check exits nonzero and records `not_run`; absence of an environment is not success.
-- Shell wrappers reject unknown arguments, quote all paths, use `set -euo pipefail`, and pass commands as argv arrays. Never evaluate a catalog string with `eval`, `bash -c`, or `sh -c`.
-- Evidence is candidate-bound, deterministic except for declared timestamps/runtime data, and contains no secrets or unredacted subprocess environment.
-- Gate IDs are stable kebab-case identifiers. Renaming an ID requires updating the beta contract, catalog, evidence fixtures, and release verifier in the same commit.
-- Keep historical specs and plans out of shipped-runtime scans, but do not exclude active code, current product documentation, manifests, Compose, CLI help, or operations scripts.
-- Do not implement the later phase checks here. Their catalog entries must honestly emit `not_run` until the owning phase replaces the stub with real behavior.
-- Run each focused test from the repository root.
+## Global constraints
 
----
+- Preserve all pre-existing uncommitted changes. Inspect `git status --short` and scoped diffs before editing; do not reset, clean, stash, stage broadly, or certify this dirty tree as a candidate.
+- Keep existing evidence v2 and catalog v1 interfaces until the explicit Phase 5 Task 4a migration. Do not replace the hardened runner with the original plan's simple `subprocess.run` sketch.
+- Keep `passed`/0, `not_run`/3, and `failed`/nonzero-other-than-3 semantics. No missing executable, environment, reference host, or implementation is success.
+- Commands are argv arrays. Do not add shell command strings, implicit retries, secret-bearing arguments, or environment dumps.
+- Gate IDs are stable; update catalog dependencies and tests together. Windows/Mac server gates and initial Windows/Mac native gates stay excluded.
+- Do not implement Phase 2–5 product features or turn their wrappers green here. In particular, `telos-client`, guided integration setup, desktop delivery, encrypted recovery, and candidate certification remain later-phase work.
+- Run checks from the repository root unless explicitly stated otherwise. Report actual exit codes and limitations, not expected results as observations.
+- Resolve implementation failures with focused tests; do not replace dependencies, lockfiles, installed packages, or acceptance criteria merely to make a gate pass.
 
-## Current-State Baseline
+## Read this state before executing
 
-The approved design records the complete audit in its **Current-State Findings** section. The phase-specific defects are directly visible in success-only certification (`scripts/certify-beta.sh:18-24`), runtime-hardening (`scripts/verify-runtime-hardening.sh:22-33`), capacity (`scripts/run-capacity-drill.sh:18-24`), and browser-matrix (`scripts/certify-browser-matrix.sh:18-24`) scripts. Product truth also still describes only three modules and a folded Files surface (`documentation/product/beta-feature-status.md:7-27`), while the development proxy retains a LiveKit target and route (`frontend/dev-server.mjs:13-35`). These are baselines to replace, not acceptable beta evidence.
-
----
-
-## File Structure
-
-- Create: `scripts/lib/evidence.py` — atomic evidence writer, canonical digest helper, and envelope verifier.
-- Create: `tests/operations/evidence_envelope_test.sh` — positive and adversarial envelope tests.
-- Modify: `release/evidence-envelope.schema.json` — strict version-2 schema.
-- Modify: `scripts/verify-evidence.sh` — CLI wrapper for envelope and candidate binding verification.
-- Create: `scripts/not-run.py` — uniform fail-closed result for checks awaiting an external environment or later implementation.
-- Modify: `scripts/certify-beta.sh`, `scripts/verify-runtime-hardening.sh`, `scripts/run-capacity-drill.sh`, `scripts/audit-host-exposure.sh`, `scripts/certify-browser-matrix.sh`, `scripts/build-release.sh`, `scripts/build-predecessor.sh`, `scripts/stage-release.sh`, `scripts/sign-evidence.sh`, `scripts/verify-accumulated-suite.sh`, `scripts/verify-release-pins.sh`, `scripts/verify-restored-node.sh`, `scripts/verify-monitoring.sh`, `scripts/upgrade.sh`, `scripts/rollback.sh`, `scripts/provision-jellyfin.sh`, `scripts/provision-grimmory.sh`, `scripts/ci/run-local.sh`, `scripts/ci/validate-sbom.sh`, and `scripts/drills/*.sh` — remove false-success behavior.
-- Create: `scripts/run-gates.py` — safe local/external gate executor.
-- Modify: `ci/phase-gates.json` — declarative gate catalog.
-- Modify: `tests/operations/accumulated_suite_test.sh`, `tests/operations/beta_certification_test.sh`, `tests/operations/ci_gates_test.sh` — behavioral rather than existence assertions.
-- Create: `documentation/product/beta-contract.json` — machine-readable beta boundary.
-- Modify: `documentation/product/beta-feature-status.md` — accurate four-module status and support boundary.
-- Modify: `scripts/check-product-truth.sh` — structural contract validation plus current prohibited-surface scans.
-- Create: `tests/operations/product_truth_test.sh` — mutation tests for structural claims.
-- Modify: `frontend/dev-server.mjs` — remove LiveKit proxy target and branch.
-- Modify: `README.md`, `CLAUDE.md`, `documentation/README.md`, `documentation/operations/backup-and-restore.md`, `documentation/operations/beta-certification.md`, `documentation/operations/browser-certification.md`, `documentation/operations/clean-checkout-verification.md`, `documentation/operations/container-hardening.md`, `documentation/operations/controlled-egress.md`, `documentation/operations/network-exposure.md`, `documentation/operations/release.md`, `documentation/operations/release-inputs.pathspec` — remove stale supported-product and completed-gate claims.
-- Modify: `.github/workflows/ci.yml` — run honest Phase 1 gates.
-
----
-
-### Task 1: Define and test evidence envelope v2
-
-**Files:**
-- Create: `scripts/lib/evidence.py`
-- Create: `tests/operations/evidence_envelope_test.sh`
-- Modify: `release/evidence-envelope.schema.json`
-- Modify: `scripts/verify-evidence.sh`
-
-**Interfaces:**
-- Produces: `write`, `verify`, and `digest` subcommands in `scripts/lib/evidence.py`.
-- Produces: envelope statuses `passed`, `failed`, `not_run` and canonical `sha256:` digests.
-- Consumes later: all phase gate scripts and `scripts/run-gates.py`.
-
-- [ ] **Step 1: Add a failing adversarial envelope test**
-
-Create `tests/operations/evidence_envelope_test.sh` with a temporary candidate lock and assertions covering a valid `passed` envelope plus missing field, unknown status, mismatched candidate digest, non-array command, negative exit code, end-before-start, malformed digest, and secret-looking key rejection:
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-repo_root="$(git rev-parse --show-toplevel)"
-fixture_dir="$(mktemp -d)"
-trap 'rm -rf "$fixture_dir"' EXIT
-
-printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$fixture_dir/candidate.json"
-candidate_digest="sha256:$(sha256sum "$fixture_dir/candidate.json" | awk '{print $1}')"
-
-python3 "$repo_root/scripts/lib/evidence.py" write \
-  --output "$fixture_dir/passed.json" \
-  --gate-id phase-1-self-test --status passed --reason "fixture assertions passed" \
-  --source-commit "$(printf '%040d' 0)" --candidate-lock-digest "$candidate_digest" \
-  --started-at 2026-08-20T10:00:00Z --finished-at 2026-08-20T10:00:01Z \
-  --exit-code 0 --output-digest "sha256:$(printf passed | sha256sum | awk '{print $1}')" \
-  --command-json '["printf","passed"]' \
-  --tool-versions-json '{"python":"3"}' \
-  --subject-json '{"kind":"fixture","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
-
-python3 "$repo_root/scripts/lib/evidence.py" verify \
-  --schema "$repo_root/release/evidence-envelope.schema.json" \
-  --candidate-lock "$fixture_dir/candidate.json" "$fixture_dir/passed.json"
-
-for mutation in missing-gate unknown-status string-command negative-exit reversed-time bad-digest secret-field; do
-  python3 "$repo_root/tests/helpers/mutate_evidence.py" \
-    "$mutation" "$fixture_dir/passed.json" "$fixture_dir/$mutation.json"
-  if python3 "$repo_root/scripts/lib/evidence.py" verify \
-      --schema "$repo_root/release/evidence-envelope.schema.json" \
-      --candidate-lock "$fixture_dir/candidate.json" "$fixture_dir/$mutation.json"; then
-    echo "accepted invalid envelope: $mutation" >&2
-    exit 1
-  fi
-done
-```
-
-Also create the narrowly scoped mutation helper `tests/helpers/mutate_evidence.py`; it loads one JSON document, applies only the named mutation, and writes sorted JSON. Do not use shell text replacement for JSON.
-
-- [ ] **Step 2: Run the test and confirm the current placeholder verifier fails**
-
-Run:
-
-```bash
-bash tests/operations/evidence_envelope_test.sh
-```
-
-Expected: nonzero because `scripts/lib/evidence.py` and the strict schema do not exist.
-
-- [ ] **Step 3: Replace the evidence schema with a closed version-2 contract**
-
-Set `release/evidence-envelope.schema.json` to draft 2020-12, `additionalProperties: false`, and require every field from the master plan's envelope. Encode these invariants in schema where possible:
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schemaVersion", "gateId", "status", "reason", "sourceCommit",
-    "candidateLockDigest", "command", "startedAt", "finishedAt",
-    "exitCode", "outputDigest", "toolVersions", "subject"
-  ],
-  "properties": {
-    "schemaVersion": {"const": 2},
-    "gateId": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
-    "status": {"enum": ["passed", "failed", "not_run"]},
-    "reason": {"type": "string", "minLength": 1},
-    "sourceCommit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
-    "candidateLockDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-    "startedAt": {"type": "string", "format": "date-time"},
-    "finishedAt": {"type": "string", "format": "date-time"},
-    "exitCode": {"type": "integer", "minimum": 0, "maximum": 255},
-    "outputDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
-    "toolVersions": {"type": "object", "additionalProperties": {"type": "string"}},
-    "subject": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "digest"],
-      "properties": {
-        "kind": {"enum": ["source", "artifact", "runtime", "external-host", "fixture"]},
-        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
-      }
-    }
-  }
-}
-```
-
-- [ ] **Step 4: Implement the standard-library writer and verifier**
-
-Implement `scripts/lib/evidence.py` with `argparse`, `json`, `hashlib`, `datetime`, `os`, and `tempfile`. The writer must serialize with `sort_keys=True` and `separators=(",", ":")`, `fsync` the temporary file, `chmod 0600`, and `os.replace` it. The verifier must perform the schema's type/pattern/enum checks without downloading a schema library, additionally require `finishedAt >= startedAt`, compute the candidate lock digest from raw bytes, compare it with `candidateLockDigest`, reject recursive keys matching `token|password|secret|credential|authorization` case-insensitively, and enforce the status/exit contract: `passed` has exit code `0`, `not_run` has exit code `3`, and `failed` has any nonzero exit code except `3`.
-
-Expose the following stable CLI:
-
-```text
-evidence.py digest PATH
-evidence.py write --output PATH --gate-id ID --status STATUS [WRITE_OPTION]
-evidence.py verify --schema PATH --candidate-lock PATH ENVELOPE_1 [ENVELOPE_N]
-```
-
-`--schema` is required so a malformed or missing repository schema blocks verification even though validation code is local.
-
-- [ ] **Step 5: Make `verify-evidence.sh` a strict wrapper**
-
-Use this interface and reject every other argument:
-
-```bash
-bash scripts/verify-evidence.sh \
-  --candidate-lock release/candidate-lock.json \
-  --evidence-dir release/evidence
-```
-
-The wrapper resolves repository-relative paths, sorts `*.json` filenames bytewise, fails if no envelope exists, and invokes `evidence.py verify` once with the complete list.
-
-- [ ] **Step 6: Run focused tests**
-
-Run:
-
-```bash
-bash tests/operations/evidence_envelope_test.sh
-bash -n scripts/verify-evidence.sh
-python3 -m py_compile scripts/lib/evidence.py tests/helpers/mutate_evidence.py
-```
-
-Expected: all exit `0`; each negative mutation prints a specific validation failure to stderr.
-
-- [ ] **Step 7: Commit the evidence contract**
-
-```bash
-git add release/evidence-envelope.schema.json scripts/lib/evidence.py scripts/verify-evidence.sh \
-  tests/helpers/mutate_evidence.py tests/operations/evidence_envelope_test.sh
-git commit -m "release: define fail-closed evidence envelopes"
-```
-
----
-
-### Task 2: Convert false-success scripts to explicit `not_run`
-
-**Files:**
-- Create: `scripts/not-run.py`
-- Modify: `scripts/certify-beta.sh`
-- Modify: `scripts/verify-runtime-hardening.sh`
-- Modify: `scripts/run-capacity-drill.sh`
-- Modify: `scripts/audit-host-exposure.sh`
-- Modify: `scripts/certify-browser-matrix.sh`
-- Modify: `scripts/build-release.sh`
-- Modify: `scripts/build-predecessor.sh`
-- Modify: `scripts/stage-release.sh`
-- Modify: `scripts/sign-evidence.sh`
-- Modify: `scripts/verify-release-pins.sh`
-- Modify: `scripts/verify-restored-node.sh`
-- Modify: `scripts/verify-monitoring.sh`
-- Modify: `scripts/upgrade.sh`
-- Modify: `scripts/rollback.sh`
-- Modify: `scripts/provision-jellyfin.sh`
-- Modify: `scripts/provision-grimmory.sh`
-- Modify: `scripts/ci/run-local.sh`
-- Modify: `scripts/ci/validate-sbom.sh`
-- Modify: `scripts/drills/clean-node-install.sh`
-- Modify: `scripts/drills/recovery.sh`
-- Modify: `scripts/drills/upgrade-rollback.sh`
-- Modify: `tests/operations/beta_certification_test.sh`
-
-**Interfaces:**
-- Produces: uniform exit `3` for `not_run` and an optional valid envelope.
-- Consumes: evidence writer from Task 1.
-- Preserves: later phase scripts may replace the wrapper while retaining their documented CLI.
-
-- [ ] **Step 1: Replace the certification existence test with a false-green regression test**
-
-In `tests/operations/beta_certification_test.sh`, invoke every listed script in its normal mode inside a loop. Assert that it exits `3`, does not contain `certified successfully`, `complete.`, or `passed.` in stdout, and writes a `not_run` envelope when given `--evidence-out`:
-
-```bash
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$tmp/candidate.json"
-
-scripts=(
-  certify-beta.sh verify-runtime-hardening.sh run-capacity-drill.sh
-  audit-host-exposure.sh certify-browser-matrix.sh build-release.sh
-  build-predecessor.sh stage-release.sh sign-evidence.sh verify-release-pins.sh
-  verify-restored-node.sh verify-monitoring.sh upgrade.sh rollback.sh
-  provision-jellyfin.sh provision-grimmory.sh ci/run-local.sh
-  ci/validate-sbom.sh drills/clean-node-install.sh drills/recovery.sh
-  drills/upgrade-rollback.sh
-)
-
-for script in "${scripts[@]}"; do
-  set +e
-  output="$(bash "scripts/$script" --candidate-lock "$tmp/candidate.json" \
-    --evidence-out "$tmp/${script//\//-}.json" 2>&1)"
-  status=$?
-  set -e
-  [[ $status -eq 3 ]] || { echo "$script returned $status" >&2; exit 1; }
-  ! grep -Eqi 'certified successfully|complete\.|passed\.' <<<"$output"
-  [[ "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$tmp/${script//\//-}.json")" == not_run ]]
-done
-```
-
-Add an assertion that an unknown flag exits `2` and does not write evidence.
-
-- [ ] **Step 2: Run the test and observe the existing scripts claim success**
-
-```bash
-bash tests/operations/beta_certification_test.sh
-```
-
-Expected: nonzero and identifies the first false-green script.
-
-- [ ] **Step 3: Implement `scripts/not-run.py`**
-
-The helper accepts `--gate-id`, `--reason`, `--candidate-lock`, `--evidence-out`, and a `--`-terminated original argv array. When an evidence path is provided, require the candidate lock, compute its digest through `evidence.py`, write a `not_run` envelope with exit code `3`, and use an empty-output digest. Always print the specific form `not_run: candidate reference host unavailable` (with the caller's actual reason) to stderr and return `3`.
-
-- [ ] **Step 4: Give every placeholder a strict CLI and corrective reason**
-
-Each shell script must accept the common `--candidate-lock PATH` and `--evidence-out PATH` flags plus only its documented script-specific flags, reject every unknown or incomplete flag with exit `2`, and delegate to `not-run.py`. Use these gate IDs/reasons until their owner phase implements them:
-
-| Script | Gate ID | Corrective reason |
+| Task | Current source disposition | Remaining work |
 |---|---|---|
-| `certify-beta.sh` | `beta-certification` | `candidate certification is implemented in Phase 5` |
-| `verify-runtime-hardening.sh` | `runtime-hardening` | `effective-runtime inspection is implemented in Phase 4` |
-| `run-capacity-drill.sh` | `capacity` | `a candidate runtime and k6 environment are required` |
-| `audit-host-exposure.sh` | `host-exposure` | `a candidate reference host is required` |
-| `certify-browser-matrix.sh` | `browser-matrix` | `declared browser hosts and candidate URL are required` |
-| `build-release.sh` | `release-build` | `immutable release building is implemented in Phase 5` |
-| `build-predecessor.sh` | `predecessor-build` | `verified predecessor building is implemented in Phase 4` |
-| `stage-release.sh` | `release-stage` | `atomic release staging is implemented in Phase 5` |
-| `sign-evidence.sh` | `evidence-signing` | `operator signing is implemented in Phase 5` |
-| `verify-release-pins.sh` | `release-pins` | `reviewed image and tool lock verification is implemented in Phase 4` |
-| `verify-restored-node.sh` | `restored-node` | `separate-host restored-node verification is implemented in Phase 4` |
-| `verify-monitoring.sh` | `monitoring` | `live monitoring verification is implemented in Phase 4` |
-| `upgrade.sh` | `upgrade` | `generation-based upgrade is implemented in Phase 4` |
-| `rollback.sh` | `rollback` | `generation-compatible rollback is implemented in Phase 4` |
-| `provision-jellyfin.sh` | `jellyfin-guided-setup` | `use telos configure integrations after Phase 2` |
-| `provision-grimmory.sh` | `grimmory-guided-setup` | `use telos configure integrations after Phase 2` |
-| `ci/run-local.sh` | `local-ci` | `use the Phase 1 gate runner with a candidate lock` |
-| `ci/validate-sbom.sh` | `sbom-validation` | `candidate SBOM validation is implemented in Phase 4` |
-| `drills/clean-node-install.sh` | `clean-install` | `a clean Ubuntu reference host and Phase 2 drill implementation are required` |
-| `drills/recovery.sh` | `separate-host-restore` | `a second Ubuntu reference host and Phase 4 recovery implementation are required` |
-| `drills/upgrade-rollback.sh` | `upgrade-rollback` | `candidate and predecessor generations plus Phase 4 implementation are required` |
-
-Retain `--validate-fixtures` only where a real fixture assertion exists. Delete modes that merely print validation success.
-
-- [ ] **Step 5: Run behavioral and syntax tests**
-
-```bash
-bash tests/operations/beta_certification_test.sh
-for script in scripts/{certify-beta,verify-runtime-hardening,run-capacity-drill,audit-host-exposure,certify-browser-matrix,build-release,build-predecessor,stage-release,sign-evidence,verify-release-pins,verify-restored-node,verify-monitoring,upgrade,rollback,provision-jellyfin,provision-grimmory}.sh scripts/ci/{run-local,validate-sbom}.sh scripts/drills/{clean-node-install,recovery,upgrade-rollback}.sh; do
-  bash -n "$script"
-done
-python3 -m py_compile scripts/not-run.py
-```
-
-Expected: all tests exit `0`; direct normal execution still exits `3` by design.
-
-- [ ] **Step 6: Commit the fail-closed wrappers**
-
-```bash
-git add scripts/not-run.py scripts/certify-beta.sh scripts/verify-runtime-hardening.sh \
-  scripts/run-capacity-drill.sh scripts/audit-host-exposure.sh \
-  scripts/certify-browser-matrix.sh scripts/build-release.sh scripts/build-predecessor.sh \
-  scripts/stage-release.sh scripts/sign-evidence.sh scripts/verify-restored-node.sh \
-  scripts/verify-release-pins.sh scripts/verify-monitoring.sh scripts/upgrade.sh scripts/rollback.sh \
-  scripts/provision-jellyfin.sh scripts/provision-grimmory.sh scripts/ci \
-  scripts/drills \
-  tests/operations/beta_certification_test.sh
-git commit -m "release: make unimplemented gates fail closed"
-```
-
----
-
-### Task 3: Implement the declarative gate catalog and safe runner
-
-**Files:**
-- Create: `scripts/run-gates.py`
-- Modify: `ci/phase-gates.json`
-- Modify: `scripts/verify-accumulated-suite.sh`
-- Modify: `tests/operations/accumulated_suite_test.sh`
-- Modify: `tests/operations/ci_gates_test.sh`
-
-**Interfaces:**
-- Produces: `python3 scripts/run-gates.py --catalog PATH --scope local|external --candidate-lock PATH --evidence-dir PATH [--gate ID]`, where `--gate` is repeatable.
-- Produces: one output log and one evidence envelope per selected gate.
-- Consumes: version-2 evidence writer and verifier from Task 1.
-
-- [ ] **Step 1: Write catalog-validation and argv-safety tests**
-
-Replace the current existence checks with temporary catalogs that assert:
-
-- duplicate IDs, unknown keys, string commands, empty argv, invalid scopes, zero/negative timeouts, missing prerequisites, and prerequisite cycles fail before execution;
-- `gatesPassed` is rejected;
-- an argv element containing `$(touch /tmp/gate-injection-sentinel)` reaches a fixture command literally and never executes;
-- a passing command writes `passed`, a nonzero command writes `failed`, and an unavailable prerequisite writes `not_run`;
-- runner exit is nonzero when any selected required gate is `failed` or `not_run`;
-- output paths cannot escape `--evidence-dir`.
-
-Use a temporary Python fixture command in `tests/fixtures/gates/record_argv.py` rather than relying on platform-specific shell behavior.
-
-- [ ] **Step 2: Run the tests and confirm the placeholder runner fails**
-
-```bash
-bash tests/operations/ci_gates_test.sh
-bash tests/operations/accumulated_suite_test.sh
-```
-
-Expected: nonzero because no catalog executor exists and `gatesPassed` is present.
-
-- [ ] **Step 3: Replace `ci/phase-gates.json` with explicit phase entries**
-
-Use this entry shape:
-
-```json
-{
-  "schemaVersion": 1,
-  "gates": [
-    {
-      "id": "backend-unit",
-      "phase": 1,
-      "scope": "local",
-      "required": true,
-      "timeoutSeconds": 900,
-      "command": ["podman", "run", "--rm", "-v", "./backend:/app:z", "-w", "/app", "docker.io/library/golang:1.26.5", "go", "test", "./..."],
-      "prerequisites": [],
-      "subjectKind": "source"
-    }
-  ]
-}
-```
+| 1 — Evidence envelope | Implemented: `scripts/lib/evidence.py`, strict v2 schema, verifier wrapper, adversarial fixtures | Fresh verification; preserve stronger current validation |
+| 2 — Fail-closed wrappers | Implemented: `scripts/not-run.py` and strict wrappers; beta certification intentionally exits 3 | Fresh behavioral verification; retain later-phase ownership |
+| 3 — Catalog and runner | Implemented and subsequently hardened: source binding, tool probes, process supervision, Playwright lifecycle wrapper | Correct TypeScript command, add platform gate, verify source-checkpoint procedure |
+| 4 — Product contract | Implemented; current contract already expresses Ubuntu 24.04+ and Linux-first clients | Preserve adopted contract; add catalog/platform mutation coverage |
+| 5 — Truth cleanup | LiveKit proxy removal and blocked delivery/operator-path documentation already exist | Fresh Node proxy and product mutation checks; reconcile only newly found discrepancies |
+| 6 — CI/phase exit | Truth-and-gates job and inventory exist | Add missing real CI checks and prerequisite setup; fresh full source checkpoint |
 
-Catalog all currently real local gates. Add later local/external IDs from the master plan with commands pointing to their fail-closed wrappers, never a fabricated pass. Set dependencies so certification depends on every required prior gate.
+Evidence for these source claims is in `scripts/lib/evidence.py:79` and `:257`, `scripts/not-run.py:70`, `scripts/certify-beta.sh:27`, `scripts/run-gates.py:277` and `:810`, `scripts/run-playwright-gate.py:539`, `scripts/check-product-truth.sh:63` and `:346`, `.github/workflows/ci.yml:96`, and `scripts/verify-clean-checkout.sh:65`. Line numbers are navigation aids; inspect named functions after edits.
 
-- [ ] **Step 4: Implement `scripts/run-gates.py`**
-
-The runner must:
-
-1. validate the complete catalog before selecting gates;
-2. topologically order selected gates and prerequisites;
-3. run from the repository root via `subprocess.run(argv, shell=False, timeout=gate["timeoutSeconds"])`;
-4. pass only the inherited environment, without serializing it;
-5. capture stdout/stderr in a mode-`0700` evidence directory and mode-`0600` log;
-6. hash output bytes and the declared subject;
-7. map exit `0` to `passed`, exit `3` or missing executable/prerequisite to `not_run`, and every other outcome to `failed`;
-8. atomically write the envelope through `scripts/lib/evidence.py`;
-9. stop dependent gates after a failure and emit `not_run` for each blocked dependent;
-10. exit `0` only when every selected required gate is `passed`.
+Earlier raw logs under `telos-review/evidence/` recorded ten checks, including envelope, fail-closed scripts, runner fixtures, scope, product/release truth, inventory, and hygiene. They do not identify a frozen delivered candidate or certify the current working tree. `document-qa.json`, `desktop.png`, and `mobile.png` concern the review HTML, not the Telos product. The fixture output `version-node: passed` or `version-podman: passed` tests fake tool probes; it does not establish that those runtimes are installed.
 
-Do not add implicit retry. A rerun creates a new evidence directory; it never edits earlier evidence.
+During the 2026-10-13 reconciliation, direct envelope, wrapper, runner/CI fixtures, accumulated-suite, platform-scope, product/release truth, and documentation-hygiene checks were rerun successfully. The runner suite also passed its inventory subcheck. The product mutation suite stopped at `tests/operations/product_truth_test.sh:12` with `node: command not found` (exit 127). These observations describe that audit run only; the implementer must rerun the exit suite after changes.
 
-- [ ] **Step 5: Implement the compatibility wrapper**
-
-Make `scripts/verify-accumulated-suite.sh` accept only:
+## Environment and verification levels
 
-```text
---candidate-lock PATH --evidence-dir PATH [--phase N] [--gate ID]
-```
+The inspected host is Ubuntu 26.04.1 x86_64. Bash, Git, Python 3, and PyYAML are available. `node`, `npm`, `npx`, `podman`, `podman-compose`, `docker`, and host Go are absent from PATH; `frontend/node_modules/` and `release/candidate-lock.json` are absent. Cargo/Rust presence alone does not establish a configured Linux Tauri build environment. Recheck prerequisites when resuming; do not blindly trust older AGENTS/CLAUDE statements that this host already has Podman.
 
-Translate the flags into a Python argv array and `exec python3 scripts/run-gates.py` with the parsed catalog, scope, candidate-lock, evidence-directory, phase, and repeated gate options. If neither phase nor gate is set, select all local gates.
+| Level | What may run | What its result means |
+|---|---|---|
+| Direct source/fixture checks | Existing Bash/Python test scripts, including temporary fixture repositories, on the working tree | Current script behavior was tested; no candidate or installed-product claim |
+| Committed source checkpoint | Runner with `--scope local --phase 1`, clean HEAD, disposable source identity file, fresh external evidence directory | Selected Phase 1 source checks passed against that commit |
+| Final candidate verification | Phase 5 verifier with the frozen lock and built artifact/runtime evidence after Task 4a | Delivered artifacts and required external journeys are certified only if every required outcome passes |
 
-- [ ] **Step 6: Run focused tests**
+A Phase 1 checkpoint must not depend on creating the Phase 5 release candidate. The current runner accepts a JSON document containing `sourceCommit`; this is enough for its source checks but is not a complete candidate lock. Name the temporary file `source-checkpoint.json`, keep it outside the checkout, and label the output **source verification only**. Do not save it as `release/candidate-lock.json`, promote it, or upload its envelopes as release evidence.
 
-```bash
-bash tests/operations/ci_gates_test.sh
-bash tests/operations/accumulated_suite_test.sh
-python3 -m py_compile scripts/run-gates.py tests/fixtures/gates/record_argv.py
-```
+The current runner requires a clean source tree and HEAD equality before running source gates (`scripts/run-gates.py:277`), creates a new evidence directory whose parent already exists (`:351`), and requires `--evidence-dir` (`:815`). `--phase 1` selects phase numbers up to 1. Omitting both `--phase` and `--gate` selects all local gates, including later placeholders; nonzero is then expected. The verifier checks envelope shape and identity; successful envelope verification does not mean every envelope is `passed`, timely, artifact-bound, or sufficient for release.
 
-Expected: all exit `0`, and the injection sentinel file is absent.
+## Review focus
 
-- [ ] **Step 7: Commit the gate runner**
+- Working directory: a TypeScript command must actually read `frontend/tsconfig.json` and report a real type error (Task 3).
+- Scope drift: platform tests must run through the catalog and CI, with deferred clients excluded even as indirect prerequisites (Tasks 3–4).
+- False environment claims: passing fake-tool/process fixtures must not substitute for running Node, Go, Compose, or browser checks (Task 6).
+- Source/candidate confusion: a dirty tree, missing tools, later placeholders, or a disposable identity file cannot produce candidate success (Tasks 1, 3, and 6).
+- CI enforcement: skipped/optional job steps, missing setup, and bare Playwright without a managed server must fail contract tests (Task 6).
 
-```bash
-git add ci/phase-gates.json scripts/run-gates.py scripts/verify-accumulated-suite.sh \
-  tests/fixtures/gates/record_argv.py tests/operations/ci_gates_test.sh \
-  tests/operations/accumulated_suite_test.sh
-git commit -m "ci: execute beta gates from a validated catalog"
-```
+## Task 1: Reconcile and verify evidence envelope v2
 
----
+**Status:** Implemented; fresh verification required after any dependent change.
 
-### Task 4: Establish a structural beta product contract
+**Files:** Inspect `scripts/lib/evidence.py`, `scripts/verify-evidence.sh`, `release/evidence-envelope.schema.json`, `tests/operations/evidence_envelope_test.sh`, and `tests/helpers/mutate_evidence.py`.
 
-**Files:**
-- Create: `documentation/product/beta-contract.json`
-- Modify: `documentation/product/beta-feature-status.md`
-- Modify: `scripts/check-product-truth.sh`
-- Create: `tests/operations/product_truth_test.sh`
+**Interfaces:** Preserve `evidence.py digest PATH`, `write`, and `verify --schema PATH --candidate-lock PATH ENVELOPE...`. Preserve strict schema, source-commit binding, source-subject digest binding, nonempty recognized tool versions, secret-key rejection, timestamp order, private atomic output, and existing overwrite protection. The lock digest currently hashes raw lock bytes; do not silently change it to a different canonicalization rule.
 
-**Interfaces:**
-- Produces: the canonical module/platform/architecture/removed-feature/gate inventory.
-- Consumes: `frontend/src/components/AppShell.tsx`, `backend/main.go`, `docker-compose.yml`, `frontend/package.json`, `backend/go.mod`, and `ci/phase-gates.json`.
+- [ ] Run `bash tests/operations/evidence_envelope_test.sh`. Success means exit 0 after expected rejection diagnostics for invalid fixtures.
+- [ ] Inspect `verify_envelopes` and record its boundary: it validates envelopes, including correctly formed `not_run`/`failed` envelopes; it is not the Phase 5 completeness/freshness/artifact certification verifier.
+- [ ] If a real regression appears, add one focused failing fixture and repair that regression. Do not recreate the module or weaken current checks to match the old plan.
 
-- [ ] **Step 1: Add product-contract mutation tests**
+## Task 2: Reconcile and verify fail-closed wrappers
 
-Create a test that copies the relevant files into a temporary tree and invokes `check-product-truth.sh --root "$fixture"`. Assert a clean copy passes, then independently mutate it to:
+**Status:** Implemented; normal later-phase execution remains intentionally `not_run`.
 
-- remove `files` from the contract;
-- add a fake `voice` navigation module;
-- add a `livekit` Compose service;
-- add `@livekit/components-react` to `package.json`;
-- route the catch-all to `telos-core` while the contract says `telos-client`;
-- remove a required gate ID;
-- mark encrypted backups `shipping` before the recovery gate exists.
-
-Every mutation must fail and name the violated contract field.
-
-- [ ] **Step 2: Run the mutation test and capture the current false negatives**
-
-```bash
-bash tests/operations/product_truth_test.sh
-```
-
-Expected: nonzero because the current keyword scanner does not derive these structures.
-
-- [ ] **Step 3: Add the machine-readable contract**
+**Files:** Inspect `scripts/not-run.py`, `tests/operations/beta_certification_test.sh`, and the wrappers listed by that test. They cover certification, runtime hardening, capacity, exposure, browser matrix, release build/stage/signing/pins, restored-node/monitoring, upgrade/rollback, provisioning, local CI, SBOM validation, and the three operations drills.
 
-Create `documentation/product/beta-contract.json` with closed keys and exact values:
+**Interfaces:** Preserve unknown/incomplete argument exit 2, unimplemented check exit 3, the optional valid `not_run` envelope, and corrective reasons naming the owning phase. The Bash `./telos` dispatcher remains authoritative; its future guided command is `telos configure integrations`.
 
-```json
-{
-  "schemaVersion": 1,
-  "architecture": "standalone-client-server",
-  "modules": ["chat", "stream", "library", "files"],
-  "settingsSurface": "settings",
-  "server": {"os": "ubuntu-24.04", "arch": "x86_64", "podmanMinimum": "5.0.0"},
-  "desktop": ["linux-x86_64", "windows-x86_64", "macos-universal"],
-  "browserService": "telos-client",
-  "apiService": "telos-core",
-  "removedFeatures": ["livekit", "voice-rooms", "watch-parties", "notification-inbox", "my-list"],
-  "backupStatus": "blocked-until-operational-safety",
-  "requiredExternalGates": [
-    "clean-install", "browser-matrix", "desktop-linux", "desktop-windows",
-    "desktop-macos", "separate-host-restore", "upgrade-rollback",
-    "capacity", "host-exposure", "controlled-egress"
-  ]
-}
-```
+- [ ] Run `bash tests/operations/beta_certification_test.sh`. The test exits 0 only when it successfully proves the wrappers fail closed.
+- [ ] Inspect both provisioning wrappers and confirm their reasons point to Phase 2 guided setup, without claiming that setup exists now.
+- [ ] Repair only an observed parsing/evidence regression. Retain all later-phase `not_run` results; fixture success is not successful provisioning, release building, or certification.
 
-Use `settings` as a navigation surface but keep the community-content count at four modules in prose.
+## Task 3: Reconcile the catalog and correct residual gate commands
 
-- [ ] **Step 4: Rewrite current beta status truthfully**
+**Status:** Runner implemented; two catalog gaps remain.
 
-Update `documentation/product/beta-feature-status.md` to:
+**Files:** Modify `ci/phase-gates.json` and `tests/operations/ci_gates_test.sh`; create `tests/operations/frontend_types_gate_test.sh`. Inspect `scripts/run-gates.py`, `scripts/lib/process_supervisor.py`, `scripts/run-playwright-gate.py`, and `scripts/verify-accumulated-suite.sh` without redesigning them.
 
-- name Chat, Stream, Library, and Files plus Settings;
-- state the standalone hosted-browser and unsigned-desktop distribution boundary;
-- mark audiobook catalog/playback only according to running code and existing tests;
-- mark encrypted off-node backup/recovery as blocked until Phase 4 evidence exists;
-- state platform-trusted HTTPS only;
-- state the reference server and desktop/browser matrix;
-- retain removed features as removed.
+**Interfaces:** Keep catalog schemaVersion 1 and the existing runner arguments. Preserve the strengthened Linux `/proc`, pidfd, subreaper, descendant cleanup, timeout, source-binding, and tool-probe behavior. Phase 5 Task 4a owns later candidate-execution changes.
 
-Do not claim a gate is shipping because its implementation plan exists.
+- [ ] Add assertions in `ci_gates_test.sh` requiring a local, required, phase-1 `platform-scope` gate with command `["python3", "tests/operations/platform_scope_test.py"]`, `subjectKind: "source"`, no prerequisites, and a 120-second timeout. Require `beta-certification` to include it with all other required predecessor IDs.
+- [ ] Add a real compiler regression in `frontend_types_gate_test.sh`. Load the `frontend-types` argv from the catalog; assert it selects `frontend/tsconfig.json`. In a temporary directory create a tsconfig naming a single TypeScript file with `types: []`, `skipLibCheck: true`, and `noEmit: true`. Run the catalog compiler from the repository root with only the `--project` value changed to that temporary tsconfig: a valid assignment must exit 0; `const value: number = "wrong"` must exit nonzero and report a type error. Require the locked installed TypeScript compiler; missing Node/dependencies is a failed prerequisite, never a skipped pass. This test must never invoke package installation.
+- [ ] Run the new assertions and compiler regression on a prepared Node host. Confirm the present command is rejected before editing the catalog.
+- [ ] Replace the existing `frontend-types` argv `["npx", "--prefix", "frontend", "tsc", "--noEmit"]` with `["node", "frontend/node_modules/typescript/bin/tsc", "--project", "frontend/tsconfig.json", "--noEmit"]`. `npx --prefix` does not make root-launched `tsc` use the frontend project. Explicit `--project` and the locked local compiler remove that ambiguity and avoid implicit downloads. Add the `platform-scope` gate and its certification dependency.
+- [ ] Run `bash tests/operations/frontend_types_gate_test.sh`, the corrected `frontend-types` argv, `bash tests/operations/ci_gates_test.sh`, and `bash tests/operations/accumulated_suite_test.sh`. The first two need Node/dependencies. The latter suites use controlled fixtures and can run without installed product runtimes.
+- [ ] Record the disposable source-checkpoint procedure below in the implementation evidence. Do not weaken dirty-tree protection to make a runner invocation work during editing.
 
-- [ ] **Step 5: Extend the checker with parsers, not brittle line numbers**
+## Task 4: Preserve and strengthen the adopted product contract
 
-Retain the current prohibited text/dependency checks, and use an embedded Python block or `scripts/lib/product_truth.py` to parse JSON/YAML-like source inventories. The checker must verify:
+**Status:** Structural checker and October platform narrowing implemented; catalog integration needs regression coverage.
 
-- the contract's modules match the `navItems` hrefs in `AppShell.tsx`;
-- removed route prefixes are absent from `backend/main.go`;
-- removed dependency names are absent from `frontend/package.json` and `backend/go.mod`;
-- Compose contains required services and no removed services;
-- Traefik service names match the contract;
-- every required gate ID exists exactly once in `ci/phase-gates.json`;
-- human beta status contains each supported platform and does not call a blocked capability shipping.
+**Files:** Inspect `documentation/product/beta-contract.json` and `documentation/product/beta-feature-status.md`. Modify `tests/operations/platform_scope_test.py` and `scripts/check-product-truth.sh` for scope/catalog enforcement.
 
-Accept `--root PATH` solely for mutation fixtures; default to `git rev-parse --show-toplevel`.
+**Interfaces:** Preserve exact current fields: `server.os: "ubuntu-24.04"`, `server.versionPolicy: "24.04-or-newer"`, `server.arch: "x86_64"`, `server.podmanMinimum: "5.0.0"`, `desktop: ["linux-x86_64"]`, and `plannedDesktop: ["windows-x86_64", "macos-universal"]`. Preserve four content modules plus Settings and the blocked browser/backup markers. Do not copy the original August JSON that required Windows/Mac native clients.
 
-- [ ] **Step 6: Run product truth tests**
+- [ ] Add mutations in `platform_scope_test.py` for removing `platform-scope` from the catalog, making it optional, moving it out of phase 1/local scope, or deleting its certification dependency. Require each mutated tree to fail `check-product-truth.sh --root FIXTURE` with a diagnostic naming `platform-scope`. Run these tests before changing the checker and observe the missing enforcement.
+- [ ] Extend the checker's catalog validation to require that exact gate once, with `required: true`, `phase: 1`, `scope: "local"`, the Task 3 argv, `subjectKind: "source"`, and membership in `beta-certification.prerequisites`. Rerun the mutation tests and retain all existing scope checks.
+- [ ] Keep the existing non-Ubuntu-server, Windows-server-gate, direct/indirect deferred-desktop, and optional-browser-gate rejection cases.
+- [ ] Run `python3 tests/operations/platform_scope_test.py`, `bash tests/operations/ci_gates_test.sh`, `bash scripts/check-product-truth.sh`, and, with Node available, `bash tests/operations/product_truth_test.sh`.
+- [ ] Retain the truthful transitional state: `browserService` names the planned `telos-client`, but product truth currently permits its absence only with the explicit Phase 2 blocked-delivery markers (`scripts/check-product-truth.sh:346`). Product truth passing is not a deployed browser node. Phase 2 owns the runtime route/service change.
 
-```bash
-bash tests/operations/product_truth_test.sh
-bash scripts/check-product-truth.sh
-```
+## Task 5: Verify existing removed-feature and operator-path cleanup
 
-Expected: both exit `0`; each fixture mutation fails for its intended reason.
+**Status:** Implemented; full product mutation/proxy verification unavailable on the inspected host until Node is available.
 
-- [ ] **Step 7: Commit the product contract**
+**Files:** Inspect `frontend/dev-server.mjs`, `tests/operations/dev_server_proxy_test.mjs`, `tests/operations/product_truth_test.sh`, current README/agent guides/product docs, and the provisioning wrappers. Edit only a discrepancy exposed by a current check; historical specs are not shipped-runtime scan targets.
 
-```bash
-git add documentation/product/beta-contract.json documentation/product/beta-feature-status.md \
-  scripts/check-product-truth.sh tests/operations/product_truth_test.sh
-git commit -m "docs: make the standalone beta contract executable"
-```
+**Interfaces:** Preserve the API/WebSocket dev proxy and the Bash CLI entry point. Preserve accurate blocked-delivery statements while later implementations are absent.
 
----
+- [ ] On a Node 24.18.0 host run `node --check frontend/dev-server.mjs` and `bash tests/operations/product_truth_test.sh`. The latter includes the dev-proxy behavioral test and structural mutation fixtures.
+- [ ] Run `bash scripts/check-product-truth.sh`, `bash scripts/check-release-truth.sh`, `python3 scripts/check-documentation-hygiene.py citations`, and `python3 scripts/check-documentation-hygiene.py placeholders`.
+- [ ] Use the Python hygiene commands as gates. Raw `grep` exits 1 when it finds no matches, so the historical instruction “all commands exit 0 and grep prints nothing” was contradictory.
 
-### Task 5: Remove current removed-feature and operator-path residue
+## Task 6: Complete CI enforcement and record the Phase 1 exit
 
-**Files:**
-- Modify: `frontend/dev-server.mjs`
-- Modify: `README.md`
-- Modify: `CLAUDE.md`
-- Modify: `documentation/README.md`
-- Modify: `documentation/operations/backup-and-restore.md`
-- Modify: `documentation/operations/beta-certification.md`
-- Modify: `documentation/operations/browser-certification.md`
-- Modify: `documentation/operations/clean-checkout-verification.md`
-- Modify: `documentation/operations/container-hardening.md`
-- Modify: `documentation/operations/controlled-egress.md`
-- Modify: `documentation/operations/network-exposure.md`
-- Modify: `documentation/operations/release.md`
-- Modify: `documentation/operations/release-inputs.pathspec`
-- Modify: `scripts/provision-jellyfin.sh`
-- Modify: `scripts/provision-grimmory.sh`
-- Modify: `tests/operations/product_truth_test.sh`
+**Status:** Truth job and existing runtime jobs are present; catalog coverage is incomplete.
 
-**Interfaces:**
-- Consumes: contract from Task 4.
-- Produces: no LiveKit dev proxy and no supported-product references to removed functionality.
+**Files:** Modify `.github/workflows/ci.yml`, `tests/operations/ci_gates_test.sh`, and `scripts/verify-clean-checkout.sh`. Include the new regression test from Task 3 and scope changes from Task 4. Keep explicit tracking of the current policy and test files, which were untracked when this reconciliation began.
 
-- [ ] **Step 1: Add dev-proxy and CLI truth assertions**
+**Interfaces:** CI runs source/fixture checks. It must not manufacture a frozen candidate lock or upload fixture/source envelopes as certification. Direct CI commands may use setup-go; the local catalog remains Podman-based.
 
-Extend `product_truth_test.sh` to assert that `frontend/dev-server.mjs` has no `TELOS_DEV_LIVEKIT_URL`, `/livekit`, or LiveKit status log; current CLI help names the Bash implementation; and the legacy provisioning scripts direct operators to `telos configure integrations` while exiting `3`.
+Current CI already runs backend race tests, frontend lint/unit/build/bundle, headless build, API drift, Linux experimental Go CLI builds, and the truth fixtures. It omits explicit full `go vet`, the disposable PostgreSQL/Redis integration harness, Compose rendering, explicit TypeScript checking, accessibility-evidence validation, and actual Playwright execution. Both hygiene checks already run transitively through `ci_gates_test.sh`; do not report them missing. The `platform_scope_test.py` CI step already exists, while its catalog gate is missing. Linux Go CLI builds do not certify the authoritative Bash installer.
 
-- [ ] **Step 2: Run the focused test and confirm it catches `frontend/dev-server.mjs`**
+- [ ] Extend the existing workflow contract tests to require the missing checks as real required steps, reject job/step skipping and `continue-on-error`, and require tool/dependency setup before dependent steps. Preserve current adverse workflow mutations rather than replacing them with substring checks.
+- [ ] Add explicit backend `go vet ./...` and an integration job invoking `bash scripts/test-backend.sh` with working Podman and registry access. The harness itself supplies disposable PostgreSQL 16.14 and Redis 7; plain `go test` self-skips integration without their environment.
+- [ ] Add required Compose validation using `bash scripts/validate-compose.sh --env-file .env.example`. Prepare Podman 5+, its Compose provider, and Python PyYAML in a reproducible CI environment; check their versions/import before the render. Do not assume Docker's presence fulfills this script's `podman compose` call. Host distribution support remains Ubuntu 24.04+.
+- [ ] Pin setup-node to the repository's `24.18.0` and run `npm ci` in `frontend/` before Node-dependent jobs. In the frontend job run the corrected explicit TypeScript command and `bash tests/operations/frontend_types_gate_test.sh` from the root. Add `npm --prefix frontend run check:a11y-evidence` after build.
+- [ ] Add `python3 scripts/run-playwright-gate.py --playwright-timeout-seconds 1650` with available Playwright browser binaries/system libraries, free port 3000, and a job timeout allowing at least the catalog's 1800-second gate budget plus setup. Preserve its process cleanup. Provision Chromium and WebKit for the existing projects through explicit CI setup using the locked Playwright installation. `npm run check:browsers` only checks a JSON declaration; it does not prove browser binaries are installed. This suite is not the complete external browser matrix.
+- [ ] Ensure the `truth-and-gates` job supplies Node 24.18.0 before `product_truth_test.sh`; it starts a Node proxy fixture. Keep the existing envelope, wrapper, runner, accumulated-suite, scope, product/release, and inventory steps required. Add `documentation/product/platform-scope.md`, `scripts/run-playwright-gate.py`, `scripts/check-documentation-hygiene.py`, `tests/operations/platform_scope_test.py`, and `tests/operations/frontend_types_gate_test.sh` to the explicit clean-checkout inventory. Preserve the existing evidence/supervisor inventory entries; do not stage unrelated edits.
+- [ ] Run the direct suite below. Run the full source checkpoint only after residual code and approved existing changes are committed and the intended source tree is clean. Request review of residual changes; do not require recreating the original six commits.
 
-```bash
-bash tests/operations/product_truth_test.sh
-```
+## Exact verification sequence
 
-Expected: nonzero with the LiveKit target and route reported.
-
-- [ ] **Step 3: Remove the LiveKit proxy branch**
-
-Delete `livekitTarget`, the `/livekit` branch in `routeRequest`, and the final LiveKit log line. Preserve API/WebSocket proxying to the gateway and ordinary requests to Next.js.
-
-- [ ] **Step 4: Reconcile current documentation and CLI help**
-
-Run the checker, address only current shipped/operations surfaces it reports, and preserve historical records under `docs/superpowers/`. Verify that generated `telos help` already presents the Bash dispatcher as authoritative; label `backend/cmd/telos/` experimental in current documentation wherever it is mentioned. Make the two provisioning wrappers print the exact guided command and remain `not_run` until Phase 2 supplies it.
-
-- [ ] **Step 5: Run source and documentation checks**
-
-```bash
-node --check frontend/dev-server.mjs
-bash tests/operations/product_truth_test.sh
-bash scripts/check-product-truth.sh
-bash scripts/check-release-truth.sh
-grep -rn "ci""te:" documentation/ AGENTS.md
-grep -rnE "TO""DO|TB""D" documentation/ AGENTS.md
-```
-
-Expected: all checks exit `0`; both grep commands print nothing.
-
-- [ ] **Step 6: Commit truth cleanup**
-
-```bash
-git add frontend/dev-server.mjs README.md CLAUDE.md documentation \
-  scripts/provision-jellyfin.sh scripts/provision-grimmory.sh \
-  tests/operations/product_truth_test.sh
-git commit -m "chore: remove stale beta product claims"
-```
-
----
-
-### Task 6: Wire Phase 1 into CI and prove the phase exit
-
-**Files:**
-- Modify: `.github/workflows/ci.yml`
-- Modify: `ci/phase-gates.json`
-- Modify: `tests/operations/ci_gates_test.sh`
-- Modify: `scripts/verify-clean-checkout.sh` — add the new runtime/release-critical Phase 1 inputs to its explicit inventory.
-
-**Interfaces:**
-- Produces: required CI jobs for evidence, gate-catalog, product-truth, and operations behavioral tests.
-- Consumes: all Phase 1 outputs.
-
-- [ ] **Step 1: Add a CI workflow contract test**
-
-Extend `tests/operations/ci_gates_test.sh` to parse `.github/workflows/ci.yml` and require steps for:
-
-```text
-tests/operations/evidence_envelope_test.sh
-tests/operations/beta_certification_test.sh
-tests/operations/ci_gates_test.sh
-tests/operations/accumulated_suite_test.sh
-tests/operations/product_truth_test.sh
-scripts/check-product-truth.sh
-scripts/check-release-truth.sh
-scripts/verify-clean-checkout.sh --inventory-only
-```
-
-Assert each step is a required job step without `continue-on-error: true`.
-
-- [ ] **Step 2: Run the test and observe the workflow gap**
-
-```bash
-bash tests/operations/ci_gates_test.sh
-```
-
-Expected: nonzero listing missing workflow commands.
-
-- [ ] **Step 3: Add a `truth-and-gates` CI job**
-
-Use Ubuntu, `actions/checkout` pinned to the same policy as existing jobs, least-privilege `contents: read`, and standard repository tools. Run the eight commands above. Do not upload a `passed` candidate envelope because CI does not yet have a frozen candidate lock; upload raw test logs only on failure if existing workflow policy allows it.
-
-- [ ] **Step 4: Add Phase 1 files to clean-checkout inventory**
-
-Ensure `scripts/lib/evidence.py`, `scripts/not-run.py`, `scripts/run-gates.py`, `documentation/product/beta-contract.json`, and the evidence schema are classified as runtime/release-critical and must be tracked.
-
-- [ ] **Step 5: Run the Phase 1 exit suite**
+**A. Working-tree source/fixture checks.** Each command must be recorded separately with exit code and output. They do not require a release lock. Missing Node blocks the two explicitly marked commands; continue independent Python/Bash checks and report the remaining gap.
 
 ```bash
 bash tests/operations/evidence_envelope_test.sh
 bash tests/operations/beta_certification_test.sh
 bash tests/operations/ci_gates_test.sh
 bash tests/operations/accumulated_suite_test.sh
-bash tests/operations/product_truth_test.sh
+python3 tests/operations/platform_scope_test.py
+bash tests/operations/product_truth_test.sh       # requires Node
+bash tests/operations/frontend_types_gate_test.sh # added by Task 3; requires Node + npm ci
 bash scripts/check-product-truth.sh
 bash scripts/check-release-truth.sh
 bash scripts/verify-clean-checkout.sh --inventory-only
-python3 -m py_compile scripts/lib/evidence.py scripts/not-run.py scripts/run-gates.py
+python3 scripts/check-documentation-hygiene.py citations
+python3 scripts/check-documentation-hygiene.py placeholders
+git diff --check
 ```
 
-Expected: every command exits `0`. The later-phase wrappers still exit `3` when invoked normally, which is the correct Phase 1 state.
+Expected only after implementation and prerequisites: exit 0 for every command. Expected invalid-fixture diagnostics inside passing tests are not product failures. Inventory checks tracked inputs, not clean installation or runtime readiness. No file whose only copy is untracked may be treated as available in the next clean checkout.
 
-- [ ] **Step 6: Commit CI enforcement**
+**B. Prepare a verification host.** Use an explicit environment-setup task or existing prepared Ubuntu host. Node must match `.nvmrc` (24.18.0); install frontend dependencies with `npm ci` without rewriting lockfiles. Supply Podman 5+, a working Compose provider, PyYAML, pinned Go image `docker.io/library/golang:1.26.5`, PostgreSQL 16.14/Redis 7 test images, and Playwright Chromium/WebKit binaries and system libraries. Verify registry access, container networking, and Linux process-supervision support. Preparation is not proof that any gate passed. This plan does not authorize opportunistic runtime installation during a read-only audit.
 
-```bash
-git add .github/workflows/ci.yml ci/phase-gates.json tests/operations/ci_gates_test.sh \
-  scripts/verify-clean-checkout.sh
-git commit -m "ci: enforce product and gate truth"
-```
-
-- [ ] **Step 7: Record the phase review checkpoint**
-
-From a clean worktree, run:
+**C. After integration, verify a clean committed source checkpoint.** Run from the repository root; first inspect and resolve any nonempty status through normal integration, preserving user changes. Do not run the following block on a dirty tree.
 
 ```bash
 git status --short
-git log --oneline --decorate -6
+git rev-parse HEAD
 ```
 
-Expected: empty status and six independently reviewable Phase 1 commits. Request code review before beginning Phase 2.
+Then create the minimal identity and evidence parent outside the repository. The runner must create `phase1-evidence` itself:
+
+```bash
+phase1_checkpoint_dir="$(mktemp -d /tmp/telos-phase1-checkpoint.XXXXXX)"
+python3 - "$phase1_checkpoint_dir/source-checkpoint.json" <<'PY'
+import json
+from pathlib import Path
+import subprocess
+import sys
+commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+Path(sys.argv[1]).write_text(json.dumps({"schemaVersion": 1, "sourceCommit": commit}) + "\n")
+PY
+python3 scripts/run-gates.py \
+  --catalog ci/phase-gates.json --scope local --phase 1 \
+  --candidate-lock "$phase1_checkpoint_dir/source-checkpoint.json" \
+  --evidence-dir "$phase1_checkpoint_dir/phase1-evidence"
+```
+
+Record the actual runner exit, HEAD, catalog digest, source identity file, logs, envelopes, and tool prerequisites. Preserve that directory; every rerun uses a new one. `--phase 1` avoids later placeholders and does not select native builds or external certification. Only all required selected gates `passed` makes this a completed source checkpoint. An unavailable host/tool is a gap; do not mark the phase complete. The current runner does not magically discover tools hidden inside every shell wrapper, so a missing nested command may emerge as `failed`/127 rather than `not_run`; preflight and report the concrete cause without relabeling it success.
+
+## Exit and next handoff
+
+- [ ] Tasks 1–6 have current source/fixture results, and the residual catalog/CI changes have reviewable diffs.
+- [ ] Corrected TypeScript behavior and actual backend/frontend/Compose/Playwright gates ran on the prepared host; CI enforced them.
+- [ ] The integrated source checkpoint is clean and all required Phase 1 source outcomes pass. Earlier logs remain labeled earlier; no synthetic release candidate was created.
+- [ ] Handoff names the reviewed commit and next task: Phase 2 Ubuntu browser-node work. Hosted browser delivery and all later external evidence remain blocked until their owning phases actually run.
+
+**Immediate next step for a cold implementer:** inspect current diffs and prerequisites, run the available direct checks, then implement Task 3's catalog/TypeScript regressions and Task 4's platform coverage before Task 6's CI changes. Do not restart evidence-envelope or gate-runner implementation.

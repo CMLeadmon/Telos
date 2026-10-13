@@ -1,5 +1,9 @@
 # Telos
 
+> **Active implementation handoff (2026-10-13):** Start at the [cold handoff](docs/superpowers/plans/2026-10-13-standalone-beta-cold-handoff.md). It supersedes historical sequencing and shared interfaces for standalone beta work; code describes current behavior, while this plan defines the requested target. Implementation and certification remain unfinished.
+
+> **Delivery scope:** Ubuntu 24.04+ server only; browser clients and a Linux desktop application first. Windows and Mac native clients are planned later. Windows/macOS server hosting and other Linux server distributions are out of scope. See [Platform scope](documentation/product/platform-scope.md). Hosted-browser delivery and Linux desktop distribution remain blocked by the [beta readiness requirements](documentation/product/beta-feature-status.md).
+
 > "Your server, your community."
 > "Be on the net, but not of the net."
 

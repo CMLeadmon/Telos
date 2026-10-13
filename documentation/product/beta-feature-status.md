@@ -36,13 +36,19 @@ route split exist.
 | Browser matrix | Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome |
 | Backup/recovery | Blocked until Phase 4 evidence |
 
-The reference server is `ubuntu-24.04` on `x86_64` with Podman `5.0.0` or
-newer. The desktop target matrix is `linux-x86_64`, `windows-x86_64`, and
-`macos-universal`. Desktop packages are unsigned, invite-only beta packages;
-they are not a public signed or notarized distribution, and their delivery
-remains blocked until Phase 3 evidence exists. Browser support is the hosted
+The server targets **Ubuntu 24.04+ only**, with `ubuntu-24.04` as the minimum
+reference release, `x86_64` as the initial architecture, and Podman `5.0.0` or
+newer. Windows, macOS, WSL/Docker Desktop, and other Linux server distributions
+are out of scope, including best-effort support. Newer Ubuntu combinations need
+release-specific verification before being advertised as verified.
+
+The initial desktop target is `linux-x86_64`. The `windows-x86_64` and
+`macos-universal` clients remain planned for later; they do not block initial
+delivery. Linux desktop packages are unsigned, invite-only beta packages and
+remain blocked until Phase 3 evidence exists. Browser support is the hosted
 service on current Chrome, Firefox, Edge, desktop Safari, iOS Safari, and
-Android Chrome once the Phase 2 deployment evidence exists.
+Android Chrome once the Phase 2 deployment evidence exists. Windows and Mac
+browsers remain in scope. See [Platform Scope and Delivery Order](platform-scope.md).
 
 Only platform-trusted HTTPS is supported: use public ACME certificates or an
 operator-installed private CA trusted by the platform. Self-signed certificate

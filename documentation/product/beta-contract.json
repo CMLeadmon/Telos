@@ -1,14 +1,22 @@
 {
   "schemaVersion": 1,
   "architecture": "standalone-client-server",
-  "modules": ["chat", "stream", "library", "files"],
+  "modules": [
+    "chat",
+    "stream",
+    "library",
+    "files"
+  ],
   "settingsSurface": "settings",
   "server": {
     "os": "ubuntu-24.04",
     "arch": "x86_64",
-    "podmanMinimum": "5.0.0"
+    "podmanMinimum": "5.0.0",
+    "versionPolicy": "24.04-or-newer"
   },
-  "desktop": ["linux-x86_64", "windows-x86_64", "macos-universal"],
+  "desktop": [
+    "linux-x86_64"
+  ],
   "browserService": "telos-client",
   "apiService": "telos-core",
   "removedFeatures": [
@@ -23,12 +31,14 @@
     "clean-install",
     "browser-matrix",
     "desktop-linux",
-    "desktop-windows",
-    "desktop-macos",
     "separate-host-restore",
     "upgrade-rollback",
     "capacity",
     "host-exposure",
     "controlled-egress"
+  ],
+  "plannedDesktop": [
+    "windows-x86_64",
+    "macos-universal"
   ]
 }

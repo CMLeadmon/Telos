@@ -1,22 +1,24 @@
 # Standalone Beta Phase 4: Operational Safety Implementation Plan
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make the standalone server safe to operate through an invite-only beta by pinning its supply chain, enforcing effective runtime hardening, producing encrypted off-node backups, proving separate-host recovery and generation-safe upgrades, and validating monitoring, capacity, exposure, and controlled egress.
 
 **Architecture:** Treat operational policy as machine-readable input and inspect the effective runtime rather than trusting Compose text. Lock every production/build image to a reviewed registry digest. Run scheduled maintenance under one lock and journal every destructive transition. Stop writers briefly while collecting a consistent backup, upload and verify it through restic, then delete plaintext on every exit path. Restore only onto a distinct reference host from a compatible release generation. Keep fixture tests for deterministic failure branches, while live candidate evidence remains mandatory and separate.
 
-**Tech Stack:** Podman 5+, Compose, Bash, Python 3 standard library, restic, systemd user units, Prometheus, k6, Syft, Trivy, gitleaks, Go/Rust/npm dependency metadata, Ubuntu 24.04 LTS x86-64.
+**Tech Stack:** Podman 5+, Compose, Bash, Python 3 standard library, restic, systemd system units, Prometheus, k6, Syft, Trivy, gitleaks, Go/Rust/npm dependency metadata, Ubuntu 24.04 LTS x86-64.
 
 **Spec:** `docs/superpowers/specs/2026-08-20-standalone-beta-readiness-design.md`
 
 ## Global Constraints
 
-- Execute from the merged Phase 2 baseline. Phase 3 may proceed concurrently, but Phase 5 consumes only the merged outputs of both phases.
-- The external operational gates run against one reference candidate generation on Ubuntu 24.04 LTS x86-64. Fixture success never satisfies backup, restore, upgrade, rollback, capacity, exposure, or controlled-egress candidate gates.
-- Production image references and build-stage `FROM` lines use registry digests. Tags may remain only as human-readable context before `@sha256:`; mutable tag-only production references are forbidden.
+- Execute product changes from the merged Phase 2 baseline. Execute Phase 5 Task 1a (graph schemas), Task 4a (runner/evidence adapters), and Task 2a (rehearsal builder) before the Phase 4 rehearsals that consume them. Phase 3 may proceed concurrently. Phase 4 implementation exit requires local tests and recorded rehearsal outcomes; only Phase 5 Task 6 certifies the final integrated candidate.
+- Final external operational gates run after Phase 5 Task 6 freezes one candidate, on Ubuntu 24.04 LTS x86-64. Earlier checkpoints use explicitly non-certifying rehearsal generations. Fixture success never satisfies backup, restore, upgrade, rollback, capacity, exposure, or controlled-egress candidate gates.
+- Production image references and external build-stage `FROM` images use registry digests. Earlier local stage aliases remain aliases; resolve declared ARG choices and verify every possible external base is locked. Reject undeclared/dynamic registry references, not valid `FROM builder-base` or declared `builder-${EMBED_FRONTEND}` stage selections. Final candidate gates load exact archived server images; the immutable candidate includes all isolated service OCI artifacts required for recovery, not only core/client. Tags may remain only as human-readable context before `@sha256:`; mutable tag-only production references are forbidden.
 - Refreshing an image/tool lock is an explicit reviewed commit. Normal build, install, upgrade, and certification commands never resolve `latest` or silently update a digest.
-- Gateway and static client run as explicit non-root identities. Every long-running service has a verified effective identity, `no-new-privileges`, bounded capabilities, writable paths, resources, PIDs, file descriptors, and logs. A publisher-required upstream root identity must be a narrowly scoped policy exception with rationale, compensating controls, owner, issue, and expiry; beta certification cannot accept a root exception for core/client.
+- Gateway and static client run as explicit non-root identities. Every long-running service has a verified effective identity, `no-new-privileges`, bounded capabilities, writable paths, resources, PIDs, file descriptors, and logs. A publisher-required upstream root identity must be a narrowly scoped policy exception with rationale, compensating controls, owner, issue, and expiry; beta certification cannot accept a root exception for core/client. Rootful host runtime is separate from container effective UID.
 - Only Traefik publishes Telos ports. Setup overlays are absent during normal operation. Host-management ports are declared separately and never mistaken for Telos listeners.
 - Backup repositories must be off-node (`s3:`, `sftp:`, or `rest:https://` for beta). Reject local paths, `local:`, `file:`, ambiguous `rclone:`, and repositories under the Telos host storage/release/config trees.
 - Restic passwords come from a mode-`0600` file. Repository credentials come from operator-owned environment/credential files and are never printed, captured in evidence, or placed in argv.
@@ -24,14 +26,29 @@
 - Retention is exactly 14 daily and 8 weekly snapshots tagged `scheduled`; pruning occurs only after a new verified snapshot.
 - Recovery must revoke all browser sessions, device/access/refresh credentials, and outstanding invites before admitting traffic. Users reauthenticate with passwords after a restore.
 - Upgrade uses one maintenance lock, verified encrypted pre-upgrade backup, one-shot migrations, atomic active-generation pointer, bounded readiness wait, and durable journal. Binary rollback occurs only when the predecessor declares the resulting schema compatible; otherwise use verified restore.
-- External evidence uses Phase 1 envelopes and binds candidate/runtime/host identities. A missing second host, scanner, backup repository, DNS cutover, or load generator is `not_run`.
+- External producer results use the shared contract; the runner emits Phase 1 envelope v2 and binds candidate/runtime/host identities. A missing second host, scanner, backup repository, DNS cutover, or load generator is `not_run`.
 - Never run destructive live tests against an undeclared host. Each live command requires explicit candidate lock, target identity, evidence path, and documented confirmation token.
 
 ---
 
+
+## Cold-handoff execution contract (2026-10-13)
+
+Read [shared contracts](2026-10-13-standalone-beta-handoff-contracts.md) before implementing any interface below. It owns canonical JSON, runner/result records, runtime identity, generation receipts, and evidence signing. Do not introduce a second serializer, subject hash, or candidate-lock format.
+
+**Subparts:** Tasks 1–8a are local implementation/fixture work; their existing live checkpoint steps are Tasks 1–8b rehearsals. Task 9a is local implementation review; Task 9b records rehearsal availability. Run every final operational gate only in Phase 5 Task 6 after all source changes merge and the final lock freezes. A missing external prerequisite does not prevent finishing the matching `a` subpart.
+
+**Producer mode:** all live scripts accept the shared rehearsal/final modes plus `--result-out PATH`. Installed operational rehearsals require `--rehearsal --source-commit SHA --rehearsal-lock PATH`; only source/mock tests may omit that lock. Implement this in a shared helper, not separately per script. `recordKind=rehearsal` records the verified rehearsal lock digest for installed drills (null only for source/mock fixtures) and cannot satisfy final certification; `recordKind=candidate` requires a verified lock. Existing `--result-out` examples show candidate mode; replace final `--candidate-lock` with `--rehearsal --source-commit SHA --rehearsal-lock PATH` in live implementation checkpoints. Source/static and fixture gates do not need producer sidecars.
+
+**External inputs:** operator supplies two distinct Ubuntu 24.04 x86-64 nodes (4 cores/16 GiB minimum), protected off-node restic repository/password/backend credentials, trusted HTTPS DNS/cutover control, separate load/scanner host, a buildable exact predecessor, legal media fixtures and approved release/evidence principals. Store inventory outside the checkout with origins, machine-ID hashes, paths and roles only; never secret values. No available predecessor means the upgrade gate remains `not_run`; do not synthesize history. Validate external inputs immediately before the corresponding rehearsal/final gate.
+
+**Review focus:** same-host rollback versus separate-host recovery; nested maintenance locks; plaintext surviving crash recovery; image manifest digest versus runtime image/config ID; accidental secrets in collected logs. The owning tests below must cover each.
+
+**Collector safety:** never attach raw `podman inspect`, rendered Compose, `.env`, restic credentials, browser storage, HAR, or unsanitized traces to evidence. Read sensitive inspection output through a pipe in memory and project only fixed allowlisted fields (container/image/network IDs, effective controls, port numbers, measured resources). Use secret-canary tests to assert neither successful nor failing output includes env/DSN/auth/cookie/query values. Use MariaDB defaults-extra-file and PostgreSQL protected password file, not password command arguments; forbid shell `set -x`. Default Playwright trace/video off on auth and media-token journeys. Hash only sanitized, publishable reports.
+
 ## Current-State Baseline
 
-Production still references mutable `latest` tags for ClamAV, Jellyfin, and Grimmory (`docker-compose.yml:248-270`, `docker-compose.yml:308-310`). The runtime-hardening script can emit a passed record without inspecting a runtime (`scripts/verify-runtime-hardening.sh:22-33`), and the capacity drill reports completion without a load test (`scripts/run-capacity-drill.sh:18-24`). Backup documentation claims an encrypted off-node path (`documentation/operations/backup-and-restore.md:6-11`), but the current script creates a plaintext generation and its cleanup trap has no removal operation (`scripts/backup.sh:4-24`). This phase replaces those baselines with candidate-bound runtime and recovery proofs.
+Production still uses mutable upstream image tags and unverified lock entries. Backup staging is plaintext and its cleanup trap does not implement the required removal/recovery guarantees. Phase 1 already replaced the historical false-green capacity/hardening/certification paths with fail-closed outcomes; these commands now require real behavior, not another not_run rewrite. Product backup status is already blocked honestly. Preserve those safeguards while implementing and testing the missing operations. Inspect current source rather than relying on historical line numbers.
 
 ---
 
@@ -50,6 +67,7 @@ Production still references mutable `latest` tags for ClamAV, Jellyfin, and Grim
 - Modify: `backend/metrics.go`, `backend/main.go`, `config/prometheus/*.yml`, `docker-compose.yml` — truthful bounded metrics and internal Prometheus.
 - Modify: `scripts/verify-monitoring.sh`, `tests/operations/monitoring_test.sh`, `documentation/operations/monitoring.md` — real source/runtime monitoring checks.
 - Modify: `scripts/backup.sh`, `scripts/prune-backups.sh`, `deploy/systemd/telos-backup.service`, `deploy/systemd/telos-backup.timer` — encrypted scheduled snapshots.
+- Create: `scripts/lib/maintenance.sh` — shared nonblocking operation lock with validated inherited descriptor.
 - Create: `scripts/lib/backup_manifest.py`, `release/backup-manifest.schema.json` — backup contents/compatibility contract.
 - Modify: `tests/operations/backup_restore_test.sh`, `scripts/tests/backup_test.sh`, `documentation/operations/backup-and-restore.md`, `documentation/operations/data-retention.md` — behavioral backup tests/runbooks.
 - Modify: `scripts/restore.sh`, `scripts/verify-restore.sh`, `scripts/verify-restored-node.sh`, `scripts/restore-drill.sh`, `scripts/drills/recovery.sh` — verified separate-host recovery.
@@ -88,7 +106,7 @@ Production still references mutable `latest` tags for ClamAV, Jellyfin, and Grim
 
 - [ ] **Step 1: Write lock mutation tests**
 
-Create a valid fixture lock, Dockerfiles, and Compose file. Assert verification fails for a 64-character repeated digest, missing service/base image, tag-only image, digest mismatch between source and lock, duplicate digest under unrelated source names, unknown lock key, wrong platform, mutable `latest`, unreviewed extra production image, and a runtime image ID not matching the locked platform digest. Assert it passes only when every production/build reference maps exactly once.
+Create a valid fixture lock, Dockerfiles, and Compose file. Assert verification fails for a 64-character repeated digest, missing service/base image, tag-only image, digest mismatch between source and lock, duplicate digest under unrelated source names, unknown lock key, wrong platform, mutable `latest`, unreviewed extra production image, and a runtime image ID not matching the locked platform digest. Assert it passes only when every production/build reference maps exactly once. Runtime `.Image` is a config digest, not necessarily the registry manifest digest: inspect the loaded image, verify its manifest/config relation against the OCI index and locked platform manifest, then compare the container config ID. A valid different manifest/config pair must pass; substitution of either must fail.
 
 - [ ] **Step 2: Run the test and expose the current fabricated values/missing services**
 
@@ -125,7 +143,7 @@ Required keys cover Go/Node/Alpine/nginx build/runtime bases, Traefik, PostgreSQ
 
 - [ ] **Step 5: Resolve and review real digests**
 
-Run the resolver once per required key from a clean networked environment. Review architecture, upstream publisher, release notes, license/process boundary, and scan result before committing. Then replace every `FROM` and Compose `image:` with `source@sha256:$resolved_manifest_digest`. The shell variable here denotes resolver output; never copy the sample digest from the schema example.
+Run the resolver once per required key from a clean networked environment. Review architecture, upstream publisher, release notes, license/process boundary, and scan result before committing. Then replace every external-image `FROM` (preserving verified local stage aliases and resolving declared stage ARGs) and Compose `image:` with `source@sha256:$resolved_manifest_digest`. The shell variable here denotes resolver output; never copy the sample digest from the schema example.
 
 - [ ] **Step 6: Implement source/runtime verification**
 
@@ -213,11 +231,11 @@ CLI preflight requires at least 4 CPU cores, 16 GiB RAM, and sufficient configur
 
 - [ ] **Step 4: Harden core, client, and Traefik first**
 
-Create UID/GID 10001 in core and keep its binary/config read-only; run client as its unprivileged image UID. Move Traefik internal listeners to 8080/8443 so it runs non-root without `CAP_NET_BIND_SERVICE`, while host mappings remain 80/443. Allow only ACME state as writable. Apply `read_only`, bounded tmpfs, `cap_drop: [ALL]`, `security_opt`, no devices/socket, resource/ulimit/log bounds, graceful stop, and health checks.
+Use rootful Podman on the production Ubuntu host; container core still runs UID/GID 10001. Keep binary/config read-only; persist node configuration outside immutable generations at `/var/lib/telos/config` (owner 10001, directory 0700, files 0600), root-owned `/var/lib/telos/node.env` mode 0600 and `/var/lib/telos/state`. run client as its unprivileged image UID. Move Traefik internal listeners to 8080/8443 so it runs non-root without `CAP_NET_BIND_SERVICE`, while host mappings remain 80/443. Allow only ACME state as writable. Apply `read_only`, bounded tmpfs, `cap_drop: [ALL]`, `security_opt`, no devices/socket, resource/ulimit/log bounds, graceful stop, and health checks.
 
 - [ ] **Step 5: Harden remaining services to their supported effective identities**
 
-Add controls and only the writable data/config/tmp paths named in policy. Verify each upstream entrypoint still initializes under an empty volume. Do not force an arbitrary `user:` that makes upstream initialization fail; instead pin the publisher-supported non-root identity and prove effective UID at runtime. Any required initialization transition must end with non-root PID 1 before readiness.
+Add controls and only the writable data/config/tmp paths named in policy. Verify each upstream entrypoint still initializes under an empty volume. Do not force an arbitrary `user:` that makes upstream initialization fail; instead pin the publisher-supported non-root identity and prove effective UID at runtime. Any required initialization transition must end with non-root PID 1 before readiness unless the explicitly reviewed upstream exception applies; test expiry and compensating controls.
 
 - [ ] **Step 6: Implement static and live verifier modes**
 
@@ -225,10 +243,10 @@ Expose:
 
 ```text
 scripts/verify-runtime-hardening.sh --compose docker-compose.yml --env-file PATH --policy PATH
-scripts/verify-runtime-hardening.sh --runtime --candidate-lock PATH --policy PATH --evidence-out PATH
+scripts/verify-runtime-hardening.sh --runtime --candidate-lock PATH --policy PATH --result-out PATH
 ```
 
-Static mode parses rendered Compose. Runtime mode uses `podman inspect`, `/proc/1/status`, mount info, network/listener inspection, and `podman stats --no-stream`; it verifies image lock/candidate IDs and writes Phase 1 evidence. Unknown flags or a missing container are failures, not skips.
+Static mode parses rendered Compose. Runtime mode uses sanitized projections of `podman inspect`, `/proc/1/status`, mount info, network/listener inspection, and `podman stats --no-stream`; it verifies image lock/candidate IDs and writes a shared-contract producer result and sanitized observed subject; the Phase 5 Task 4a runner owns the envelope. Unknown flags fail. An absent declared test environment returns `3`/`not_run`; a missing required container in a provisioned target is a failed assertion.
 
 - [ ] **Step 7: Boot an isolated full stack and inspect it**
 
@@ -278,7 +296,7 @@ git commit -m "deploy: enforce effective container hardening"
 
 - [ ] **Step 1: Write metrics lifecycle/privacy tests**
 
-Test a separate listener starts on an injected loopback address, serves only `/metrics`, rejects other paths, stops within the server shutdown budget, and never appears in the public gateway mux. Add bounded metric tests for request count/duration by method/status class (no raw path), readiness dependencies by fixed service label, active sockets, outbox size, auth throttling, backup age, and last backup result. Backup status is read from an atomically written Prometheus textfile beneath `TELOS_OPS_STATE_PATH`, mounted read-only into core; backup code never calls a public metrics endpoint. Reject source labels containing username, user ID, channel, item, query, host, token, or arbitrary path.
+Test a separate listener starts on an injected loopback address, serves only `/metrics`, rejects other paths, stops within the server shutdown budget, and never appears in the public gateway mux. Add bounded metric tests for request count/duration by method/status class (no raw path), readiness dependencies by fixed service label, active sockets, outbox size, auth throttling, backup age, and last backup result. Backup status is read from an atomically written Prometheus textfile beneath `TELOS_OPS_STATE_PATH` (`/var/lib/telos/state`), mounted read-only into core; backup code never calls a public metrics endpoint. Reject source labels containing username, user ID, channel, item, query, host, token, or arbitrary path.
 
 - [ ] **Step 2: Replace monitoring existence checks**
 
@@ -308,7 +326,7 @@ Add valid rules for scrape down, readiness dependency down, elevated 5xx ratio w
 
 - [ ] **Step 7: Implement runtime verification**
 
-`verify-monitoring.sh --runtime --candidate-lock PATH --evidence-out PATH` runs a temporary locked probe on `telos-observability`, checks Prometheus target/rule APIs and required series freshness, and fails on any firing critical alert. `--source` performs config/privacy/routing checks and is a local gate.
+`verify-monitoring.sh --runtime --candidate-lock PATH --result-out PATH` runs a temporary locked probe on `telos-observability`, checks Prometheus target/rule APIs and required series freshness, and fails on any firing critical alert. `--source` performs config/privacy/routing checks and is a local gate.
 
 - [ ] **Step 8: Run monitoring checks**
 
@@ -338,6 +356,7 @@ git commit -m "ops: add internal beta monitoring and alerts"
 **Files:**
 - Modify: `scripts/backup.sh`
 - Modify: `scripts/prune-backups.sh`
+- Create: `scripts/lib/maintenance.sh`
 - Create: `scripts/lib/backup_manifest.py`
 - Create: `release/backup-manifest.schema.json`
 - Modify: `deploy/systemd/telos-backup.service`
@@ -356,7 +375,7 @@ git commit -m "ops: add internal beta monitoring and alerts"
 
 - [ ] **Step 1: Build a fake Podman/restic failure matrix**
 
-Replace the backup existence test with stubs that record argv/stdin and model success plus failure at container validation, quiesce, PostgreSQL dump, MariaDB dump, config copy, storage archive, manifest generation, restic init/check/backup/snapshot verification, prune, and service restart. For every case assert:
+Replace the backup existence test with stubs that record argv/stdin and model success plus failure at container validation, quiesce, PostgreSQL dump, MariaDB dump, config copy, storage archive, manifest generation, restic init/check/backup/snapshot verification, prune, and service restart. For every injected failure case assert (the success case instead exits zero and records a verified snapshot):
 
 - exit is nonzero at the failing step;
 - plaintext staging path no longer exists;
@@ -379,30 +398,35 @@ Expected: nonzero because current plaintext destination survives exit and no enc
 
 - [ ] **Step 3: Define the backup manifest**
 
-Require format version, source/candidate/release identity, source machine-ID hash, creation start/end, schema version and migration checksum set, component names/sizes/SHA-256, restic tags, and consistency method. Required components are PostgreSQL custom dump, MariaDB dump, `.env`/secret material encrypted inside restic, Traefik ACME, Jellyfin config, Grimmory config, shared storage, release capsule, and migration manifest. Redis is explicitly excluded as rebuildable.
+Require format version, source/candidate/release identity, source machine-ID hash, creation start/end, `consistencyPointAt` (time all writers became quiescent, before collection/upload), schema version and migration checksum set, component names/sizes/SHA-256, restic tags, and consistency method. Required components are PostgreSQL custom dump, MariaDB dump, `node.env`/secret material encrypted inside restic, Traefik ACME, Jellyfin config, Grimmory config, shared storage, release capsule, and migration manifest. Redis is explicitly excluded as rebuildable.
 
 - [ ] **Step 4: Implement consistent collection and unconditional cleanup**
+
+Create `scripts/lib/maintenance.sh`: `with_maintenance_lock COMMAND...` opens `${TELOS_OPS_STATE_PATH}/maintenance.lock`, takes nonblocking `flock` (contention `75`), and passes a verified inherited lock descriptor to internal backup/restore functions. Standalone entrypoints acquire once; upgrade calls internal already-locked functions rather than reacquiring and deadlocking. Do not accept an environment flag that bypasses locking. Test nested backup success, concurrent external backup rejection, foreign descriptor rejection, and lock release after interruption.
+
+Set `umask 077` before any dump/temp creation. Add startup recovery that removes only journaled task-owned staging paths after confirming no active lock holder; test SIGKILL followed by next-run cleanup. Trap cleanup must preserve the original status, attempt restart and cleanup independently even if one fails, and return nonzero on restart failure. Test that service restart failure never skips plaintext deletion. Validate path ownership, canonical parent and basename before removal.
 
 Acquire the maintenance lock. Validate candidate/restic configuration and off-node repository scheme. Create staging with:
 
 ```bash
+umask 077
 stage="$(mktemp -d "${TELOS_BACKUP_TMP_ROOT:-/var/tmp}/telos-backup.XXXXXX")"
 chmod 0700 "$stage"
-cleanup() { rc=$?; restart_initial_services; find "$stage" -type f -exec chmod 600 {} + 2>/dev/null || true; rm -rf -- "$stage"; exit "$rc"; }
-trap cleanup EXIT INT TERM HUP
+# Install independently tested cleanup_and_restart on EXIT; signal handlers
+# exit 130/143/129 and let EXIT cleanup preserve status and remove staging.
 ```
 
 Resolve and validate the explicit temp root before `rm -rf`; never allow `/`, `$HOME`, repository root, storage root, or release root. Enter maintenance mode and stop Traefik/core/Jellyfin/Grimmory writers, keep the static client and both databases available, produce consistent dumps/copies, generate hashes/manifest, then restart the stopped services before the potentially long upload.
 
 - [ ] **Step 5: Upload and verify with restic**
 
-Require restic repository initialized, run `restic backup "$stage" --tag scheduled --tag telos --tag "candidate:$candidate_lock_digest" --json`, parse the returned snapshot ID, verify tags/paths via `restic snapshots --json` and `restic ls --json`, run `restic check --read-data-subset=5%`, then prune with exact 14/8 policy. A check/prune failure makes the run failed, while the already-created snapshot remains available and is named in the error.
+Require the operator to initialize the declared off-node repository as a separate explicit setup action; backup never auto-initializes an unknown repository. Require it initialized, run `restic backup "$stage" --tag scheduled --tag telos --tag "candidate:$candidate_lock_digest" --json`, parse the returned snapshot ID, verify tags/paths via `restic snapshots --json` and `restic ls --json`, restore the snapshot manifest and compare its component digest list against the captured manifest, run `restic check --read-data-subset=5%`, then prune with exact 14/8 policy. A check/prune failure makes the run failed, while the already-created snapshot remains available and is named in the error.
 
-After verification, atomically write fixed-label last-success epoch/result metrics beneath `TELOS_OPS_STATE_PATH` for the internal collector. A failed run atomically records failure without erasing the last-success epoch. Remove `TELOS_KEEP_PLAINTEXT`. Do not print the repository credential environment.
+After verification, atomically write fixed-label last-success epoch/result metrics beneath `TELOS_OPS_STATE_PATH` (`/var/lib/telos/state`) for the internal collector. A failed run atomically records failure without erasing the last-success epoch. Remove `TELOS_KEEP_PLAINTEXT`. Do not print the repository credential environment.
 
 - [ ] **Step 6: Make the timer call the encrypted workflow**
 
-Use a systemd user service with `UMask=0077`, `NoNewPrivileges=true`, `PrivateTmp=true`, explicit environment-file paths, `OnCalendar=*-*-* 00,06,12,18:00`, `RandomizedDelaySec=30m`, persistent catch-up, and a 12-hour stale-success retry rule. The service invokes `backup.sh --candidate-lock /srv/telos/current/candidate-lock.json --evidence-out /var/lib/telos/ops/evidence/backup-latest.json`; it never invokes the old local directory interface.
+Use a root-owned systemd system service operating rootful Podman with `UMask=0077`, `NoNewPrivileges=true`, `PrivateTmp=true`, explicit environment-file paths, `OnCalendar=*-*-* 00,06,12,18:00`, `RandomizedDelaySec=30m`, persistent catch-up, and a 12-hour stale-success retry rule. The service invokes `backup.sh --candidate-lock /srv/telos/current/candidate-lock.json --result-out /var/lib/telos/state/backup-latest.result.json`; it never invokes the old local directory interface.
 
 - [ ] **Step 7: Add doctor and runbook checks**
 
@@ -426,7 +450,7 @@ Against a non-candidate reference stack and test off-node repository, create a s
 - [ ] **Step 10: Commit encrypted backups**
 
 ```bash
-git add scripts/backup.sh scripts/prune-backups.sh scripts/lib/backup_manifest.py \
+git add scripts/backup.sh scripts/prune-backups.sh scripts/lib/maintenance.sh scripts/lib/backup_manifest.py \
   release/backup-manifest.schema.json deploy/systemd/telos-backup.service \
   deploy/systemd/telos-backup.timer tests/operations/backup_restore_test.sh \
   scripts/tests/backup_test.sh documentation/operations/backup-and-restore.md \
@@ -485,8 +509,8 @@ Dispatch the one-shot command before serve initialization. Connect only through 
 Expose:
 
 ```text
-scripts/restore.sh --snapshot ID --candidate-lock PATH \
-  --release-generation PATH --evidence-out PATH \
+scripts/restore.sh --mode separate-host --snapshot ID --candidate-lock PATH \
+  --release-generation PATH --result-out PATH \
   --confirm RESTORE-TO-EMPTY-REFERENCE-HOST
 ```
 
@@ -501,11 +525,11 @@ Acquire the maintenance lock, require target host machine-ID hash differs from t
 Retain `--fixture` solely for timestamp policy tests, with status values aligned to Phase 1. Add live mode that computes:
 
 ```text
-RPO = incidentDeclaredAt - snapshotFinishedAt
+RPO = incidentDeclaredAt - consistencyPointAt
 RTO = externalJourneyPassedAt - incidentDeclaredAt
 ```
 
-Require RPO `<= 86400` and RTO `<= 14400`, distinct source/recovery machine hashes, restic snapshot ID, DNS/certificate verification, and external probe evidence. `scripts/drills/recovery.sh` delegates to live mode and cannot print standalone success.
+Require timestamp ordering `consistencyPointAt <= snapshotFinishedAt <= incidentDeclaredAt <= externalJourneyPassedAt`, RPO `<= 86400` and RTO `<= 14400`, distinct source/recovery machine hashes, restic snapshot ID, DNS/certificate verification, and external probe evidence. `scripts/drills/recovery.sh` delegates to live mode and cannot print standalone success.
 
 - [ ] **Step 8: Run local recovery tests**
 
@@ -552,12 +576,12 @@ git commit -m "ops: verify separate-host encrypted recovery"
 
 **Interfaces:**
 - Produces: immutable generation layout and durable operation journal.
-- Consumes: a verified generation from Phase 5's builder, image/candidate locks, and Task 4 backup command.
+- Consumes: the candidate-independent generation descriptor from Phase 5 Task 1a and a rehearsal build from Task 2a; final certification consumes Task 6 frozen bytes. Use image/candidate locks and Task 4 backup command.
 - Produces external gate: `upgrade-rollback`.
 
 - [ ] **Step 1: Replace upgrade existence tests with state-machine tests**
 
-Model a temporary release root with `generations/`, `current` symlink, `state/operation.json`, candidate/predecessor manifests, and stub backup/Compose/health commands. Cover successful upgrade, lock contention, unverified generation, wrong predecessor, backup failure, migration failure before activation, interruption at every journal state, readiness failure after activation, compatible binary rollback, incompatible schema refusing binary rollback and requiring restore, second invocation recovery, symlink/path escape, dirty generation, and evidence mismatch.
+Model a temporary release root with `generations/`, `current` symlink, the separate node `state/operation.json`, candidate/predecessor manifests, and stub backup/Compose/health commands. Cover successful upgrade, lock contention, unverified generation, wrong predecessor, backup failure, migration failure before activation, interruption at every journal state, readiness failure after activation, compatible binary rollback, incompatible schema refusing binary rollback and requiring restore, second invocation recovery, symlink/path escape, dirty generation, and evidence mismatch.
 
 - [ ] **Step 2: Run tests and expose success-only scripts**
 
@@ -569,7 +593,7 @@ Expected: nonzero because upgrade/rollback/predecessor scripts do not perform th
 
 - [ ] **Step 3: Define generation identity/compatibility**
 
-The manifest requires release ID/version, source commit, candidate-lock digest, artifact/image digests, migration min/current/max, migration checksum-set digest, predecessor IDs, rollback-compatible-through schema, creation time, and file inventory. Generation directories are mode `0755`, immutable to the service user, and addressed by candidate digest. `current` is the only mutable pointer.
+The payload `generation.json` follows exactly Phase 5 Task 1a's closed generation-manifest schema; its subset inventory excludes itself and outer graph metadata. It MUST NOT contain candidate-lock digest, installed path/time, or hashes of itself/outer release graph. After graph verification, write the separate installed receipt outside the payload; that receipt binds candidate-lock and generation-manifest digests. Generation directories are mode `0755`, immutable to the service user, and addressed by candidate digest; `current` is the only mutable activation pointer. Compare the receipt against the verified graph on every operation.
 
 Update predecessor policy to identify an actually buildable tagged/committed predecessor and its exact candidate/release digest; never leave a version-only assertion.
 
@@ -582,15 +606,15 @@ Update predecessor policy to identify an actually buildable tagged/committed pre
 Expose:
 
 ```text
-scripts/upgrade.sh --generation PATH --current-candidate-lock PATH \
-  --evidence-out PATH --confirm UPGRADE-THIS-NODE
+scripts/upgrade.sh --generation PATH --candidate-lock PATH --current-candidate-lock PATH \
+  --result-out PATH --confirm UPGRADE-THIS-NODE
 ```
 
 Acquire the maintenance lock, recover prior journal, verify source/current/predecessor compatibility, create and verify encrypted pre-upgrade snapshot, enter maintenance, stop services, run one-shot migrations from target generation, atomically activate, start exact target images, wait for readiness and HTTPS smoke, then mark complete. A pre-migration failure leaves current active. A post-migration failure follows the declared compatibility branch.
 
 - [ ] **Step 6: Implement rollback**
 
-Fast rollback activates the prior generation only when its manifest accepts the current schema/checksum set. Otherwise require the recorded encrypted snapshot and call the verified restore path. Both paths retain the failed generation and journal for investigation; neither deletes a release automatically.
+Fast rollback activates the prior generation only when its manifest accepts the current schema/checksum set. Otherwise require the recorded encrypted snapshot and call restore's `--mode rollback --operation-id ID --confirm RESTORE-RECORDED-ROLLBACK` path. This path permits the SAME host only when the locked durable upgrade journal binds that host, snapshot, from/to generations and failed operation. The `--mode separate-host` recovery gate still rejects the source host. Same-host rollback evidence cannot satisfy `separate-host-restore`. Both paths retain the failed generation and journal for investigation; neither deletes a release automatically.
 
 - [ ] **Step 7: Build and verify the predecessor**
 
@@ -657,7 +681,7 @@ Expected: nonzero because the current k6 default function is empty and both scri
 
 - [ ] **Step 3: Build the 100-member disposable fixture safely**
 
-`prepare-capacity-fixture.py` accepts URL/candidate lock, reads owner credential from a protected file descriptor, creates 100 invite/member accounts through public APIs, writes mode-`0600` credentials under a caller-supplied external temp directory, and records cleanup IDs. It never prints passwords/invites. Refuse use against a node lacking the explicit `capacity-test` marker in its health metadata.
+`prepare-capacity-fixture.py` accepts URL/candidate lock, reads owner credential from a protected file descriptor, creates 100 invite/member accounts through public APIs, writes mode-`0600` credentials under a caller-supplied external temp directory, and records cleanup IDs. It never prints passwords/invites. Refuse unless an operator-owned mode-`0600` `capacity-target.json` explicitly names `purpose: capacity-test`, the candidate-lock digest, target HTTPS origin and machine-ID hash. Verify those against the runtime receipt and HTTPS identity; do not invent a public health field (current `backend/health.go:54-67` has no such marker). Create invitations through `POST /api/v1/auth/invites`, accept through `POST /api/v1/auth/invites/accept`, and clean up via `DELETE /api/v1/admin/users/{id}` and `DELETE /api/v1/admin/invites/{id}` (`backend/main.go:434-475`).
 
 - [ ] **Step 4: Implement k6 scenarios**
 
@@ -680,11 +704,11 @@ export const options = {
 };
 ```
 
-Distribute all 100 accounts, keep exactly 25 concurrent authenticated users, cover Chat/Stream/Library/Files/commentary reads, alternate chat/commentary writes at 10 aggregate events/s, and verify response semantics—not just status. Do not stream full media bodies during every iteration; include bounded range requests.
+Distribute all 100 accounts, keep exactly 25 distinct simultaneously authenticated member sessions; both scenarios share these same sessions rather than logging in additional writer users, cover Chat/Stream/Library/Files/commentary reads, alternate chat/commentary writes at 10 aggregate events/s, and verify response semantics—not just status. Do not stream full media bodies during every iteration; include bounded range requests.
 
 - [ ] **Step 5: Implement capacity orchestration and stats**
 
-`run-capacity-drill.sh` validates host/runtime/candidate, starts stats collection at 5-second intervals, runs locked k6 from a separate load host/network, parses `summary-export`, and requires: thresholds pass; no container restart/OOM/health loss; CPU under 80% sustained and memory under 85% of limit; disk free above reserve; database pool/Redis/stream limits not saturated for over 60 seconds; final browser smoke passes. Evidence hashes raw k6/stats logs but excludes credentials.
+`run-capacity-drill.sh` validates host/runtime/candidate, starts stats collection at 5-second intervals, runs locked k6 from a separate load host/network, parses `summary-export`, and requires: thresholds pass; no container restart/OOM/health loss; CPU utilization below 80% of each service's configured CPU quota for every complete 60-second rolling window, memory strictly below 85% of configured limit at every sample, free storage at least max(10 GiB, 10% of filesystem capacity), and no 60-second interval with database pool use at its configured maximum, Redis used memory at its configured maxmemory, or active stream count at its configured maximum; final browser smoke passes. Evidence hashes raw k6/stats logs but excludes credentials.
 
 - [ ] **Step 6: Define and audit exposure**
 
@@ -708,7 +732,7 @@ Expected: all local/static commands exit `0`; live modes without environments ex
 
 - [ ] **Step 9: Run live operational drills**
 
-Against the same test candidate/reference host, run egress, external exposure, then capacity. Do not run backup/upgrade concurrently. Expected: three candidate/runtime-bound `passed` envelopes and post-drill browser smoke success. Delete disposable users with the cleanup manifest afterward and record cleanup separately.
+Against the same test candidate/reference host, run egress, external exposure, then capacity. Do not run backup/upgrade concurrently. Expected: three rehearsal `passed` results (or final candidate-bound envelopes only under Phase 5 Task 6) and post-drill browser smoke success. Delete disposable users with the cleanup manifest afterward and record cleanup separately.
 
 - [ ] **Step 10: Commit operational drills**
 
@@ -746,7 +770,7 @@ git commit -m "ops: run real capacity exposure and egress drills"
 
 - [ ] **Step 1: Add tool/policy/result mutation tests**
 
-Test missing tool digest, wrong downloaded digest, unlisted tool, malformed/expired/overbroad risk acceptance, Critical vulnerability, unaccepted High vulnerability, accepted exact High CVE+package+version before expiry, forbidden linked license, missing license, isolated GPL service falsely classified as linked, secret fixture detection, SBOM missing an artifact, and result bound to another candidate. The validator must reject a report created before the artifact timestamp or with a different scanner DB digest.
+Test missing tool digest, wrong downloaded digest, unlisted tool, malformed/expired/overbroad risk acceptance, Critical vulnerability, unaccepted High vulnerability, accepted exact High CVE+package+version before expiry, forbidden linked license, missing license, isolated GPL service falsely classified as linked, secret fixture detection, SBOM missing an artifact, and result bound to another candidate. The validator must reject a report created before the artifact timestamp or with a different scanner DB digest. Pin scanner database snapshot digest and retrievedAt in scan metadata, require database age <=24 hours when the scan starts, and evidence age <=24 hours at certification. Do not put mutable scanner DB identity inside the frozen candidate payload.
 
 - [ ] **Step 2: Run tests and expose existence-only SBOM validation**
 
@@ -766,11 +790,11 @@ Define `linkedArtifacts` for Go core, browser JS, and Rust desktop bundles with 
 
 - [ ] **Step 5: Generate one SBOM per immutable artifact**
 
-`generate-sbom.sh --candidate-lock PATH --out-dir PATH` verifies artifact digests first, runs locked Syft against core/client OCI archives and each desktop package, captures Go/npm/Cargo dependency lock digests, emits SPDX JSON with deterministic filenames, and writes an index mapping artifact digest to SBOM digest. It does not scan a mutable tag.
+`generate-sbom.sh --payload-index PATH --artifact-root PATH --out-dir PATH` verifies payload artifact digests first, runs locked Syft against every indexed OCI archive (including isolated third-party service images) and the Linux desktop package, captures Go/npm/Cargo dependency lock digests, emits artifact-bound SPDX JSON with deterministic filenames, and writes an index mapping artifact digest to SBOM digest. The payload index is a pre-lock index of content artifacts only, excluding SBOMs and graph metadata. SBOMs never embed the future candidate-lock digest. Final assembly indexes both content artifacts and generated SBOMs; post-freeze scan evidence binds that graph to the candidate. It does not scan a mutable tag.
 
 - [ ] **Step 6: Implement candidate scanning**
 
-`scan-candidate.sh` verifies tools/locks, runs gitleaks against the exact source tree, Trivy against each OCI archive/SBOM/package, evaluates licenses, and validates risk acceptances. Policy: any secret or Critical fails; High fails unless an acceptance names exact CVE, package, version, artifact, owner, rationale, issue URL, creation, and unexpired expiry at most 30 days. Empty `risk-acceptances.json` is valid.
+`scan-candidate.sh --candidate-lock PATH --artifact-root PATH --sbom-dir PATH --result-out PATH` runs only after freeze and verifies tools/locks, runs gitleaks against the exact source tree, Trivy against each OCI archive/SBOM/package, evaluates licenses, and validates risk acceptances. Policy: any secret or Critical fails; High fails unless an acceptance names exact CVE, package, version, artifact, owner, rationale, issue URL, creation, and unexpired expiry at most 30 days. Empty `risk-acceptances.json` is valid.
 
 - [ ] **Step 7: Make SBOM validation semantic**
 
@@ -785,7 +809,7 @@ bash scripts/check-product-truth.sh
 bash scripts/verify-release-pins.sh
 ```
 
-Then generate/scan test artifacts from the Phase 4 source lock. Expected: all policies pass or produce a concrete reviewed blocking report; do not weaken policy to clear a finding.
+Then generate SBOMs for rehearsal artifacts from the Phase 4 source lock; after assembling their rehearsal lock, scan that lock. Expected: all policies pass or produce a concrete reviewed blocking report; do not weaken policy to clear a finding.
 
 - [ ] **Step 9: Wire required CI gates**
 
@@ -818,7 +842,7 @@ git commit -m "ci: gate immutable artifacts on supply-chain policy"
 
 - [ ] **Step 1: Require the complete operational inventory structurally**
 
-Extend product/clean-checkout checks for image/tool/policy locks, backup/generation manifests, systemd units, operation scripts, external gate IDs, and absence of success-only script bodies. Mark backups shipping only after a reviewed live snapshot and separate-host restore pass; before then keep the matrix blocked.
+Extend product/clean-checkout checks for image/tool/policy locks, backup/generation manifests, systemd units, operation scripts, external gate IDs, and absence of success-only script bodies. Keep backup/recovery shipping claims blocked until Phase 5 Task 6 final candidate evidence passes; record implementation and rehearsal state separately.
 
 - [ ] **Step 2: Run the complete local Phase 4 suite**
 
@@ -843,9 +867,9 @@ bash scripts/test-backend.sh
 
 Expected: every local command exits `0`; all live commands without their environments return `3`/`not_run` rather than success.
 
-- [ ] **Step 3: Execute live gates against one Phase 4 test generation**
+- [ ] **Step 3: Record operational rehearsal outcomes (not an implementation merge prerequisite)**
 
-In order, verify image/runtime hardening and monitoring, take encrypted backup, perform separate-host restore, run predecessor upgrade/rollback, run controlled egress/exposure, then capacity. Use the same source/test-generation digest everywhere and stop on the first failure. Expected: all nine external Phase 4 envelopes are `passed` before review.
+In order, verify image/runtime hardening and monitoring, take encrypted backup, perform separate-host restore, run predecessor upgrade/rollback, run controlled egress/exposure, then capacity. Use one identified rehearsal generation; record rehearsal supply-chain results without calling them candidate evidence. The final candidate-supply-chain gate waits for Phase 5 Task 6. Record each of the nine gate outcomes, with absent external inputs `not_run`. A failed behavior must be fixed; missing hosts/keys/repositories block only the affected rehearsal and final certification, not local implementation review or unrelated work. Rehearsal records cannot satisfy final candidate gates.
 
 - [ ] **Step 4: Review recovery and security evidence**
 
@@ -853,7 +877,7 @@ Review raw log digests, host identities, snapshot ID, RPO/RTO calculation, gener
 
 - [ ] **Step 5: Update product status and commit enforcement**
 
-Only after the live review, update backup/recovery/operations claims. Then:
+Record local tests and available rehearsal results without declaring shipping or certified status. Shipping claims wait for Phase 5 Task 6. Then:
 
 ```bash
 git add ci/phase-gates.json documentation/product/beta-feature-status.md \

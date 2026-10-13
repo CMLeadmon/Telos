@@ -1,5 +1,7 @@
 # Connection Layer — Design
 
+> **Scope superseded on 2026-10-12:** [Platform policy](../../../documentation/product/platform-scope.md) is binding: Ubuntu 24.04+ server only; browser and Linux desktop first; Windows/Mac native clients deferred. Any Windows/macOS server work or initial native-client gates in this historical document are out of scope for the first delivery. Other technical work and required safety evidence remain applicable.
+
 The Connection Layer sub-project introduces server URL entry, transport validation, secure credential storage, and network reconnection management to the Telos Next.js frontend client. It enables users to point native desktop, mobile, or remote web client builds at self-hosted Telos nodes, establish transport security using Trust-On-First-Use (TOFU) certificate pinning, maintain socket connectivity across mobile backgrounding cycles, and disconnect cleanly. This sub-project unblocks S5 (Tauri Shell) by providing the multi-server connection state machine required by non-browser native client packages.
 
 ## 1. Purpose

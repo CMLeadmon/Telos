@@ -850,8 +850,8 @@ assert "gatesPassed" not in catalog, catalog
 ids = [gate["id"] for gate in catalog["gates"]]
 assert len(ids) == len(set(ids)), "repository catalog has duplicate IDs"
 required_external = {
-    "clean-install", "browser-matrix", "desktop-linux", "desktop-windows",
-    "desktop-macos", "runtime-hardening", "monitoring", "encrypted-backup",
+    "clean-install", "browser-matrix", "desktop-linux",
+    "runtime-hardening", "monitoring", "encrypted-backup",
     "separate-host-restore", "upgrade-rollback", "capacity", "host-exposure",
     "controlled-egress", "candidate-supply-chain",
 }
@@ -862,8 +862,6 @@ required_current_local = {
     "gate-catalog", "accumulated-suite", "product-truth-tests",
     "backend-headless-build", "api-contract-drift",
     "operator-cli-linux-amd64", "operator-cli-linux-arm64",
-    "operator-cli-windows-amd64", "operator-cli-windows-arm64",
-    "operator-cli-darwin-amd64", "operator-cli-darwin-arm64",
     "frontend-playwright", "documentation-citation-hygiene",
     "documentation-placeholder-hygiene",
 }
@@ -900,7 +898,7 @@ assert accessibility_gate["command"] == [
 ]
 assert "frontend-accessibility" in gate_by_id["frontend-quality"]["prerequisites"]
 assert "frontend-accessibility" in gate_by_id["beta-certification"]["prerequisites"]
-for platform in ("linux", "windows", "darwin"):
+for platform in ("linux",):
     for architecture in ("amd64", "arm64"):
         command = gate_by_id[f"operator-cli-{platform}-{architecture}"]["command"]
         assert f"GOOS={platform}" in command, command
@@ -987,6 +985,7 @@ REQUIRED_COMMANDS = [
     "bash tests/operations/beta_certification_test.sh",
     "bash tests/operations/ci_gates_test.sh",
     "bash tests/operations/accumulated_suite_test.sh",
+    "python3 tests/operations/platform_scope_test.py",
     "bash tests/operations/product_truth_test.sh",
     "bash scripts/check-product-truth.sh",
     "bash scripts/check-release-truth.sh",
