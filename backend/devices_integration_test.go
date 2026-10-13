@@ -430,3 +430,61 @@ func TestWSTicketHandlerBindsTicketToTheCallersDevice(t *testing.T) {
 		t.Fatal("a ticket from the handler survived its device being revoked")
 	}
 }
+
+// A device-token client has no cookie, so logout used to answer 400 "No active
+// session" and leave its credential alive. It must revoke the device.
+func TestBearerLogoutRevokesTheDevice(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+	handler := productionChain(t)
+
+	var userID string
+	if err := f.DB.QueryRow(ctx,
+		`INSERT INTO users (username, password_hash) VALUES ('logoutuser','x') RETURNING id`,
+	).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	deviceID, refresh, access, err := registerDevice(ctx, userID, "Desktop", "linux", "0.1.0")
+	if err != nil {
+		t.Fatalf("registerDevice: %v", err)
+	}
+
+	logout := func(token string) int {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+		r.Header.Set("Origin", "tauri://localhost")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, r)
+		return rec.Code
+	}
+
+	if got := logout(access); got != http.StatusOK {
+		t.Fatalf("bearer logout status = %d, want 200", got)
+	}
+	if _, err := LoadAuthenticatedUser(ctx, f.DB, sha256Hex(access)); err == nil {
+		t.Fatal("the access token still authenticates after logout")
+	}
+	if _, _, err := rotateDeviceToken(ctx, refresh); err == nil {
+		t.Fatal("the refresh token still rotates after logout")
+	}
+	var revoked bool
+	if err := f.DB.QueryRow(ctx, `SELECT revoked_at IS NOT NULL FROM devices WHERE id=$1`, deviceID).Scan(&revoked); err != nil || !revoked {
+		t.Fatalf("device revoked = %v err = %v", revoked, err)
+	}
+	if got := logout(access); got != http.StatusUnauthorized {
+		t.Fatalf("a second logout with the dead token = %d, want 401", got)
+	}
+}
+
+func TestMeNeverSerializesTheSessionHash(t *testing.T) {
+	user := &UserContext{ID: "u", Username: "n", DeviceID: "d", SessionHash: "super-secret-lookup-key"}
+	encoded, err := json.Marshal(user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "super-secret-lookup-key") || strings.Contains(string(encoded), "SessionHash") {
+		t.Fatalf("UserContext leaks its session hash: %s", encoded)
+	}
+}

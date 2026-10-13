@@ -10,8 +10,7 @@
 interface NativeWindow {
   __TAURI_INTERNALS__?: unknown;
   __TELOS_NATIVE_SHELL__?: unknown;
-  __TELOS_NATIVE_TLS__?: unknown;
-  __TELOS_NATIVE_STORE__?: unknown;
+  __TELOS_NATIVE_CREDENTIALS__?: unknown;
 }
 
 /**
@@ -25,8 +24,7 @@ export function isNativeApp(): boolean {
   return (
     "__TAURI_INTERNALS__" in win ||
     "__TELOS_NATIVE_SHELL__" in win ||
-    "__TELOS_NATIVE_TLS__" in win ||
-    "__TELOS_NATIVE_STORE__" in win
+    "__TELOS_NATIVE_CREDENTIALS__" in win
   );
 }
 

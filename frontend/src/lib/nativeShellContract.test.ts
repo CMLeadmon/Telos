@@ -2,13 +2,12 @@ import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 
-// The frontend and the Tauri shell agree on two window globals, and both sides
+// The frontend and the Tauri shell agree on window globals, and both sides
 // fall back silently when they are absent — that silence is what makes the same
 // static export work in a browser. It also means a rename on either side turns
-// off certificate pinning and credential persistence with no error anywhere: the
-// client just quietly forgets its refresh token every launch and treats every
-// certificate as first-use. Nothing at runtime can catch that, so the contract
-// is checked here, across the language boundary, in both directions.
+// off credential persistence or the native shell helpers with no error anywhere.
+// Nothing at runtime can catch that, so the contract is checked here, across the
+// language boundary, in both directions.
 
 const root = path.resolve(__dirname, "../..");
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), "utf-8");
@@ -34,8 +33,7 @@ describe("native shell bridge contract", () => {
     // constant duplicated in the test would drift with the shell, not with the
     // code that actually looks the global up.
     for (const [module, global] of [
-      ["src/lib/certPinning.ts", "__TELOS_NATIVE_TLS__"],
-      ["src/lib/secureStorage.ts", "__TELOS_NATIVE_STORE__"],
+      ["src/lib/secureStorage.ts", "__TELOS_NATIVE_CREDENTIALS__"],
       ["src/lib/platform.ts", "__TELOS_NATIVE_SHELL__"],
     ] as const) {
       expect(read(module)).toContain(global);
@@ -46,12 +44,12 @@ describe("native shell bridge contract", () => {
   it("implements every method the frontend calls on those bridges", () => {
     const shell = shellSource();
     for (const method of [
-      "leafCertificate", // NativeTlsBridge
       "openExternal", // NativeShellBridge
       "writeClipboard",
-      "get:", // NativeSecretStore
+      "get:", // NativeCredentialBridge
       "set:",
       "delete:",
+      "legacyStoreRetired",
     ]) {
       expect(shell).toContain(method);
     }
@@ -82,5 +80,55 @@ describe("native shell bridge contract", () => {
     for (const icon of conf.bundle.icon as string[]) {
       expect(fs.existsSync(path.join(root, "src-tauri", icon))).toBe(true);
     }
+  });
+});
+
+describe("retired plaintext secret store", () => {
+  const walk = (dir: string, out: string[] = []): string[] => {
+    for (const entry of fs.readdirSync(path.join(root, dir), { withFileTypes: true })) {
+      const rel = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) walk(rel, out);
+      else out.push(rel);
+    }
+    return out;
+  };
+
+  // The shell's secrets moved to the OS credential service. None of the old
+  // bridge names, key prefix or plugin may remain in code or configuration. The
+  // legacy filename is allowed only in the one-time retirement helper.
+  it("leaves no store plugin, bridge or key prefix in production sources", () => {
+    const files = [
+      ...walk("src").filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f)),
+      ...walk("src-tauri/src").filter((f) => f.endsWith(".rs")),
+      "src-tauri/Cargo.toml",
+      ...walk("src-tauri/capabilities"),
+    ];
+    for (const file of files) {
+      let text = read(file);
+      const testMod = text.indexOf("#[cfg(test)]");
+      if (file.endsWith(".rs") && testMod !== -1) text = text.slice(0, testMod);
+      for (const forbidden of ["tauri_plugin_store", "tauri-plugin-store", "telos_secret_", "__TELOS_NATIVE_STORE__", "store:default"]) {
+        expect(text, `${file} still mentions ${forbidden}`).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it("names the legacy file only in the retirement helper", () => {
+    const offenders = walk("src-tauri/src")
+      .filter((f) => f.endsWith(".rs"))
+      .filter((f) => read(f).includes("telos-secrets.json"));
+    expect(offenders).toEqual(["src-tauri/src/credentials.rs"]);
+    for (const file of walk("src").filter((f) => /\.(ts|tsx)$/.test(f) && !/\.test\./.test(f))) {
+      expect(read(file), file).not.toContain("telos-secrets.json");
+    }
+  });
+
+  it("pins keyring 4.1.6 with the v1 feature and no cli feature", () => {
+    const manifest = read("src-tauri/Cargo.toml");
+    expect(manifest).toMatch(/keyring\s*=\s*\{[^}]*version\s*=\s*"=4\.1\.6"[^}]*\}/);
+    const line = /keyring\s*=\s*\{[^}]*\}/.exec(manifest)![0];
+    expect(line).toContain('features = ["v1"]');
+    expect(line).toContain("default-features = false");
+    expect(line).not.toContain("cli");
   });
 });

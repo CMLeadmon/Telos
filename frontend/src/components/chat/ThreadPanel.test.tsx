@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/api", () => ({
   api: vi.fn(),
+  setAccessRefresher: vi.fn(),
   ApiError: class ApiError extends Error {},
   wsBase: () => "ws://localhost",
 }));

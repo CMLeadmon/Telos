@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   BookOpen,
   Github,
@@ -14,6 +16,7 @@ import { ExternalLink } from "@/components/ExternalLink";
 import { useThemeStore } from "@/stores/useThemeStore";
 import { useConnectionStore } from "@/stores/useConnectionStore";
 import { requiresServerSelection } from "@/lib/serverConfig";
+import { loadConnectionProfile } from "@/lib/connectionProfile";
 import { VaporwaveScene } from "@/components/VaporwaveScene";
 
 export default function LandingPage() {
@@ -23,6 +26,16 @@ export default function LandingPage() {
   // login form. A web build is already being served by its node, so sending it
   // to /connect would ask which server it is currently talking to.
   const connectionState = useConnectionStore((s) => s.state);
+  const hydrateFromProfile = useConnectionStore((s) => s.hydrateFromProfile);
+  const router = useRouter();
+  // A native shell remembers its node and (non-secretly) who signed in. Restore
+  // the origin, and send a returning member straight to sign-in, which resumes
+  // their session from the OS credential service without re-entering a password.
+  useEffect(() => {
+    hydrateFromProfile();
+    const profile = loadConnectionProfile();
+    if (profile?.userId) router.replace("/login/");
+  }, [hydrateFromProfile, router]);
   const launchHref =
     connectionState === "configured" || !requiresServerSelection()
       ? "/login/"

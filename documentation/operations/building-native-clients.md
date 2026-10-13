@@ -33,13 +33,13 @@ node whose `.env` lists neither answers `403 origin_forbidden` to device
 registration, token refresh, and every write the client attempts — the client
 reaches the node, reads fine, and cannot do anything.
 
-The planned Linux client requires its exact Tauri origin. The following is a
-configuration reference; current Compose does not yet pass this variable and
-preflight handling remains incomplete. Broader Windows client origins belong
-to the deferred client phase:
+The beta configuration is exactly the pair below: `.env.example` ships it,
+Compose passes it to `telos-core`, and `telos start` refuses a production node
+whose value differs (no wildcard, `null`, path, query, userinfo or arbitrary
+localhost origin):
 
 ```bash
-TELOS_ALLOWED_ORIGINS=https://telos.example.com,tauri://localhost
+TELOS_ALLOWED_ORIGINS=tauri://localhost,http://tauri.localhost
 ```
 
 Restart `telos-core` after changing it.
@@ -110,6 +110,7 @@ client.
 |---|---|
 | `failed to run custom build command for tauri-build` | `frontend/out/` is missing — run `npm run build`, or let `beforeBuildCommand` do it. |
 | `403 origin_forbidden` on sign-in or any write | The node's `TELOS_ALLOWED_ORIGINS` is missing the Tauri origins above. |
-| Certificate pinning reports `unsupported` | The `__TELOS_NATIVE_TLS__` bridge is absent — a web build, or a shell built without `src/tls.rs`. Expected in a browser tab. |
-| Client re-registers a device on every launch | The `__TELOS_NATIVE_STORE__` bridge is absent, so secrets fall back to an in-memory map. |
+| "no operating-system credential service is available" | No Secret Service on the session D-Bus (install and unlock GNOME Keyring or KeePassXC's Secret Service) — the sign-in is refused rather than kept in memory. |
+| "credential service is locked" | The Secret Service collection is locked or the unlock prompt was denied; unlock it and sign in again. |
+| "Could not establish a trusted connection" | The node's certificate is not trusted by this computer. Use a public CA or install the operator's private CA in the operating-system trust store; the client has no override. |
 | `webkit2gtk-4.0` errors on Linux | The `4.1` `-dev` package is the one Tauri v2 needs. |

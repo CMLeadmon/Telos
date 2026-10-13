@@ -4,6 +4,9 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
+import { CredentialStoreError } from "@/lib/secureStorage";
+import { StaleAuthError } from "@/lib/deviceAuth";
+import { isNativeApp } from "@/lib/nativeEnv";
 import { ApiError } from "@/lib/api";
 import { BrandLogo } from "@/components/BrandLogo";
 import { useThemeStore } from "@/stores/useThemeStore";
@@ -80,6 +83,20 @@ const validate = (
 };
 
 const errorFeedback = (mode: Mode, error: unknown): Feedback => {
+  if (error instanceof CredentialStoreError) {
+    return {
+      kind: "error",
+      message: `could not keep you signed in — ${error.message}`,
+      invalidFields: [],
+    };
+  }
+  if (error instanceof StaleAuthError) {
+    return {
+      kind: "error",
+      message: "the node changed while you were signing in — try again.",
+      invalidFields: [],
+    };
+  }
   const status = error instanceof ApiError ? error.status : -1;
   const detail = error instanceof Error ? error.message.toLowerCase() : "";
 
@@ -201,7 +218,8 @@ export default function LoginPage() {
   // The ink mockups set the wordmark in title case, the synthwave ones in caps.
   const wordmark = useThemeStore((s) => (s.theme === "ink" ? "Telos" : "TELOS"));
   const router = useRouter();
-  const { status, fetchMe, login, bootstrap, acceptInvite } = useAuthStore();
+  const { status, initializeAuth, login, bootstrap, acceptInvite, notice, credentialIssue, cleanupRequired, retryCleanup, connectivity } = useAuthStore();
+  const native = isNativeApp();
   const [mode, setMode] = useState<Mode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -214,9 +232,9 @@ export default function LoginPage() {
   const tokenRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (status === "unknown") void fetchMe();
+    if (status === "unknown") void initializeAuth();
     if (status === "authenticated" && !busy) router.replace("/chat/");
-  }, [status, busy, fetchMe, router]);
+  }, [status, busy, initializeAuth, router]);
 
   const focusField = (field?: FieldName) => {
     if (field === "username") usernameRef.current?.focus();
@@ -381,6 +399,33 @@ export default function LoginPage() {
           </div>
         )}
 
+        {native && (
+          <p className="connect-hint" data-testid="native-account-note">
+            {"// new here? create your account in the hosted browser, then sign in with the same details."}
+          </p>
+        )}
+        {native && notice && (
+          <p className="connect-hint" role="status" data-testid="auth-notice">{`// ${notice}`}</p>
+        )}
+        {native && credentialIssue && (
+          <p className="authfeedback error" role="alert" data-testid="credential-issue">
+            {`// ${credentialIssue}`}
+            {cleanupRequired && (
+              <button type="button" className="btn-ghost btn-sm" onClick={() => void retryCleanup()}>
+                Retry cleanup
+              </button>
+            )}
+          </p>
+        )}
+        {native && status === "unknown" && connectivity === "error" && (
+          <p className="authfeedback error" role="alert" data-testid="node-unreachable">
+            {"// the node is unreachable — your sign-in is kept. "}
+            <button type="button" className="btn-ghost btn-sm" onClick={() => void initializeAuth()}>
+              Retry
+            </button>
+          </p>
+        )}
+
         {feedback && (
           <div
             id="auth-feedback"
@@ -414,7 +459,7 @@ export default function LoginPage() {
           }}
         >
           {(["login", "bootstrap", "invite"] as Mode[])
-            .filter((m) => m !== mode)
+            .filter((m) => m !== mode && !native)
             .map((m) => (
               <button
                 key={m}

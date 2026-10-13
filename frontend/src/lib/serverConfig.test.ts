@@ -1,5 +1,5 @@
-import { describe, expect, it, beforeEach } from "vitest";
-import { getServerConfig, setServerConfig } from "@/lib/serverConfig";
+import { describe, expect, it, beforeEach, vi } from "vitest";
+import { NodeUrlError, getServerConfig, normalizeTrustedNodeUrl, setServerConfig } from "@/lib/serverConfig";
 
 describe("serverConfig", () => {
   beforeEach(() => {
@@ -61,5 +61,54 @@ describe("serverConfig base URL normalization", () => {
     setServerConfig({ baseUrl: "https://telos.example.com", mode: "cookie", accessToken: null });
     getServerConfig().baseUrl = "https://attacker.example.com";
     expect(getServerConfig().baseUrl).toBe("https://telos.example.com");
+  });
+});
+
+describe("normalizeTrustedNodeUrl", () => {
+  it("adds https to a bare host and folds case and the default port", () => {
+    expect(normalizeTrustedNodeUrl("telos.example.com")).toBe("https://telos.example.com");
+    expect(normalizeTrustedNodeUrl("  Telos.Example.COM:443/ ")).toBe("https://telos.example.com");
+    expect(normalizeTrustedNodeUrl("https://telos.example.com:8443")).toBe("https://telos.example.com:8443");
+  });
+
+  it("refuses plain http except loopback in a debug build", () => {
+    expect(() => normalizeTrustedNodeUrl("http://telos.example.com", false)).toThrow(NodeUrlError);
+    expect(() => normalizeTrustedNodeUrl("http://telos.example.com", true)).toThrow(/https/i);
+    expect(() => normalizeTrustedNodeUrl("http://localhost:8080", false)).toThrow(/https/i);
+    expect(normalizeTrustedNodeUrl("http://localhost:8080", true)).toBe("http://localhost:8080");
+    expect(normalizeTrustedNodeUrl("http://127.0.0.1:8080", true)).toBe("http://127.0.0.1:8080");
+    expect(normalizeTrustedNodeUrl("http://[::1]:8080", true)).toBe("http://[::1]:8080");
+    expect(() => normalizeTrustedNodeUrl("http://localhost.evil.example", true)).toThrow(/https/i);
+  });
+
+  it("distinguishes invalid, credentialed and path-bearing addresses", () => {
+    const problem = (raw: string) => {
+      try {
+        normalizeTrustedNodeUrl(raw, false);
+      } catch (error) {
+        return (error as NodeUrlError).problem;
+      }
+      return null;
+    };
+    expect(problem("http://")).toBe("invalid_url");
+    expect(problem("https://user:pw@telos.example.com")).toBe("credentials");
+    expect(problem("https://telos.example.com/telos")).toBe("not_an_origin");
+    expect(problem("https://telos.example.com/?a=1")).toBe("not_an_origin");
+    expect(problem("https://telos.example.com/#x")).toBe("not_an_origin");
+    expect(problem("ftp://telos.example.com")).toBe("https_required");
+    expect(problem("")).toBe("invalid_url");
+  });
+
+  it("is a release-build refusal: the loopback exception follows NODE_ENV", async () => {
+    const previous = process.env.NODE_ENV;
+    try {
+      vi.stubEnv("NODE_ENV", "production");
+      expect(() => normalizeTrustedNodeUrl("http://localhost:8080")).toThrow(/https/i);
+      vi.stubEnv("NODE_ENV", "development");
+      expect(normalizeTrustedNodeUrl("http://localhost:8080")).toBe("http://localhost:8080");
+    } finally {
+      vi.unstubAllEnvs();
+      expect(process.env.NODE_ENV).toBe(previous);
+    }
   });
 });

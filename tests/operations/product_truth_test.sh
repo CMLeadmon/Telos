@@ -838,6 +838,50 @@ elif [[ $? -ne 1 ]]; then
   exit 1
 fi
 
+# --- desktop client contract (Phase 3) ------------------------------------------
+desktop_fixture() { # NAME -> a clean fixture that also carries the desktop inputs
+  local fixture="$fixture_root/$1"
+  copy_fixture "$fixture"
+  mkdir -p "$fixture/frontend/src/lib" "$fixture/frontend/src-tauri/src"
+  cp "$repo_root/frontend/src/lib/secureStorage.ts" "$fixture/frontend/src/lib/secureStorage.ts"
+  cp "$repo_root/frontend/src-tauri/Cargo.toml" "$fixture/frontend/src-tauri/Cargo.toml"
+  cp "$repo_root/frontend/src-tauri/Cargo.lock" "$fixture/frontend/src-tauri/Cargo.lock"
+  cp "$repo_root/frontend/src-tauri/src/lib.rs" "$fixture/frontend/src-tauri/src/lib.rs"
+  cp "$repo_root/frontend/src-tauri/src/credentials.rs" "$fixture/frontend/src-tauri/src/credentials.rs"
+  cp "$repo_root/.env.example" "$fixture/.env.example"
+}
+desktop_clean="$fixture_root/desktop-clean"
+desktop_fixture desktop-clean
+bash "$repo_root/scripts/check-product-truth.sh" --root "$desktop_clean"
+
+desktop_fixture desktop-store
+printf '\n// legacy\nconst k = "__TELOS_NATIVE_STORE__";\n' >>"$fixture_root/desktop-store/frontend/src/lib/secureStorage.ts"
+assert_rejected "plaintext-store-bridge" "desktopCredentials" "$fixture_root/desktop-store"
+
+desktop_fixture desktop-plugin
+printf 'tauri-plugin-store = "2"\n' >>"$fixture_root/desktop-plugin/frontend/src-tauri/Cargo.toml"
+assert_rejected "store-plugin-dependency" "desktopCredentials" "$fixture_root/desktop-plugin"
+
+desktop_fixture desktop-keyring
+sed -i 's/version = "=4.1.6"/version = "=4.1.5"/' "$fixture_root/desktop-keyring/frontend/src-tauri/Cargo.toml"
+assert_rejected "keyring-pin" "desktopCredentials" "$fixture_root/desktop-keyring"
+
+desktop_fixture desktop-legacy-name
+sed -i '1i // reads telos-secrets.json' "$fixture_root/desktop-legacy-name/frontend/src-tauri/src/lib.rs"
+assert_rejected "legacy-filename-outside-helper" "desktopCredentials" "$fixture_root/desktop-legacy-name"
+
+desktop_fixture desktop-origins
+sed -i 's#^TELOS_ALLOWED_ORIGINS=.*#TELOS_ALLOWED_ORIGINS=*#' "$fixture_root/desktop-origins/.env.example"
+assert_rejected "wildcard-origin" "desktopOrigins" "$fixture_root/desktop-origins"
+
+desktop_fixture desktop-pinning
+printf '\nTelos pins the certificate on first use (TOFU) for every node.\n' >>"$fixture_root/desktop-pinning/README.md"
+assert_rejected "pinning-claim" "platformTrust" "$fixture_root/desktop-pinning"
+
+desktop_fixture desktop-pinning-denied
+printf '\nTelos does not support certificate pinning; the platform trust store decides.\n' >>"$fixture_root/desktop-pinning-denied/README.md"
+bash "$repo_root/scripts/check-product-truth.sh" --root "$fixture_root/desktop-pinning-denied"
+
 if ! cli_help="$("$repo_root/telos" help)"; then
   echo "Bash ./telos dispatcher did not produce the authoritative CLI help" >&2
   exit 1

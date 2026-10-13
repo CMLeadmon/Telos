@@ -3,13 +3,11 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import ConnectPage from "./page";
 import { useConnectionStore } from "@/stores/useConnectionStore";
 import { getServerConfig } from "@/lib/serverConfig";
-import type { NativeTlsBridge } from "@/lib/certPinning";
+import { loadConnectionProfile } from "@/lib/connectionProfile";
+import { createFakeKeychain, type FakeKeychain } from "@/test/fakeNode";
 
 const push = vi.fn();
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
-
-const CERT_A = "AA:BB:CC:DD:EE:FF:00:11:22:33:44:55:66:77:88:99";
-const CERT_B = "99:88:77:66:55:44:33:22:11:00:FF:EE:DD:CC:BB:AA";
 
 // A Response body can only be read once, and a test that connects twice would
 // otherwise get an already-consumed body on the second probe and misreport it
@@ -23,16 +21,6 @@ function mockHealth(body: Record<string, unknown>, status = 200) {
   );
 }
 
-function installBridge(fingerprint: string) {
-  (window as unknown as { __TELOS_NATIVE_TLS__?: NativeTlsBridge }).__TELOS_NATIVE_TLS__ = {
-    leafCertificate: async () => ({
-      fingerprintSha256: fingerprint,
-      subject: "CN=telos.example.com",
-      issuer: "CN=Telos Self-Signed",
-    }),
-  };
-}
-
 function typeAndConnect(value: string) {
   fireEvent.change(screen.getByLabelText(/server address/i), { target: { value } });
   fireEvent.click(screen.getByRole("button", { name: /^connect$/i }));
@@ -42,10 +30,6 @@ beforeEach(() => {
   push.mockClear();
   useConnectionStore.getState().reset();
   vi.restoreAllMocks();
-});
-
-afterEach(() => {
-  delete (window as unknown as { __TELOS_NATIVE_TLS__?: NativeTlsBridge }).__TELOS_NATIVE_TLS__;
 });
 
 describe("ConnectPage", () => {
@@ -72,11 +56,8 @@ describe("ConnectPage", () => {
     expect(String(fetchSpy.mock.calls[0][0])).toBe("https://telos.example.com/api/v1/health");
   });
 
-  // A node that answers but is not Telos must not be accepted as one.
   it("rejects an address that answers without a health report", async () => {
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response("<html>hello</html>", { status: 200 }),
-    );
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("<html>hello</html>", { status: 200 }));
     render(<ConnectPage />);
     typeAndConnect("https://not-telos.example.com");
 
@@ -84,6 +65,7 @@ describe("ConnectPage", () => {
       expect(useConnectionStore.getState().state).toBe("error");
     });
     expect(useConnectionStore.getState().error).toBe("unreachable");
+    expect(screen.getByRole("alert")).toHaveTextContent(/not like a telos node/i);
     expect(push).not.toHaveBeenCalled();
   });
 
@@ -110,58 +92,68 @@ describe("ConnectPage", () => {
   });
 });
 
-describe("ConnectPage certificate trust", () => {
-  it("asks for confirmation on first use instead of pinning silently", async () => {
-    installBridge(CERT_A);
-    mockHealth({ status: "ok" });
+describe("ConnectPage trust and transport", () => {
+  it("refuses plain http before any request is made", async () => {
+    const fetchSpy = mockHealth({ status: "ok" });
     render(<ConnectPage />);
-    // A host of its own: secureStorage's in-memory map is module-level, so a
-    // pin written here would outlive this test and make the next one start
-    // already-trusted.
-    typeAndConnect("https://first-use.example.com");
+    typeAndConnect("http://telos.example.com");
 
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /trust this node/i })).toBeInTheDocument();
-    });
-    // Nothing is configured until the member actually confirms.
-    expect(useConnectionStore.getState().state).not.toBe("configured");
-    expect(push).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: /trust and continue/i }));
-    await waitFor(() => {
-      expect(useConnectionStore.getState().state).toBe("configured");
-    });
-    expect(useConnectionStore.getState().pinnedCertFingerprint).toBeTruthy();
+    await waitFor(() => expect(useConnectionStore.getState().error).toBe("https_required"));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/https/i);
   });
 
-  it("blocks when the node presents a different certificate than the pinned one", async () => {
-    installBridge(CERT_A);
+  it.each(["https://user:pw@telos.example.com", "https://telos.example.com/telos", "https://telos.example.com/?x=1"])(
+    "refuses %s without contacting it",
+    async (address) => {
+      const fetchSpy = mockHealth({ status: "ok" });
+      render(<ConnectPage />);
+      typeAndConnect(address);
+      await waitFor(() => expect(useConnectionStore.getState().state).toBe("error"));
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("offers no fingerprint, pin or override and never asks the shell to inspect a certificate", async () => {
     mockHealth({ status: "ok" });
-    const { unmount } = render(<ConnectPage />);
-    typeAndConnect("https://mismatch.example.com");
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: /trust and continue/i })).toBeInTheDocument(),
-    );
-    fireEvent.click(screen.getByRole("button", { name: /trust and continue/i }));
+    render(<ConnectPage />);
+    typeAndConnect("https://telos.example.com");
     await waitFor(() => expect(useConnectionStore.getState().state).toBe("configured"));
-    unmount();
-
-    // Same host, different certificate — the interception TOFU exists to catch.
-    useConnectionStore.getState().reset();
-    push.mockClear();
-    installBridge(CERT_B);
-    render(<ConnectPage />);
-    typeAndConnect("https://mismatch.example.com");
-
-    await waitFor(() => {
-      expect(useConnectionStore.getState().error).toBe("untrusted_certificate");
-    });
-    expect(useConnectionStore.getState().state).toBe("error");
-    expect(push).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: /trust this node/i })).toBeNull();
+    expect(screen.queryByText(/fingerprint|pinned|sha-256/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /trust|continue anyway|ignore/i })).toBeNull();
+    expect((window as unknown as Record<string, unknown>).__TELOS_NATIVE_TLS__).toBeUndefined();
   });
 
-  it("does not claim pinning when the platform cannot pin", () => {
+  it("explains platform trust when the connection fails, with no way to continue", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Load failed"));
     render(<ConnectPage />);
-    expect(screen.getByText(/certificate pinning needs the desktop app/i)).toBeInTheDocument();
+    typeAndConnect("https://self-signed.example.com");
+    await waitFor(() => expect(useConnectionStore.getState().error).toBe("unreachable"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/trusted by this computer/i);
+    expect(screen.queryByRole("button", { name: /trust|continue|override/i })).toBeNull();
+    expect(push).not.toHaveBeenCalled();
+  });
+});
+
+describe("ConnectPage in the native shell", () => {
+  let keychain: FakeKeychain;
+  beforeEach(() => {
+    keychain = createFakeKeychain();
+    keychain.install();
+    window.localStorage.clear();
+  });
+  afterEach(() => {
+    keychain.uninstall();
+    window.localStorage.clear();
+  });
+
+  it("saves only the normalized origin as the connection profile", async () => {
+    mockHealth({ status: "ok", version: "0.1.0" });
+    render(<ConnectPage />);
+    typeAndConnect("Telos.Example.com:443");
+    await waitFor(() => expect(useConnectionStore.getState().state).toBe("configured"));
+    expect(loadConnectionProfile()).toEqual({ origin: "https://telos.example.com", userId: null, username: null, deviceId: null });
+    expect(keychain.calls).toHaveLength(0);
   });
 });

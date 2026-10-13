@@ -229,7 +229,9 @@ type UserContext struct {
 	DisplayName string
 	HasAvatar   bool
 	DeviceID    string
-	SessionHash string
+	// SessionHash is the server-side lookup key of the caller's session. It is
+	// never serialized: /auth/me returns this struct to the member.
+	SessionHash string `json:"-"`
 }
 
 type contextKey string
@@ -926,6 +928,19 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	// A device-token client has no cookie; the bearer it presented is the
+	// credential. Logging out must revoke that device (its access sessions, its
+	// refresh tokens and any live socket) rather than answer "no active session",
+	// or a signed-out desktop client would leave a working credential behind.
+	if user, ok := r.Context().Value(userContextKey).(*UserContext); ok && user != nil && user.DeviceID != "" {
+		if err := revokeDevice(r.Context(), user.DeviceID); err != nil && !strings.Contains(err.Error(), "already revoked") {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+		return
+	}
 	cookie, err := r.Cookie("telos_session")
 	if err != nil {
 		http.Error(w, "No active session", http.StatusBadRequest)

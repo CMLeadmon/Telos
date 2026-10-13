@@ -4,7 +4,7 @@ import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useAuthStore } from "@/stores/useAuthStore";
 
 export function ConnectivityBanner() {
-  const { connectivity, fetchMe } = useAuthStore();
+  const { connectivity, fetchMe, initializeAuth, status } = useAuthStore();
 
   if (connectivity === "online") return null;
 
@@ -23,7 +23,7 @@ export function ConnectivityBanner() {
       </span>
       <button
         className="btn-ghost btn-sm"
-        onClick={() => void fetchMe()}
+        onClick={() => void (status === "authenticated" ? fetchMe() : initializeAuth())}
         aria-label="Retry connection"
       >
         <RefreshCw size={14} /> Retry

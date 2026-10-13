@@ -59,3 +59,66 @@ export function setServerConfig(next: ServerConfig): void {
 export function requiresServerSelection(): boolean {
   return isNativeApp();
 }
+
+/** Why a node address was refused. Distinct so each gets its own message. */
+export type NodeUrlProblem = "invalid_url" | "https_required" | "credentials" | "not_an_origin";
+
+export class NodeUrlError extends Error {
+  readonly problem: NodeUrlProblem;
+  constructor(problem: NodeUrlProblem, message: string) {
+    super(message);
+    this.name = "NodeUrlError";
+    this.problem = problem;
+  }
+}
+
+/**
+ * Plain-HTTP loopback nodes exist for development only. The flag is decided at
+ * build time (`next build` sets NODE_ENV=production, so a release bundle cannot
+ * enable it) and the Rust credential normalizer applies the same rule through
+ * `debug_assertions`.
+ */
+export function debugLoopbackHttpAllowed(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Turns what a member typed into a node origin, or refuses it.
+ *
+ * Release clients speak platform-trusted HTTPS only: there is no accept-any
+ * verifier, no fingerprint override and no plain-HTTP path. A private CA works
+ * because the operating system's trust store accepts it -- not because this code
+ * waives anything. A bare host gains `https://`. The result is an origin, never
+ * a reverse-proxy path prefix.
+ */
+export function normalizeTrustedNodeUrl(
+  raw: string,
+  allowLoopbackHttp: boolean = debugLoopbackHttpAllowed(),
+): string {
+  const trimmed = raw.trim();
+  const withScheme = trimmed.includes("://") ? trimmed : `https://${trimmed}`;
+  let url: URL;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    throw new NodeUrlError("invalid_url", "That is not a valid server address.");
+  }
+  if (!url.hostname) {
+    throw new NodeUrlError("invalid_url", "That is not a valid server address.");
+  }
+  if (url.username || url.password) {
+    throw new NodeUrlError("credentials", "A server address cannot contain a username or password.");
+  }
+  if (url.search || url.hash || (url.pathname !== "/" && url.pathname !== "")) {
+    throw new NodeUrlError("not_an_origin", "Enter the server address only, without a path, query or fragment.");
+  }
+  if (url.protocol === "http:" && allowLoopbackHttp && LOOPBACK_HOSTS.has(url.hostname)) {
+    return url.origin;
+  }
+  if (url.protocol !== "https:") {
+    throw new NodeUrlError("https_required", "This client connects over HTTPS only.");
+  }
+  return url.origin;
+}

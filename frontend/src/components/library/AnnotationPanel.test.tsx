@@ -1,7 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/api", () => ({ api: vi.fn(), ApiError: class ApiError extends Error {} }));
+vi.mock("@/lib/api", () => ({ api: vi.fn(), setAccessRefresher: vi.fn(), ApiError: class ApiError extends Error {} }));
 
 import { api } from "@/lib/api";
 import { AnnotationPanel } from "./AnnotationPanel";

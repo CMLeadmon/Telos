@@ -1,18 +1,47 @@
-mod tls;
+mod credentials;
 
-use tauri::Runtime;
-use tauri_plugin_store::StoreExt;
+use credentials::{CredentialError, CredentialKey, CredentialService, LegacyOutcome, OsBackend};
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{Manager, Runtime};
 
-/// Where the refresh token and certificate pins live between launches.
-const SECRET_STORE: &str = "telos-secrets.json";
+/// Set at launch when the retired plaintext secret file was found and deleted, so
+/// the page can tell the member to sign in again once.
+struct LegacyStoreRetired(AtomicBool);
 
-/// Reads the leaf certificate a node presents, for trust-on-first-use pinning.
-/// Blocking socket work, so it is moved off the UI thread.
-#[tauri::command]
-async fn telos_leaf_certificate(server_url: String) -> Result<tls::LeafCertificate, String> {
-    tauri::async_runtime::spawn_blocking(move || tls::leaf_certificate(&server_url))
+fn credential_service() -> CredentialService<OsBackend> {
+    CredentialService::new(OsBackend, credentials::debug_loopback_http_allowed())
+}
+
+/// Runs a blocking credential operation off the UI thread. The platform call can
+/// wait on a Secret Service unlock prompt, which must never freeze the window.
+async fn credential_blocking<T: Send + 'static>(
+    work: impl FnOnce(CredentialService<OsBackend>) -> Result<T, CredentialError> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || work(credential_service()))
         .await
-        .map_err(|e| format!("certificate probe did not run: {e}"))?
+        .map_err(|_| CredentialError::Backend.to_frontend())?
+        .map_err(|error| error.to_frontend())
+}
+
+#[tauri::command]
+async fn credential_get(key: CredentialKey) -> Result<Option<String>, String> {
+    credential_blocking(move |service| service.get(&key)).await
+}
+
+#[tauri::command]
+async fn credential_set(key: CredentialKey, secret: String) -> Result<(), String> {
+    credential_blocking(move |service| service.set(&key, &secret)).await
+}
+
+#[tauri::command]
+async fn credential_delete(key: CredentialKey) -> Result<(), String> {
+    credential_blocking(move |service| service.delete(&key)).await
+}
+
+/// True once, at the first call after a launch that deleted the old plaintext file.
+#[tauri::command]
+fn telos_legacy_store_retired(state: tauri::State<'_, LegacyStoreRetired>) -> bool {
+    state.0.swap(false, Ordering::SeqCst)
 }
 
 /// Opens a URL in the operating system's browser.
@@ -47,43 +76,10 @@ async fn telos_open_external<R: Runtime>(
 /// custom-scheme webview is not reliably one, so the web API cannot be relied on
 /// here.
 #[tauri::command]
-fn telos_write_clipboard<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    text: String,
-) -> Result<(), String> {
+fn telos_write_clipboard<R: Runtime>(app: tauri::AppHandle<R>, text: String) -> Result<(), String> {
     tauri_plugin_clipboard_manager::ClipboardExt::clipboard(&app)
         .write_text(text)
         .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn telos_secret_get<R: Runtime>(app: tauri::AppHandle<R>, key: String) -> Result<Option<String>, String> {
-    let store = app.store(SECRET_STORE).map_err(|e| e.to_string())?;
-    Ok(store
-        .get(&key)
-        .and_then(|v| v.as_str().map(|s| s.to_string())))
-}
-
-#[tauri::command]
-fn telos_secret_set<R: Runtime>(
-    app: tauri::AppHandle<R>,
-    key: String,
-    value: String,
-) -> Result<(), String> {
-    let store = app.store(SECRET_STORE).map_err(|e| e.to_string())?;
-    store.set(&key, serde_json::Value::String(value));
-    // Written through on every set. These are credentials whose loss costs the
-    // member a re-registration, and a crash between set and exit would take a
-    // refresh token with it — the frontend would then hold an access token it
-    // could never rotate.
-    store.save().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn telos_secret_delete<R: Runtime>(app: tauri::AppHandle<R>, key: String) -> Result<(), String> {
-    let store = app.store(SECRET_STORE).map_err(|e| e.to_string())?;
-    store.delete(&key);
-    store.save().map_err(|e| e.to_string())
 }
 
 /// Installs the bridges the frontend looks for on `window`.
@@ -91,7 +87,7 @@ fn telos_secret_delete<R: Runtime>(app: tauri::AppHandle<R>, key: String) -> Res
 /// The frontend is one static export shared by the web build, which must not
 /// import Tauri modules at all — so the shell publishes plain objects and the
 /// frontend feature-detects them. The names are the contracts documented in
-/// `frontend/src/lib/certPinning.ts`, `frontend/src/lib/secureStorage.ts` and
+/// `frontend/src/lib/secureStorage.ts` and
 /// `frontend/src/lib/platform.ts`;
 /// changing one here without changing it there silently disables the feature,
 /// because both fall back rather than fail.
@@ -100,17 +96,6 @@ fn bridge_script() -> String {
 (function () {
   var invoke = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
   if (!invoke) return;
-
-  window.__TELOS_NATIVE_TLS__ = {
-    leafCertificate: function (serverUrl) {
-      return invoke("telos_leaf_certificate", { serverUrl: serverUrl }).catch(function () {
-        // A node that cannot be probed is reported as "no certificate seen",
-        // never as a fingerprint. certPinning.ts then reports "unsupported"
-        // rather than inventing a trusted state.
-        return null;
-      });
-    },
-  };
 
   window.__TELOS_NATIVE_SHELL__ = {
     openExternal: function (url) {
@@ -121,15 +106,21 @@ fn bridge_script() -> String {
     },
   };
 
-  window.__TELOS_NATIVE_STORE__ = {
+  // Structured keys only: the page names (origin, account, device), never a
+  // keychain service or account string. Errors reject; the frontend must treat a
+  // rejection as a failed sign-in, never fall back to memory.
+  window.__TELOS_NATIVE_CREDENTIALS__ = {
     get: function (key) {
-      return invoke("telos_secret_get", { key: key });
+      return invoke("credential_get", { key: key });
     },
-    set: function (key, value) {
-      return invoke("telos_secret_set", { key: key, value: value });
+    set: function (key, secret) {
+      return invoke("credential_set", { key: key, secret: secret });
     },
     delete: function (key) {
-      return invoke("telos_secret_delete", { key: key });
+      return invoke("credential_delete", { key: key });
+    },
+    legacyStoreRetired: function () {
+      return invoke("telos_legacy_store_retired", {});
     },
   };
 })();
@@ -156,20 +147,30 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_store::Builder::default().build())
+        .manage(LegacyStoreRetired(AtomicBool::new(false)))
         .invoke_handler(tauri::generate_handler![
-            telos_leaf_certificate,
             telos_open_external,
             telos_write_clipboard,
-            telos_secret_get,
-            telos_secret_set,
-            telos_secret_delete
+            credential_get,
+            credential_set,
+            credential_delete,
+            telos_legacy_store_retired
         ])
         .setup(|app| {
-            // Opening the store here surfaces a broken data directory at launch
-            // instead of at the first secret write, which would otherwise look
-            // like a silent fallback to non-persistent storage.
-            app.store(SECRET_STORE)?;
+            // The earlier shell kept the refresh token in a plaintext JSON file.
+            // Delete it unread so a stale credential cannot outlive the move to
+            // the OS credential service. A file that cannot be removed safely
+            // (a symlink, a directory, a permission failure) aborts startup
+            // rather than leaving the secret on disk.
+            let data_dir = app.path().app_data_dir()?;
+            match credentials::retire_legacy_store(&data_dir) {
+                Ok(LegacyOutcome::Removed) => app
+                    .state::<LegacyStoreRetired>()
+                    .0
+                    .store(true, Ordering::SeqCst),
+                Ok(LegacyOutcome::Absent) => {}
+                Err(error) => return Err(Box::new(error)),
+            }
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -192,10 +193,17 @@ mod tests {
     #[test]
     fn script_publishes_the_documented_bridge_names() {
         let script = initialization_script();
-        assert!(script.contains("window.__TELOS_NATIVE_TLS__"));
-        assert!(script.contains("window.__TELOS_NATIVE_STORE__"));
+        assert!(
+            !script.contains("__TELOS_NATIVE_TLS__"),
+            "the TLS probe bridge is retired"
+        );
+        assert!(script.contains("window.__TELOS_NATIVE_CREDENTIALS__"));
+        assert!(
+            !script.contains("__TELOS_NATIVE_STORE__"),
+            "the plaintext store bridge is retired"
+        );
         assert!(script.contains("window.__TELOS_NATIVE_SHELL__"));
-        assert!(script.contains("leafCertificate"));
+        assert!(!script.contains("leafCertificate"));
     }
 
     // Every command the script invokes has to be registered, or the call rejects
@@ -204,12 +212,12 @@ mod tests {
     fn script_only_invokes_registered_commands() {
         let script = initialization_script();
         for command in [
-            "telos_leaf_certificate",
             "telos_open_external",
             "telos_write_clipboard",
-            "telos_secret_get",
-            "telos_secret_set",
-            "telos_secret_delete",
+            "credential_get",
+            "credential_set",
+            "credential_delete",
+            "telos_legacy_store_retired",
         ] {
             assert!(script.contains(command), "script never invokes {command}");
         }

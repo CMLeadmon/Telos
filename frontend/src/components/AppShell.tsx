@@ -39,7 +39,7 @@ const MODULES = [
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, status, fetchMe, logout } = useAuthStore();
+  const { user, status, initializeAuth, logout, connectivity } = useAuthStore();
   const theme = useThemeStore((s) => s.theme);
   // Theme toggling routes through usePreferencesStore so it persists server-side.
   const prefsLoaded = usePreferencesStore((s) => s.loaded);
@@ -314,8 +314,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    if (status === "unknown") void fetchMe();
-  }, [status, fetchMe]);
+    if (status === "unknown") void initializeAuth();
+  }, [status, initializeAuth]);
 
   useEffect(() => {
     if (status === "authenticated" && !prefsLoaded) void loadPrefs();
@@ -335,6 +335,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="authwrap">
         <span className="kicker">{"// connecting to node…"}</span>
+        {status === "unknown" && connectivity === "error" && (
+          <button type="button" className="btn btn-sm" onClick={() => void initializeAuth()}>
+            Node unreachable — retry
+          </button>
+        )}
       </div>
     );
   }

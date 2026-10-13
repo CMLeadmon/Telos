@@ -12,6 +12,7 @@
 import { apiBlob, assetUrl } from "./api";
 import { getServerConfig } from "./serverConfig";
 import { isMobileNative, isNativeApp } from "./nativeEnv";
+import { CLIENT_VERSION } from "./clientVersion";
 
 // Re-exported so callers have one import for "what can this platform do".
 export { isMobileNative, isNativeApp };
@@ -127,4 +128,32 @@ export async function openNodeResource(
     // machinery, which has not necessarily read it by the time this returns.
     setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
   }
+}
+
+/**
+ * What this install tells a node about itself when it registers as a device.
+ * Bounded and derived from the platform, never user-supplied: it appears in the
+ * member's device list and in audit logs.
+ */
+export function nativeDeviceInfo(): { name: string; platform: string; version: string } {
+  const agent = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  const platform = /android/i.test(agent)
+    ? "android"
+    : /iphone|ipad|ipod/i.test(agent)
+      ? "ios"
+      : /windows/i.test(agent)
+        ? "windows"
+        : /mac os x|macintosh/i.test(agent)
+          ? "macos"
+          : /linux|x11/i.test(agent)
+            ? "linux"
+            : "unknown";
+  const label: Record<string, string> = {
+    linux: "Linux", windows: "Windows", macos: "macOS", android: "Android", ios: "iOS", unknown: "device",
+  };
+  return {
+    name: `Telos desktop (${label[platform]})`.slice(0, 64),
+    platform,
+    version: CLIENT_VERSION.slice(0, 32),
+  };
 }

@@ -115,78 +115,146 @@ export async function probeNode(
 }
 
 /**
+ * Per-call overrides. They exist for the few calls that must act on a node or
+ * credential other than "whatever is configured right now": revoking a device
+ * that has just been abandoned, or logging out with a captured token after local
+ * state was already cleared.
+ */
+export interface ApiOptions {
+  /** Talk to this origin instead of the configured one. */
+  baseUrl?: string;
+  /** Present exactly this bearer token (or none, with null) instead of the configured access token. */
+  bearer?: string | null;
+  /** Do not refresh an expiring access token first, and do not retry on 401. Used by the refresh/register/logout calls themselves. */
+  skipRefresh?: boolean;
+}
+
+/**
+ * The authenticated client's view of the token lifecycle, installed by
+ * deviceAuth. api.ts cannot import it (deviceAuth imports api), so it is a hook.
+ * With no refresher installed -- the browser build -- none of this runs.
+ */
+export interface AccessRefresher {
+  /** Resolves once the configured access token is fresh enough to send. */
+  ensureFresh(): Promise<void>;
+  /** After a 401 on `usedToken`: rotate once if that token is still current. True means retry. */
+  refreshAfter401(usedToken: string | null): Promise<boolean>;
+}
+
+let refresher: AccessRefresher | null = null;
+
+export function setAccessRefresher(next: AccessRefresher | null): void {
+  refresher = next;
+}
+
+const REPLAYABLE = new Set(["GET", "HEAD"]);
+
+interface Prepared {
+  url: string;
+  requestInit: RequestInit;
+  usedToken: string | null;
+  explicitCredential: boolean;
+}
+
+function prepare(path: string, init: RequestInit | undefined, options: ApiOptions | undefined, json: boolean): Prepared {
+  const cfg = getServerConfig();
+  const headers = new Headers(init?.headers);
+  if (json && !(init?.body instanceof FormData) && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
+  const requestInit: RequestInit = { ...init, headers };
+  const explicitCredential = options?.bearer !== undefined;
+  let usedToken: string | null = null;
+  if (explicitCredential) {
+    // The caller chose the credential; never mix in the configured one or a cookie.
+    if (options?.bearer) {
+      headers.set("Authorization", `Bearer ${options.bearer}`);
+      usedToken = options.bearer;
+    }
+  } else if (cfg.mode === "token") {
+    // Token mode never falls back to cookies. Branching on the token's
+    // presence instead would make a client that has not authenticated yet
+    // send a credentialed cross-origin request, which is precisely what the
+    // device-token flow exists to avoid; with no token the request should
+    // reach the server bare and come back a clean 401.
+    if (cfg.accessToken) {
+      headers.set("Authorization", `Bearer ${cfg.accessToken}`);
+      usedToken = cfg.accessToken;
+    }
+  } else {
+    requestInit.credentials = "include";
+  }
+  const base = options?.baseUrl !== undefined ? normalizeBaseUrl(options.baseUrl) : apiBase();
+  return { url: `${base}${path}`, requestInit, usedToken, explicitCredential };
+}
+
+function managesToken(options: ApiOptions | undefined): boolean {
+  return getServerConfig().mode === "token" && options?.bearer === undefined && !options?.skipRefresh && refresher !== null;
+}
+
+const UNREACHABLE = "Cannot reach this Telos node. Check the server address and try again.";
+
+/**
  * Fetches a node resource as bytes, with whatever credential this client holds.
  *
  * Downloads used to be a `window.open` on the resource URL, which works only
  * because a browser attaches the session cookie to the navigation it starts. A
  * token-mode client has no cookie and cannot put a header on a navigation, so
- * that same open lands on a bare 401 — and, opened in a native webview, on a
+ * that same open lands on a bare 401 -- and, opened in a native webview, on a
  * 401 page with no way back. Pulling the bytes through the authenticated client
  * is the only form that works in both modes.
  */
-export async function apiBlob(path: string): Promise<Blob> {
-  const cfg = getServerConfig();
-  const headers = new Headers();
-  const requestInit: RequestInit = { headers };
-  if (cfg.mode === "token") {
-    if (cfg.accessToken) headers.set("Authorization", `Bearer ${cfg.accessToken}`);
-  } else {
-    requestInit.credentials = "include";
+export async function apiBlob(path: string, options?: ApiOptions): Promise<Blob> {
+  for (let attempt = 0; ; attempt++) {
+    if (managesToken(options)) await refresher!.ensureFresh();
+    const { url, requestInit, usedToken } = prepare(path, undefined, options, false);
+    let res: Response;
+    try {
+      res = await fetch(url, requestInit);
+    } catch {
+      throw new ApiError(0, UNREACHABLE);
+    }
+    if (res.status === 401 && attempt === 0 && managesToken(options) && (await refresher!.refreshAfter401(usedToken))) {
+      continue;
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new ApiError(res.status, text.trim() || res.statusText);
+    }
+    return await res.blob();
   }
-
-  let res: Response;
-  try {
-    res = await fetch(`${apiBase()}${path}`, requestInit);
-  } catch {
-    throw new ApiError(
-      0,
-      "Cannot reach this Telos node. Check the server address and try again.",
-    );
-  }
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text.trim() || res.statusText);
-  }
-  return await res.blob();
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  let res: Response;
-  const cfg = getServerConfig();
-  try {
-    const headers = new Headers(init?.headers);
-    if (!(init?.body instanceof FormData) && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json");
-    }
-
-    const requestInit: RequestInit = {
-      ...init,
-      headers,
-    };
-
-    if (cfg.mode === "token") {
-      // Token mode never falls back to cookies. Branching on the token's
-      // presence instead would make a client that has not authenticated yet
-      // send a credentialed cross-origin request, which is precisely what the
-      // device-token flow exists to avoid; with no token the request should
-      // reach the server bare and come back a clean 401.
-      if (cfg.accessToken) {
-        headers.set("Authorization", `Bearer ${cfg.accessToken}`);
+export async function api<T>(path: string, init?: RequestInit, options?: ApiOptions): Promise<T> {
+  let res: Response | undefined;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Refresh BEFORE dispatch rather than replaying afterwards: a POST that
+    // reached the node and got a 401 has not changed anything, but a POST that
+    // got no answer might have, and re-sending it blindly is how a message gets
+    // posted twice. Only idempotent reads are retried after a 401.
+    if (managesToken(options)) await refresher!.ensureFresh();
+    const { url, requestInit, usedToken } = prepare(path, init, options, true);
+    try {
+      res = await fetch(url, requestInit);
+    } catch {
+      if (init?.signal?.aborted) {
+        throw new ApiError(408, "Request timed out.");
       }
-    } else {
-      requestInit.credentials = "include";
+      throw new ApiError(0, UNREACHABLE);
     }
-
-    res = await fetch(`${apiBase()}${path}`, requestInit);
-  } catch {
-    if (init?.signal?.aborted) {
-      throw new ApiError(408, "Request timed out.");
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (
+      res.status === 401 &&
+      attempt === 0 &&
+      REPLAYABLE.has(method) &&
+      managesToken(options) &&
+      (await refresher!.refreshAfter401(usedToken))
+    ) {
+      continue;
     }
-    throw new ApiError(
-      0,
-      "Cannot reach this Telos node. Check the server address and try again.",
-    );
+    break;
   }
+  if (!res) throw new ApiError(0, UNREACHABLE);
 
   const contentType = res.headers.get("Content-Type") || "";
   if (

@@ -615,6 +615,94 @@ for marker in retention_requirements:
     if marker not in retention:
         fail("dataRetention", f"data-retention.md is missing current behavior: {marker}")
 
+# --- Desktop client contract (Phase 3) -------------------------------------
+# The native shell keeps the refresh token in the operating-system credential
+# service and trusts only the platform's TLS decision. These checks fail if a
+# plaintext secret store, a certificate-pinning path or an unsupported origin
+# creeps back, and they pin the exact dependency and configuration the claim
+# rests on. Phrases below may appear only in an explicit statement of
+# non-support (the line has to say so).
+def source_files(base, suffixes):
+    base_path = root / base
+    if not base_path.exists():
+        return []
+    return sorted(
+        p for p in base_path.rglob("*")
+        if p.is_file() and p.suffix in suffixes and "node_modules" not in p.parts
+        and ".next" not in p.parts and "target" not in p.parts and "out" not in p.relative_to(root).parts[:2]
+    )
+
+def production_text(path):
+    body = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix == ".rs":
+        cut = body.find("#[cfg(test)]")
+        if cut != -1:
+            body = body[:cut]
+    return body
+
+desktop_sources = (
+    [p for p in source_files("frontend/src", {".ts", ".tsx"}) if ".test." not in p.name]
+    + source_files("frontend/src-tauri/src", {".rs"})
+    + [root / "frontend/src-tauri/Cargo.toml"]
+    + source_files("frontend/src-tauri/capabilities", {".json"})
+)
+for path in desktop_sources:
+    if not path.exists():
+        continue
+    body = production_text(path)
+    relative = path.relative_to(root).as_posix()
+    for forbidden in ("tauri_plugin_store", "tauri-plugin-store", "telos_secret_", "__TELOS_NATIVE_STORE__", "store:default"):
+        if forbidden in body:
+            fail("desktopCredentials", f"{relative} still references the retired plaintext secret store: {forbidden}")
+    if "telos-secrets.json" in body and relative != "frontend/src-tauri/src/credentials.rs":
+        fail("desktopCredentials", f"{relative} names the legacy secret file outside its one-time retirement helper")
+
+pinning_pattern = re.compile(
+    r"TOFU|trust on first use|certificate pin|leaf fingerprint|accept.?any|cert-pin|certPinning|"
+    r"__TELOS_NATIVE_TLS__|pinnedCertFingerprint|self-signed",
+    re.I,
+)
+negation = re.compile(r"\b(not|no|never|without|retired|refuse[sd]?|removed|cannot|neither|nor)\b|\bn't\b", re.I)
+scan = (
+    [p for p in source_files("frontend/src", {".ts", ".tsx"}) if ".test." not in p.name]
+    + source_files("frontend/src-tauri/src", {".rs"})
+    + [root / "frontend/src-tauri/README.md", root / "README.md"]
+    + [p for p in source_files("documentation", {".md"})]
+)
+for path in scan:
+    if not path.exists():
+        continue
+    relative = path.relative_to(root).as_posix()
+    lines = production_text(path).splitlines()
+    for number, line in enumerate(lines, 1):
+        # A statement of non-support may wrap onto the next line.
+        context = line + " " + (lines[number] if number < len(lines) else "")
+        if pinning_pattern.search(line) and not negation.search(context):
+            fail("platformTrust", f"{relative}:{number} describes certificate pinning or a self-signed trust path as supported: {line.strip()[:120]}")
+
+for banned in ("frontend/src/lib/certPinning.ts", "frontend/src-tauri/src/tls.rs"):
+    if (root / banned).exists():
+        fail("platformTrust", f"{banned} must not exist: release clients rely on platform-trusted HTTPS only")
+
+cargo = text("frontend/src-tauri/Cargo.toml") if (root / "frontend/src-tauri/Cargo.toml").exists() else ""
+if cargo and not re.search(r'keyring\s*=\s*\{[^}]*version\s*=\s*"=4\.1\.6"[^}]*features\s*=\s*\["v1"\]', cargo):
+    fail("desktopCredentials", "Cargo.toml must pin keyring =4.1.6 with the v1 feature")
+lock_path = root / "frontend/src-tauri/Cargo.lock"
+if lock_path.exists():
+    lock = lock_path.read_text(encoding="utf-8")
+    if not re.search(r'name = "keyring"\nversion = "4\.1\.6"', lock):
+        fail("desktopCredentials", "Cargo.lock does not resolve keyring 4.1.6")
+    for retired in ("tauri-plugin-store", "rustls", "x509-parser"):
+        if f'name = "{retired}"' in lock:
+            fail("desktopCredentials", f"Cargo.lock still resolves {retired}")
+
+native_pair = "tauri://localhost,http://tauri.localhost"
+if (root / ".env.example").exists() and f"\nTELOS_ALLOWED_ORIGINS={native_pair}\n" not in text(".env.example"):
+    fail("desktopOrigins", f".env.example must ship TELOS_ALLOWED_ORIGINS={native_pair}")
+compose_text = text("docker-compose.yml") if (root / "docker-compose.yml").exists() else ""
+if compose_text and "TELOS_ALLOWED_ORIGINS=${TELOS_ALLOWED_ORIGINS:-}" not in compose_text:
+    fail("desktopOrigins", "docker-compose.yml must pass TELOS_ALLOWED_ORIGINS to telos-core")
+
 if errors:
     for field, message in errors:
         print(f"product-truth: VIOLATION ({field}):", file=sys.stderr)
