@@ -207,6 +207,9 @@ services:
     image: docker.io/library/postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: telos-postgres
     restart: unless-stopped
+    # Start as the image's own unprivileged user instead of root-then-gosu; the
+    # image's data directory is already owned by this user, so nothing needs root.
+    user: postgres
     # Enable query statistics with parameter redaction and no statement logging.
     command:
       - postgres
@@ -218,8 +221,13 @@ services:
       - pg_stat_statements.track=top
       - -c
       - log_statement=none
-    security_opt:
-      - no-new-privileges:true
+    # no-new-privileges is deliberately NOT set on this service. On Ubuntu 26.04
+    # (AppArmor 5, crun's name-only profile stacked under containers-default) it
+    # leaves a container's processes labelled differently from each other, and
+    # AppArmor then denies signals between them: gosu spins, `pg_ctl stop` gets
+    # EPERM, and the startup process cannot signal the postmaster, so Postgres
+    # never finishes starting. AppArmor confinement stays on. See
+    # docs/implementation/design-alterations.md A16.
     networks:
       - telos-db
     environment:

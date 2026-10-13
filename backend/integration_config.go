@@ -38,6 +38,9 @@ const (
 	integrationBodyLimit    = 1 << 20
 	defaultJellyfinURL      = "http://jellyfin:8096"
 	defaultGrimmoryURL      = "http://grimmory:6060"
+	// jellyfinBasePath is where the gateway reaches Jellyfin at runtime (and the
+	// prefix its HLS rewriting expects). Setup makes Jellyfin serve there.
+	jellyfinBasePath = "/jellyfin"
 )
 
 // integrationHTTPTimeout bounds each whole upstream exchange; tests shorten it.
@@ -77,6 +80,7 @@ var (
 	errJellyfinUnavailable      = newIntegrationError("jellyfin_unavailable", "Jellyfin could not be reached")
 	errJellyfinRejected         = newIntegrationError("jellyfin_rejected", "Jellyfin rejected the token or the request")
 	errJellyfinInvalidResponse  = newIntegrationError("jellyfin_invalid_response", "Jellyfin returned an unexpected response")
+	errJellyfinBasePath         = newIntegrationError("jellyfin_base_path", "Jellyfin would not accept the /jellyfin Base URL that Telos requires")
 	errJellyfinNoLibraries      = newIntegrationError("jellyfin_no_libraries", "Jellyfin has no libraries; create one first")
 	errJellyfinDuplicateLibrary = newIntegrationError("jellyfin_duplicate_library", "Jellyfin returned the same library ID twice")
 	errGrimmoryUnavailable      = newIntegrationError("grimmory_unavailable", "Grimmory could not be reached")
@@ -215,6 +219,67 @@ func discoverJellyfinLibraries(ctx context.Context, client *http.Client, base, t
 	return libraries, nil
 }
 
+// jellyfinServesUnderBasePath reports whether Jellyfin already answers its public
+// info endpoint under /jellyfin. Any other outcome means "not yet".
+func jellyfinServesUnderBasePath(ctx context.Context, client *http.Client, root string) bool {
+	request, err := http.NewRequest(http.MethodGet, root+jellyfinBasePath+"/System/Info/Public", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := doIntegrationRequest(ctx, client, request)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode >= 200 && resp.StatusCode < 300
+}
+
+// setJellyfinBasePath stores BaseUrl=/jellyfin in Jellyfin's network settings,
+// preserving every other field exactly as Jellyfin returned it.
+func setJellyfinBasePath(ctx context.Context, client *http.Client, root, token string) error {
+	endpoint := root + "/System/Configuration/network"
+	get, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return errJellyfinUnavailable
+	}
+	get.Header.Set("X-Emby-Token", token)
+	get.Header.Set("Accept", "application/json")
+	resp, err := doIntegrationRequest(ctx, client, get)
+	if err != nil {
+		return classifyTransportError(err, errJellyfinUnavailable)
+	}
+	body, err := readIntegrationBody(resp, errJellyfinRejected, errJellyfinUnavailable)
+	if err != nil {
+		return err
+	}
+	var settings map[string]json.RawMessage
+	if err := json.Unmarshal(body, &settings); err != nil || settings == nil {
+		return errJellyfinInvalidResponse
+	}
+	if _, ok := settings["BaseUrl"]; !ok {
+		return errJellyfinInvalidResponse
+	}
+	settings["BaseUrl"] = json.RawMessage(`"` + jellyfinBasePath + `"`)
+	updated, err := json.Marshal(settings)
+	if err != nil {
+		return errJellyfinInvalidResponse
+	}
+	post, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(updated))
+	if err != nil {
+		return errJellyfinUnavailable
+	}
+	post.Header.Set("X-Emby-Token", token)
+	post.Header.Set("Content-Type", "application/json")
+	resp, err = doIntegrationRequest(ctx, client, post)
+	if err != nil {
+		return classifyTransportError(err, errJellyfinUnavailable)
+	}
+	if _, err := readIntegrationBody(resp, errJellyfinRejected, errJellyfinBasePath); err != nil {
+		return err
+	}
+	return nil
+}
+
 // integrationStableID accepts a JSON string or a bare integer and returns its
 // exact text. Floats, booleans, objects and blanks are not stable identifiers.
 func integrationStableID(raw json.RawMessage) (string, bool) {
@@ -323,9 +388,22 @@ func validateIntegrationConfig(ctx context.Context, req IntegrationValidationReq
 		return IntegrationValidationResponse{}, err
 	}
 	client := integrationClient()
+	// A fresh Jellyfin serves from the root; a configured node already serves
+	// under /jellyfin. Discover where it is now, then make it serve under the
+	// prefix the gateway uses (effective when Jellyfin next starts).
+	jellyfinRoot := jellyfinBase
+	prefixed := jellyfinServesUnderBasePath(ctx, client, jellyfinRoot)
+	if prefixed {
+		jellyfinBase += jellyfinBasePath
+	}
 	jellyfin, err := discoverJellyfinLibraries(ctx, client, jellyfinBase, req.JellyfinToken)
 	if err != nil {
 		return IntegrationValidationResponse{}, err
+	}
+	if !prefixed {
+		if err := setJellyfinBasePath(ctx, client, jellyfinRoot, req.JellyfinToken); err != nil {
+			return IntegrationValidationResponse{}, err
+		}
 	}
 	grimmory, err := discoverGrimmoryLibraries(ctx, client, grimmoryBase, req.GrimmoryUser, req.GrimmoryPassword)
 	if err != nil {

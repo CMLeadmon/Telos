@@ -23,8 +23,12 @@ else
 fi
 
 cat >"$work/upstreams.py" <<'PY'
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+# A fresh Jellyfin: it serves from the root, and its saved Base URL is recorded so
+# the test can prove setup stored /jellyfin.
+SAVED = os.path.join(os.path.dirname(os.path.abspath(__file__)), "network.saved")
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
@@ -33,6 +37,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
     def do_GET(self):
+        if self.path == "/System/Configuration/network":
+            if self.headers.get("X-Emby-Token") != "jf-token": return self.send_json({}, 401)
+            return self.send_json({"BaseUrl": "", "InternalHttpPort": 8096})
         if self.path == "/Library/VirtualFolders":
             if self.headers.get("X-Emby-Token") != "jf-token": return self.send_json({}, 401)
             return self.send_json([{"Name": "Movies", "ItemId": "m1"}, {"Name": "Music", "ItemId": "m2"}])
@@ -42,6 +49,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({}, 404)
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        if self.path == "/System/Configuration/network":
+            if self.headers.get("X-Emby-Token") != "jf-token": return self.send_json({}, 401)
+            with open(SAVED, "w") as handle: json.dump(body, handle)
+            self.send_response(204); self.end_headers(); return
         if self.path == "/api/v1/auth/login" and body == {"username": "gw", "password": "gw-pass"}:
             return self.send_json({"accessToken": "session", "expires": 7200})
         self.send_json({}, 401)
@@ -64,6 +75,11 @@ import json, sys
 response = json.loads(sys.argv[1])
 assert response == {"jellyfin": [{"id": "m1", "name": "Movies"}, {"id": "m2", "name": "Music"}],
                     "grimmory": [{"id": "4", "name": "Books"}]}, response
+PY
+python3 - "$work/network.saved" <<'PY'
+import json, sys
+saved = json.load(open(sys.argv[1]))
+assert saved == {"BaseUrl": "/jellyfin", "InternalHttpPort": 8096}, saved
 PY
 [[ ! -s "$work/stderr" ]] || { echo "unexpected stderr: $(cat "$work/stderr")" >&2; exit 1; }
 for secret in jf-token gw-pass session; do

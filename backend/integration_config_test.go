@@ -44,21 +44,76 @@ func (l *integrationUpstreamLog) text() string {
 	return strings.Join(l.entries, "\n")
 }
 
-// fakeJellyfin serves /Library/VirtualFolders and records the token it was shown.
+// jellyfinFakeOptions shapes the fake Jellyfin beyond its library listing. base
+// is the BaseUrl Jellyfin is already serving under ("" = a fresh install).
+type jellyfinFakeOptions struct {
+	base        string
+	networkBody string // GET /System/Configuration/network; default carries BaseUrl and an extra field
+	getStatus   int
+	postStatus  int
+}
+
+// integrationFakeJellyfin is a fresh Jellyfin: it serves from the root and
+// records every request, with the token it was shown.
 func integrationFakeJellyfin(t *testing.T, log *integrationUpstreamLog, body string, status int) *httptest.Server {
+	t.Helper()
+	return integrationFakeJellyfinWith(t, log, body, status, jellyfinFakeOptions{})
+}
+
+// integrationFakeJellyfinWith emulates the Jellyfin endpoints setup touches:
+// public info, the library listing and the network settings. Like the real
+// server it ignores a saved BaseUrl until restarted, so a POST changes nothing
+// about where the fake answers.
+func integrationFakeJellyfinWith(t *testing.T, log *integrationUpstreamLog, body string, status int, opts jellyfinFakeOptions) *httptest.Server {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		log.add("jellyfin %s %s token=%q", r.Method, r.URL.Path, r.Header.Get("X-Emby-Token"))
-		if r.URL.Path != "/Library/VirtualFolders" || r.Method != http.MethodGet {
+		path := r.URL.Path
+		if opts.base != "" {
+			if !strings.HasPrefix(path, opts.base+"/") {
+				http.Redirect(w, r, opts.base+path, http.StatusFound)
+				return
+			}
+			path = strings.TrimPrefix(path, opts.base)
+		}
+		switch {
+		case path == "/System/Info/Public" && r.Method == http.MethodGet:
+			_, _ = io.WriteString(w, `{"ProductName":"Jellyfin Server"}`)
+		case path == "/System/Configuration/network":
+			if r.Header.Get("X-Emby-Token") != canaryJellyfinToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			if r.Method == http.MethodPost {
+				var posted map[string]json.RawMessage
+				_ = json.NewDecoder(r.Body).Decode(&posted)
+				log.add("jellyfin network saved BaseUrl=%s InternalHttpPort=%s Extra=%s", posted["BaseUrl"], posted["InternalHttpPort"], posted["Extra"])
+				if opts.postStatus != 0 {
+					w.WriteHeader(opts.postStatus)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if opts.getStatus != 0 {
+				w.WriteHeader(opts.getStatus)
+				return
+			}
+			networkBody := opts.networkBody
+			if networkBody == "" {
+				networkBody = fmt.Sprintf(`{"BaseUrl":%q,"InternalHttpPort":8096,"Extra":{"keep":true}}`, opts.base)
+			}
+			_, _ = io.WriteString(w, networkBody)
+		case path == "/Library/VirtualFolders" && r.Method == http.MethodGet:
+			if r.Header.Get("X-Emby-Token") != canaryJellyfinToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, body)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		if r.Header.Get("X-Emby-Token") != canaryJellyfinToken {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.WriteHeader(status)
-		_, _ = io.WriteString(w, body)
 	}))
 	t.Cleanup(server.Close)
 	return server
@@ -146,6 +201,86 @@ func TestGrimmoryCredentialsAppearOnlyInTheLoginBody(t *testing.T) {
 		if strings.HasPrefix(line, "jellyfin") && (strings.Contains(line, canaryGrimmoryPass) || strings.Contains(line, canaryGrimmoryUser)) {
 			t.Errorf("Grimmory credentials were sent to Jellyfin: %s", line)
 		}
+	}
+}
+
+// The gateway reaches Jellyfin at /jellyfin and its HLS rewriting depends on
+// that prefix, but a fresh Jellyfin serves from the root. Setup closes the gap by
+// saving BaseUrl, and must change nothing else about Jellyfin's network settings.
+func TestSetupMakesAFreshJellyfinServeUnderTheGatewayPrefix(t *testing.T) {
+	log := &integrationUpstreamLog{}
+	jellyfin := integrationFakeJellyfin(t, log, jellyfinSample, http.StatusOK)
+	grimmory := integrationFakeGrimmory(t, log, `[{"id":1,"name":"Books"}]`, http.StatusOK, http.StatusOK)
+	if _, err := discover(t, jellyfin, grimmory); err != nil {
+		t.Fatalf("discovery failed: %v", err)
+	}
+	text := log.text()
+	if got := strings.Count(text, "jellyfin network saved"); got != 1 {
+		t.Fatalf("expected exactly one network save, got %d:\n%s", got, text)
+	}
+	if !strings.Contains(text, `jellyfin network saved BaseUrl="/jellyfin" InternalHttpPort=8096 Extra={"keep":true}`) {
+		t.Errorf("the save must set BaseUrl and preserve the other fields:\n%s", text)
+	}
+	if strings.Index(text, "VirtualFolders") > strings.Index(text, "network saved") {
+		t.Errorf("Jellyfin was modified before the token was proven by a successful listing:\n%s", text)
+	}
+}
+
+func TestSetupLeavesAnAlreadyPrefixedJellyfinAlone(t *testing.T) {
+	log := &integrationUpstreamLog{}
+	jellyfin := integrationFakeJellyfinWith(t, log, jellyfinSample, http.StatusOK, jellyfinFakeOptions{base: "/jellyfin"})
+	grimmory := integrationFakeGrimmory(t, log, `[{"id":1,"name":"Books"}]`, http.StatusOK, http.StatusOK)
+	response, err := discover(t, jellyfin, grimmory)
+	if err != nil {
+		t.Fatalf("a configured node must still validate: %v", err)
+	}
+	if len(response.Jellyfin) != 3 {
+		t.Errorf("libraries were not discovered under the prefix: %v", response.Jellyfin)
+	}
+	if strings.Contains(log.text(), "network saved") {
+		t.Errorf("an already-prefixed Jellyfin must not be modified:\n%s", log.text())
+	}
+	if !strings.Contains(log.text(), "jellyfin GET /jellyfin/Library/VirtualFolders") {
+		t.Errorf("discovery did not use the prefix:\n%s", log.text())
+	}
+}
+
+func TestSetupDoesNotTouchJellyfinWhenTheTokenIsRejected(t *testing.T) {
+	log := &integrationUpstreamLog{}
+	jellyfin := integrationFakeJellyfin(t, log, jellyfinSample, http.StatusOK)
+	grimmory := integrationFakeGrimmory(t, log, `[{"id":1,"name":"Books"}]`, http.StatusOK, http.StatusOK)
+	_, err := validateIntegrationConfig(context.Background(),
+		IntegrationValidationRequest{JellyfinToken: "wrong", GrimmoryUser: canaryGrimmoryUser, GrimmoryPassword: canaryGrimmoryPass}, jellyfin.URL, grimmory.URL)
+	if !errors.Is(err, errJellyfinRejected) {
+		t.Fatalf("error = %v, want jellyfin_rejected", err)
+	}
+	if strings.Contains(log.text(), "network") {
+		t.Errorf("settings were read or written with a rejected token:\n%s", log.text())
+	}
+}
+
+func TestSetupReportsAJellyfinThatWillNotAcceptTheBaseURL(t *testing.T) {
+	cases := []struct {
+		name string
+		opts jellyfinFakeOptions
+		want error
+	}{
+		{"save refused", jellyfinFakeOptions{postStatus: http.StatusForbidden}, errJellyfinRejected},
+		{"save fails", jellyfinFakeOptions{postStatus: http.StatusInternalServerError}, errJellyfinBasePath},
+		{"settings unreadable", jellyfinFakeOptions{getStatus: http.StatusInternalServerError}, errJellyfinUnavailable},
+		{"settings shaped unexpectedly", jellyfinFakeOptions{networkBody: `{"InternalHttpPort":8096}`}, errJellyfinInvalidResponse},
+		{"settings not an object", jellyfinFakeOptions{networkBody: `[]`}, errJellyfinInvalidResponse},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &integrationUpstreamLog{}
+			jellyfin := integrationFakeJellyfinWith(t, log, jellyfinSample, http.StatusOK, tc.opts)
+			grimmory := integrationFakeGrimmory(t, log, `[{"id":1,"name":"Books"}]`, http.StatusOK, http.StatusOK)
+			_, err := discover(t, jellyfin, grimmory)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

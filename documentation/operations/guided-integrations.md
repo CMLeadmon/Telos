@@ -23,6 +23,15 @@ sudo telos configure integrations --setup
 6. Reads the Jellyfin API key and the Grimmory gateway account **without echo**,
    and sends them (stdin of a throwaway `telos-core validate-integrations`
    container on the production networks) to the two services.
+   After Jellyfin accepts the key and lists its libraries, the same call stores
+   Jellyfin's **Base URL** as `/jellyfin` in its network settings (every other
+   setting is sent back unchanged). The gateway reaches Jellyfin at
+   `http://jellyfin:8096/jellyfin` and its HLS rewriting depends on that prefix;
+   a fresh Jellyfin serves from `/`, so without this the gateway reports Jellyfin
+   `degraded`. Jellyfin applies a new Base URL when it next starts, which the
+   teardown in step 9 and the following `telos start` provide. Nothing is changed
+   if the key is rejected or the libraries cannot be listed, and a Jellyfin that
+   already serves under `/jellyfin` is left alone.
 7. Shows each service's libraries as `name (id …)`, asks which to expose
    (comma-separated numbers; duplicates collapse; the result follows the order
    shown), validates again with the same credentials, and checks every selected
@@ -72,11 +81,13 @@ A failed run never changes `node.env`. Restart with `sudo telos stop` and
 
 ## Verification status
 
-The Jellyfin discovery call (`GET /Library/VirtualFolders`) and the Grimmory
-login follow the services' documented APIs. The Grimmory library listing
-(`GET /api/v1/libraries`, an array of objects with `id` and `name`) follows the
-Phase 2 contract but has **not** been captured from a live pinned Grimmory in this
-repository: `backend/testdata/integrations/grimmory-libraries.synthetic.json` is
-explicitly synthetic and the decoder fails closed (`grimmory_invalid_response`) on
-any other shape. Until a sanitized capture from the locked Grimmory version
-replaces that fixture, live Library discovery is unverified.
+The Jellyfin discovery call (`GET /Library/VirtualFolders`), the Base URL save
+(`GET`/`POST /System/Configuration/network`) and the Grimmory login and library
+listing were exercised end to end on the Ubuntu 26.04 reference VM against the
+locked Jellyfin 10.11.11 and Grimmory v3.5.0 images. The Grimmory listing
+(`GET /api/v1/libraries`) is an array of objects with an integer `id` and a
+`name` there, as the decoder expects, and the decoder still fails closed
+(`grimmory_invalid_response`) on any other shape. That run is a rehearsal on a
+virtual machine, not certification evidence, and the checked-in
+`backend/testdata/integrations/grimmory-libraries.synthetic.json` remains
+explicitly synthetic.
