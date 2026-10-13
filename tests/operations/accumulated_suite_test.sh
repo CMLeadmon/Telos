@@ -39,7 +39,7 @@ cp "$repo_root/scripts/run-gates.py" "$accumulated_repo/scripts/run-gates.py"
 cp "$repo_root/scripts/lib/evidence.py" "$accumulated_repo/scripts/lib/evidence.py"
 cp "$repo_root/scripts/lib/process_supervisor.py" "$accumulated_repo/scripts/lib/process_supervisor.py"
 printf '__pycache__/\n' >"$accumulated_repo/.gitignore"
-python3 - "$accumulated_repo/ci/phase-gates.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
+python3 - "$accumulated_repo/ci/phase-gates.json" "$repo_root/scripts/stage-release.sh" <<'PY'
 import json
 import sys
 

@@ -32,7 +32,7 @@ volumes:
 
 services:
   traefik:
-    image: docker.io/library/traefik:v3.3
+    image: docker.io/library/traefik:v3.3@sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f
     container_name: telos-traefik
     restart: unless-stopped
     security_opt:
@@ -204,7 +204,7 @@ services:
       retries: 3
 
   postgres:
-    image: docker.io/library/postgres:16.14-alpine
+    image: docker.io/library/postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: telos-postgres
     restart: unless-stopped
     # Enable query statistics with parameter redaction and no statement logging.
@@ -240,7 +240,7 @@ services:
       retries: 5
 
   redis:
-    image: docker.io/library/redis:7-alpine
+    image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: telos-redis
     restart: unless-stopped
     security_opt:
@@ -282,7 +282,7 @@ services:
       retries: 3
 
   clamav:
-    image: docker.io/clamav/clamav:latest
+    image: docker.io/clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     container_name: telos-clamav
     restart: unless-stopped
     security_opt:
@@ -303,7 +303,7 @@ services:
       retries: 5
 
   jellyfin:
-    image: docker.io/jellyfin/jellyfin:latest
+    image: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
     container_name: telos-jellyfin
     restart: unless-stopped
     user: "${APP_UID}:${APP_GID}"
@@ -323,7 +323,7 @@ services:
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
 
   grimmory-db:
-    image: docker.io/library/mariadb:10.11
+    image: docker.io/library/mariadb:10.11@sha256:7db29378d4fdab73f8123bbc2b48905c90d1a4b00cf848b028f1e81e623257f2
     container_name: telos-grimmory-db
     restart: unless-stopped
     networks:
@@ -342,7 +342,7 @@ services:
       retries: 3
 
   grimmory:
-    image: docker.io/grimmory/grimmory:latest
+    image: docker.io/grimmory/grimmory:v3.5.0@sha256:bf6fe21c6e247597f7869664a440b5a34242e2d2940575cae39c17bfaa66dc0b
     container_name: telos-grimmory
     restart: unless-stopped
     depends_on:

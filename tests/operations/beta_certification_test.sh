@@ -22,7 +22,7 @@ printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$tmp/candidate.json"
 scripts=(
   certify-beta.sh verify-runtime-hardening.sh run-capacity-drill.sh
   audit-host-exposure.sh certify-browser-matrix.sh build-release.sh
-  build-predecessor.sh stage-release.sh sign-evidence.sh verify-release-pins.sh
+  build-predecessor.sh stage-release.sh sign-evidence.sh
   verify-restored-node.sh verify-monitoring.sh upgrade.sh rollback.sh
   provision-jellyfin.sh provision-grimmory.sh ci/run-local.sh
   ci/validate-sbom.sh drills/clean-node-install.sh drills/recovery.sh

@@ -15,17 +15,19 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-GO_IMAGE="docker.io/library/golang:1.26.5"
-PG_IMAGE="docker.io/library/postgres:16.14-alpine"
-REDIS_IMAGE="docker.io/library/redis:7-alpine"
-if test -f release/images.lock; then
-	# images.lock is JSON and carries no "golang-test" key, so this lookup can
-	# legitimately come back empty. Only override the default when it does not,
-	# otherwise podman is handed an empty image reference and the whole suite
-	# dies with "repository name must have at least one component".
-	locked="$(awk '$1 == "golang-test" { print $2 }' release/images.lock)"
-	test -n "$locked" && GO_IMAGE="$locked"
-fi
+# The test toolchain images come from the reviewed lock (release/images.lock,
+# `testImages`), pinned by digest. A tag-only fallback would let the test image drift
+# away from what was reviewed, so the lock is required.
+lock_image() {
+	python3 - "$1" <<'PY'
+import json, sys
+entry = json.load(open("release/images.lock"))["testImages"][sys.argv[1]]
+print(f"{entry['source']}@{entry['manifestDigest']}")
+PY
+}
+GO_IMAGE="$(lock_image golang-test)"
+PG_IMAGE="$(lock_image postgres-test)"
+REDIS_IMAGE="$(lock_image redis-test)"
 
 suite="${1:-all}"
 run_filter=""

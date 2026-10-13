@@ -469,7 +469,7 @@ assert later["exitCode"] == 1, later
 assert "sourceCommit" in later["reason"], later
 PY
 
-python3 - "$fixture_dir/artifact.json" "$repo_root/scripts/verify-release-pins.sh" <<'PY'
+python3 - "$fixture_dir/artifact.json" "$repo_root/scripts/stage-release.sh" <<'PY'
 import json
 import sys
 

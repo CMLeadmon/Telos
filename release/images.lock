@@ -1,10 +1,180 @@
 {
-  "version": "1",
   "images": {
-    "golang": "docker.io/library/golang:1.26.5@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-    "node": "docker.io/library/node:24.18.0-alpine@sha256:2222222222222222222222222222222222222222222222222222222222222222",
-    "postgres": "docker.io/library/postgres:16-alpine@sha256:3333333333333333333333333333333333333333333333333333333333333333",
-    "redis": "docker.io/library/redis:7-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444",
-    "traefik": "docker.io/library/traefik:v3.0@sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    "alpine-runtime": {
+      "manifestDigest": "sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412",
+      "platforms": {
+        "linux/amd64": "sha256:85f2b723e106c34644cd5851d7e81ee87da98ac54672b29947c052a45d31dc2f"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:37Z",
+      "source": "docker.io/library/alpine:3.22.2"
+    },
+    "clamav": {
+      "manifestDigest": "sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6",
+      "platforms": {
+        "linux/amd64": "sha256:705e0723f02fc13bf6e5e8a8e13a8c44420acf5e7ed06dfa2197081da00c7a73"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:44Z",
+      "source": "docker.io/clamav/clamav:1.5.4"
+    },
+    "go-build": {
+      "manifestDigest": "sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2",
+      "platforms": {
+        "linux/amd64": "sha256:111d79159b2326f7e80c4a4706e1ba166acb0e2611df853955f3621828cd49e8"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:36Z",
+      "source": "docker.io/library/golang:1.26.5-alpine"
+    },
+    "grimmory": {
+      "manifestDigest": "sha256:bf6fe21c6e247597f7869664a440b5a34242e2d2940575cae39c17bfaa66dc0b",
+      "platforms": {
+        "linux/amd64": "sha256:83597bf02da48a8ec4042fd4d4f58b9631f5b131d6dee7d2fcc5cf3f2eec2526"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:48Z",
+      "source": "docker.io/grimmory/grimmory:v3.5.0"
+    },
+    "jellyfin": {
+      "manifestDigest": "sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db",
+      "platforms": {
+        "linux/amd64": "sha256:0b901391a662862eddb5dc55d244d7883cbb6236ef5b9a6ea82abc78a89819f0"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:46Z",
+      "source": "docker.io/jellyfin/jellyfin:10.11.11"
+    },
+    "mariadb": {
+      "manifestDigest": "sha256:7db29378d4fdab73f8123bbc2b48905c90d1a4b00cf848b028f1e81e623257f2",
+      "platforms": {
+        "linux/amd64": "sha256:dc9dd57be7f46ad6f350c598a331d64f295899c4abac3ec5652eff831fc38a6c"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:47Z",
+      "source": "docker.io/library/mariadb:10.11"
+    },
+    "nginx-runtime": {
+      "manifestDigest": "sha256:65e3e85dbaed8ba248841d9d58a899b6197106c23cb0ff1a132b7bfe0547e4c0",
+      "platforms": {
+        "linux/amd64": "sha256:28d91bdce70ad09025ea901458fdd149259d8e05982ade79d4ef2c0d9470eb48"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:39Z",
+      "source": "docker.io/nginxinc/nginx-unprivileged:1.27-alpine"
+    },
+    "node-build": {
+      "manifestDigest": "sha256:a0b9bf06e4e6193cf7a0f58816cc935ff8c2a908f81e6f1a95432d679c54fbfd",
+      "platforms": {
+        "linux/amd64": "sha256:4ba75f835bb8802193e4c114572113d4b26f95f6f094f4b5229d2a77773e0afc"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:35Z",
+      "source": "docker.io/library/node:24.18.0-alpine"
+    },
+    "postgres": {
+      "manifestDigest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "platforms": {
+        "linux/amd64": "sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:41Z",
+      "source": "docker.io/library/postgres:16.14-alpine"
+    },
+    "redis": {
+      "manifestDigest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+      "platforms": {
+        "linux/amd64": "sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:42Z",
+      "source": "docker.io/library/redis:7-alpine"
+    },
+    "squid": {
+      "manifestDigest": "sha256:805f2d60c08be89a5f3a08175203ef27819494a2158b47d63068b07c42ecc987",
+      "platforms": {
+        "linux/amd64": "sha256:c2b7da596149b5353421a208bcd2406909477c4baf2825438620b6fc1d0f832a"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:43Z",
+      "source": "docker.io/ubuntu/squid:7.2-26.04_edge"
+    },
+    "traefik": {
+      "manifestDigest": "sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f",
+      "platforms": {
+        "linux/amd64": "sha256:8884ac1939c29f829857dd35229aec4d070a9bd8551c56aee9b81e9df137512e"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:40Z",
+      "source": "docker.io/library/traefik:v3.3"
+    }
+  },
+  "schemaVersion": 2,
+  "testImages": {
+    "golang-test": {
+      "manifestDigest": "sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678",
+      "platforms": {
+        "linux/amd64": "sha256:55d3b3d8ea3ae125d21f528f392a7ae0efbd9c69cbac7a479921121af3c7b2a2"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:54Z",
+      "source": "docker.io/library/golang:1.26.5"
+    },
+    "postgres-test": {
+      "manifestDigest": "sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777",
+      "platforms": {
+        "linux/amd64": "sha256:7a396fd264a2067788b6551122b50f162bf6136312c7fc9d74381cb92c648382"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:55Z",
+      "source": "docker.io/library/postgres:16.14-alpine"
+    },
+    "redis-test": {
+      "manifestDigest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+      "platforms": {
+        "linux/amd64": "sha256:ca0acbb137c1dc3339c8b147a58fd6f42775d4599327b50e7b116c23de501af2"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:56Z",
+      "source": "docker.io/library/redis:7-alpine"
+    }
+  },
+  "toolImages": {
+    "k6": {
+      "manifestDigest": "sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34",
+      "platforms": {
+        "linux/amd64": "sha256:98305727d160c065e1da695619c40ea4becbc3e116a3842da2d6027970e428c2"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:49Z",
+      "source": "docker.io/grafana/k6:2.3.0"
+    },
+    "prometheus-tool": {
+      "manifestDigest": "sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e",
+      "platforms": {
+        "linux/amd64": "sha256:86b17a25c2db1d16a61b16b3c8f336679eb19e26333d03e808da387206e40faa"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:52Z",
+      "source": "docker.io/prom/prometheus:v3.15.0"
+    },
+    "syft": {
+      "manifestDigest": "sha256:3eb5379ba7b409c3f4069b686110527af0c47df993fa5c10d13e7cf34f49b1aa",
+      "platforms": {
+        "linux/amd64": "sha256:507b76f097cd0f4a0f998a346afe61f5776329913d6ab3c0bd678b6635356120"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:50Z",
+      "source": "docker.io/anchore/syft:v1.54.1"
+    },
+    "trivy": {
+      "manifestDigest": "sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa",
+      "platforms": {
+        "linux/amd64": "sha256:9db099105405c648166e6b94155eb32f8da12673cf1f455207f7385cc9a77283"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-13T19:46:51Z",
+      "source": "docker.io/aquasec/trivy:0.75.0"
+    }
   }
 }

@@ -6,11 +6,11 @@
 #   TELOS_TEST_DATABASE_URL=postgres://telos:testpw@127.0.0.1:55432/telos_test?sslmode=disable \
 #   TELOS_TEST_REDIS_URL=redis://127.0.0.1:56379/0 \
 #     podman run --rm --network host -v ./backend:/app:z -w /app \
-#     docker.io/library/golang:1.26.5 go test ./...
+#     docker.io/library/golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678 go test ./...
 #   podman compose -f docker-compose.test.yml down -v
 services:
   postgres-test:
-    image: docker.io/library/postgres:16.14-alpine
+    image: docker.io/library/postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     environment:
       - POSTGRES_USER=telos
       - POSTGRES_PASSWORD=testpw
@@ -20,6 +20,6 @@ services:
     tmpfs:
       - /var/lib/postgresql/data
   redis-test:
-    image: docker.io/library/redis:7-alpine
+    image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     ports:
       - "127.0.0.1:56379:6379"

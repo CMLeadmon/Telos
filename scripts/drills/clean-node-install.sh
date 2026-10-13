@@ -36,6 +36,7 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
+[[ -z "$evidence_out" || -n "$candidate_lock" ]] || usage  # evidence is candidate-bound; a lock is required
 reason="no drill target was supplied: the clean-install gate observes a real node and needs --target-file (a protected drill-target descriptor) and --fixture-manifest"
 arguments=(--gate-id "${TELOS_GATE_ID:-clean-install}" --reason "$reason")
 [[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
