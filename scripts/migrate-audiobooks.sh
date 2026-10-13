@@ -13,13 +13,15 @@ set -euo pipefail
 MANIFEST_PATH="migrations/audiobooks/manifest.json"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Reuse the CLI's driver detection instead of assuming one. This script
-# hardcoded `podman compose`, which does not exist on hosts that run
-# podman-compose — including the reference development host — so every
-# subcommand failed before reaching the gateway.
+# Reuse the CLI's Compose contract (Podman only, pinned provider, node.env) instead
+# of assuming a driver. CLI_DIR is what the shared helpers expect.
+export REPO_ROOT
+CLI_DIR="$REPO_ROOT/cli"
+export CLI_DIR
 # shellcheck source=../cli/lib/common.sh
-. "$REPO_ROOT/cli/lib/common.sh"
-COMPOSE="$(detect_compose)"
+. "$CLI_DIR/lib/common.sh"
+# shellcheck source=../cli/lib/config.sh
+. "$CLI_DIR/lib/config.sh"
 
 if [ $# -lt 1 ]; then
   echo "Usage: scripts/migrate-audiobooks.sh <inventory|copy|verify|switch|rollback|cleanup> [args...]"
@@ -33,4 +35,4 @@ shift
 # that on stderr and exit non-zero rather than printing a success line, so a
 # `switch` or `cleanup` here fails visibly instead of appearing to complete.
 echo "==> Executing audiobook migration subcommand: ${SUBCMD}"
-$COMPOSE --profile migration run --rm telos-audiobook-migrate ./telos-core audiobook-migrate "${SUBCMD}" --manifest "${MANIFEST_PATH}" "$@"
+compose --profile migration run --rm telos-audiobook-migrate ./telos-core audiobook-migrate "${SUBCMD}" --manifest "${MANIFEST_PATH}" "$@"

@@ -115,6 +115,10 @@ def load_inputs(path, gates):
         fail(f"inputs manifest is invalid: {error}")
     if not isinstance(document, dict) or set(document) != {"gateInputs"}:
         fail("inputs manifest must be an object with exactly one key, gateInputs")
+    try:
+        rg.validate_record("gate-inputs", document)
+    except rg.GraphError as error:
+        fail(f"inputs manifest is invalid: {error}")
     gate_inputs = document["gateInputs"]
     if not isinstance(gate_inputs, dict):
         fail("gateInputs must be an object")

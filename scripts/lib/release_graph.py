@@ -46,6 +46,8 @@ SCHEMA_FILES = {
     "evidence-index": "evidence-index.schema.json",
     "certification": "certification.schema.json",
     "release-review": "release-review.schema.json",
+    "drill-target": "drill-target.schema.json",
+    "gate-inputs": "gate-inputs.schema.json",
 }
 GRAPH_DOCUMENTS = {
     "artifact-index": "artifact-index.json",
@@ -411,6 +413,32 @@ def _semantic_release_review(doc):
     return None
 
 
+def _semantic_drill_target(doc):
+    origin = doc["origin"]
+    if re.fullmatch(r"https://(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]+)?", origin):
+        fail("origin must be a DNS name, not an IP literal")
+    for key in ("nodePath", "sshConfigFile", "credentialsFile", "restoreTargetFile", "predecessorGeneration", "capacityTargetFile"):
+        value = doc[key]
+        if value is not None and (os.path.normpath(value) != value or value == "/"):
+            fail(f"{key} must be an absolute normalized path")
+    target = doc["sshTarget"]
+    if target is not None and target.startswith("-"):
+        fail("sshTarget may not start with a dash")
+    if (target is None) != (doc["sshConfigFile"] is None):
+        fail("sshTarget and sshConfigFile must be given together (a remote target needs a protected SSH config)")
+    if "password" in json.dumps(doc).lower():
+        fail("a drill target may not embed a password")
+
+
+def _semantic_gate_inputs(doc):
+    for gate_id, values in doc["gateInputs"].items():
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", gate_id):
+            fail(f"invalid gate id {gate_id!r}")
+        for key, value in values.items():
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", key) or os.path.normpath(value) != value:
+                fail(f"invalid input {gate_id}.{key}")
+
+
 SEMANTICS = {
     "artifact-index": _semantic_artifact_index,
     "release-manifest": _semantic_release_manifest,
@@ -424,6 +452,8 @@ SEMANTICS = {
     "evidence-index": _semantic_evidence_index,
     "certification": _semantic_certification,
     "release-review": _semantic_release_review,
+    "drill-target": _semantic_drill_target,
+    "gate-inputs": _semantic_gate_inputs,
 }
 
 

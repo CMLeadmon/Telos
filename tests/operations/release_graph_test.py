@@ -467,6 +467,48 @@ class RecordTests(unittest.TestCase):
         self.assertInvalid("release-review", dict(review, decision="rejected"))
 
 
+class DrillRecordTests(unittest.TestCase):
+    def target(self, **overrides):
+        value = {"schemaVersion": 1, "origin": "https://node.example.net", "nodePath": "/var/lib/telos",
+                 "hostId": D, "sshTarget": "root@node.example.net", "sshConfigFile": "/home/op/.ssh/telos-config",
+                 "credentialsFile": "/home/op/telos.creds", "restoreTargetFile": None,
+                 "predecessorGeneration": None, "capacityTargetFile": None, "confirmation": None}
+        value.update(overrides)
+        return value
+
+    def assertInvalid(self, kind, document, fragment=None):
+        with self.assertRaises(rg.GraphError) as caught:
+            rg.validate_record(kind, document)
+        if fragment:
+            self.assertIn(fragment, str(caught.exception))
+
+    def test_valid_drill_target_and_local_target(self):
+        rg.validate_record("drill-target", self.target())
+        rg.validate_record("drill-target", self.target(sshTarget=None, sshConfigFile=None))
+
+    def test_drill_target_rejections(self):
+        self.assertInvalid("drill-target", self.target(origin="http://node.example.net"))
+        self.assertInvalid("drill-target", self.target(origin="https://10.1.2.3"), "IP literal")
+        self.assertInvalid("drill-target", self.target(origin="https://user:pw@node.example.net"))
+        self.assertInvalid("drill-target", self.target(sshTarget="-oProxyCommand=evil"))
+        self.assertInvalid("drill-target", self.target(sshTarget="a b@host"))
+        self.assertInvalid("drill-target", self.target(sshConfigFile=None), "together")
+        self.assertInvalid("drill-target", self.target(sshTarget=None), "together")
+        self.assertInvalid("drill-target", self.target(nodePath="/var/../etc"), "normalized")
+        self.assertInvalid("drill-target", self.target(nodePath="relative/path"))
+        self.assertInvalid("drill-target", self.target(hostId="raw-machine-id"))
+        self.assertInvalid("drill-target", self.target(extra="x"), "unknown property")
+        self.assertInvalid("drill-target", {k: v for k, v in self.target().items() if k != "credentialsFile"})
+
+    def test_gate_inputs(self):
+        rg.validate_record("gate-inputs", {"gateInputs": {"host-exposure": {"targetFile": "/secure/t.json"}}})
+        self.assertInvalid("gate-inputs", {"gateInputs": {"host-exposure": {"targetFile": "relative"}}})
+        self.assertInvalid("gate-inputs", {"gateInputs": {"Bad_Id": {"targetFile": "/x"}}})
+        self.assertInvalid("gate-inputs", {"gateInputs": {"g": {"bad key": "/x"}}})
+        self.assertInvalid("gate-inputs", {"gateInputs": {}, "extra": 1})
+        self.assertInvalid("gate-inputs", {"gateInputs": {"g": {"targetFile": "/a/../b"}}})
+
+
 class ResultDirectoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

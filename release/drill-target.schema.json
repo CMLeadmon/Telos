@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "absPath": {
+      "maxLength": 512,
+      "minLength": 2,
+      "pattern": "^/[A-Za-z0-9._@+=/-]+$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "capacityTargetFile": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/absPath"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "confirmation": {
+      "maxLength": 200,
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "credentialsFile": {
+      "$ref": "#/$defs/absPath"
+    },
+    "hostId": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "nodePath": {
+      "$ref": "#/$defs/absPath"
+    },
+    "origin": {
+      "maxLength": 300,
+      "pattern": "^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?$",
+      "type": "string"
+    },
+    "predecessorGeneration": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/absPath"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "restoreTargetFile": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/absPath"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "sshConfigFile": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/absPath"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sshTarget": {
+      "maxLength": 300,
+      "pattern": "^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+$|^[A-Za-z0-9.-]+$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "origin",
+    "nodePath",
+    "hostId",
+    "sshTarget",
+    "sshConfigFile",
+    "credentialsFile",
+    "restoreTargetFile",
+    "predecessorGeneration",
+    "capacityTargetFile",
+    "confirmation"
+  ],
+  "title": "TelosDrillTarget",
+  "type": "object"
+}
