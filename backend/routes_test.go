@@ -133,7 +133,8 @@ func TestProductionDeviceRegistration(t *testing.T) {
 
 	var audit bytes.Buffer
 	log.SetOutput(&audit)
-	t.Cleanup(func() { log.SetOutput(nil) })
+	previousOutput := log.Writer()
+	t.Cleanup(func() { log.SetOutput(previousOutput) })
 
 	t.Run("password exchange needs no prior session and is audited without secrets", func(t *testing.T) {
 		const password = "a-valid-long-password"
