@@ -274,10 +274,10 @@ func securityHeaders(next http.Handler, cfg SecurityConfig) http.Handler {
 	})
 }
 
-// devCORS allows credentialed cross-origin calls only from the finite
+// corsMiddleware allows credentialed cross-origin calls only from the finite
 // development allowlist or configured TELOS_ALLOWED_ORIGINS. Production
 // emits no permissive CORS headers unless TELOS_ALLOWED_ORIGINS is set.
-func devCORS(next http.Handler, cfg SecurityConfig) http.Handler {
+func corsMiddleware(next http.Handler, cfg SecurityConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if cfg.Environment == "development" || len(cfg.AllowedOrigins) > 0 {
 			origin := r.Header.Get("Origin")

@@ -339,7 +339,7 @@ func TestCSPRendersExactWSSOrigin(t *testing.T) {
 
 func TestNoReflectiveCORSInProduction(t *testing.T) {
 	cfg := testSecurityConfig(t, "production", "https://community.example.org")
-	h := devCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+	h := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Origin", "https://attacker.example")
 	rec := httptest.NewRecorder()
@@ -365,7 +365,7 @@ func TestAllowedOriginsCORSAndCSP(t *testing.T) {
 		req.Header.Set("Origin", "https://client.example.com")
 		rec := httptest.NewRecorder()
 
-		handler := devCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
 		handler.ServeHTTP(rec, req)
 
 		if rec.Header().Get("Access-Control-Allow-Origin") != "https://client.example.com" {
@@ -418,7 +418,7 @@ func TestAllowedOriginsCORSAndCSP(t *testing.T) {
 		req.Header.Set("Origin", "https://client.example.com")
 		rec := httptest.NewRecorder()
 
-		handler := devCORS(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
+		handler := corsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}), cfg)
 		handler.ServeHTTP(rec, req)
 
 		if rec.Header().Get("Access-Control-Allow-Origin") != "" {
