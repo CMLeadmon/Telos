@@ -79,6 +79,9 @@ config/dynamic/routes.yaml
 backend/go.mod
 backend/go.sum
 backend/Dockerfile
+backend/integration_config.go
+backend/integration_config_test.go
+backend/testdata/integrations/grimmory-libraries.synthetic.json
 backend/main.go
 ci/phase-gates.json
 cli/lib/common.sh
@@ -119,6 +122,7 @@ tests/operations/ci_workflow_contract_test.py
 tests/operations/frozen_artifact_test.py
 tests/operations/gate_runner_v2_test.py
 tests/operations/release_graph_test.py
+tests/operations/integration_discovery_test.sh
 tests/operations/node_config_test.sh
 tests/operations/release_test.sh
 tests/operations/runtime_hardening_test.sh

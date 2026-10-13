@@ -1,0 +1,8 @@
+{
+  "provenance": "SYNTHETIC: written to exercise the decoder. Not captured from a live pinned Grimmory. Replace with a sanitized live capture (plus version and API reference) before claiming live discovery works.",
+  "request": {"method": "GET", "path": "/api/v1/libraries", "authorization": "Bearer <redacted>"},
+  "response": [
+    {"id": 3, "name": "Audiobooks"},
+    {"id": "7", "name": "Books"}
+  ]
+}

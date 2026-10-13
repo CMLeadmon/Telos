@@ -255,6 +255,12 @@ func main() {
 		runAudiobookMigrateCommand(os.Args[2:])
 		return
 	}
+	if mode == "validate-integrations" {
+		// Dispatched before validateSecrets, signing-key loading, PostgreSQL and
+		// Redis so guided setup works on a node whose configuration is still
+		// incomplete. Extra arguments are a usage error.
+		os.Exit(integrationCommandMain(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	}
 
 	port := os.Getenv("PORT")
 	if port == "" {
