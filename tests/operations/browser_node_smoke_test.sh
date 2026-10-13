@@ -35,6 +35,8 @@ cd "$repo_root"
 mkdir -p "$work/tmp"
 export TMPDIR="$work/tmp"
 smoke="$repo_root/scripts/smoke-browser-node.sh"
+# The fake node answers instantly, so an outage that does not show must fail at once.
+export TELOS_SMOKE_OUTAGE_WAIT=0
 commit="$(printf '%040d' 7)"
 lock_digest_of() { python3 -c 'import hashlib,sys; print("sha256:"+hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 

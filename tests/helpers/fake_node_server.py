@@ -184,12 +184,18 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(201, {"id": "m-1"})
         if path == "/api/v1/channels/c-1/roots":
             return self.send(200, [{"content": m} for m in state.messages])
+        if path == "/api/v1/media":
+            return self.send(200, [{"id": "lib", "name": "Movies", "type": "video", "collectionType": "movies"}])
         if path == "/api/v1/media/items":
+            # Like the real gateway: a listing needs the library (or parent) it is for.
+            if "libraryId=" not in self.path and "parentId=" not in self.path:
+                return self.send(400, {"error": "Missing parentId or libraryId parameter"})
+            return self.send(200, [{"id": "item-1", "name": "Fixture"}])
+        if re.fullmatch(r"/api/v1/stream/video/[^/]+", path):
             if state.jellyfin_down:
+                # Playback needs Jellyfin live, so this is where its outage shows.
                 return self.send(503 if "outage-html" not in faults else 200, "<html>down</html>" if "outage-html" in faults else {"error": "jellyfin"},
                                  "text/html" if "outage-html" in faults else "application/json")
-            return self.send(200, [{"id": "lib", "name": "Movies"}])
-        if re.fullmatch(r"/api/v1/stream/video/[^/]+", path):
             if "no-hls-redirect" in faults:
                 return self.send(200, HLS, "application/vnd.apple.mpegurl")
             return self.send(302, b"", headers={"Location": "/api/v1/hls/locatorABC/index.m3u8"})
@@ -203,10 +209,11 @@ class Handler(BaseHTTPRequestHandler):
                              "audio/mpeg" if "audio-wrong-type" not in faults else "text/plain",
                              {"Content-Range": "bytes 0-102/4096"} if ok_range else None)
         if path == "/api/v1/library/books":
-            if state.grimmory_down:
-                return self.send(502, {"error": "grimmory"})
+            # The listing comes from Telos's own catalog, so it survives an outage.
             return self.send(200, [{"id": "book-1", "title": "Fixture"}])
         if re.fullmatch(r"/api/v1/library/books/[^/]+/content", path):
+            if state.grimmory_down:
+                return self.send(502, {"error": "grimmory"})
             return self.send(200, epub_bytes("bad-epub" not in faults), "application/epub+zip")
         if path == "/api/v1/files" and method == "POST":
             raw = self.read_body()

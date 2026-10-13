@@ -68,24 +68,39 @@ def main():
     def identifier(item):
         return str(item.get("id") or item.get("ID") or item.get("Id"))
 
+    def leaf(library_id, wanted):
+        """Walk a library's folders (artist -> album -> track) to the item named `wanted`."""
+        def walk(parent_param, parent, depth):
+            for item in call("GET", f"/api/v1/media/items?{parent_param}={urllib.parse.quote(parent)}") or []:
+                label = str(item.get("name") or item.get("Name") or "")
+                if wanted.lower() in label.lower() and not item.get("isFolder") and not item.get("folder"):
+                    return item
+                if depth < 3 and (item.get("isFolder") or item.get("folder") or item.get("type") in ("folder", "MusicArtist", "MusicAlbum")):
+                    found = walk("parentId", identifier(item), depth + 1)
+                    if found:
+                        return found
+            return None
+        return walk("libraryId", library_id, 0)
+
     # The catalog is reconciled in the background after the first start.
     deadline = time.time() + 240
-    media = books = None
+    video = audio = book = None
     while time.time() < deadline:
-        media = call("GET", "/api/v1/media/items")
-        books = call("GET", "/api/v1/library/books")
-        if media and books:
+        libraries = call("GET", "/api/v1/media") or []
+        books = call("GET", "/api/v1/library/books") or []
+        for library in libraries:
+            kind = str(library.get("collectionType") or library.get("type") or "")
+            if kind in ("movies", "video") and not video:
+                video = leaf(identifier(library), "Telos Test Film")
+            if kind in ("music", "audio") and not audio:
+                audio = leaf(identifier(library), "Test Tone")
+        book = first(books, "Telos Test Book")
+        if video and audio and book:
             break
         time.sleep(5)
-    if not media or not books:
-        raise SystemExit("the catalog stayed empty: Jellyfin or Grimmory has not been indexed")
-    video = first(media, "Telos Test Film")
-    audio = first(media, "Test Tone")
-    book = first(books, "Telos Test Book")
     if not (video and audio and book):
-        print(json.dumps({"media": [str(m.get("name") or m.get("Name")) + ":" + str(m.get("type") or m.get("Type")) for m in media][:20],
-                          "books": [str(b.get("title") or b.get("name")) for b in books][:20]}), file=sys.stderr)
-        raise SystemExit("a rehearsal fixture is missing from the catalog")
+        print(json.dumps({"video": bool(video), "audio": bool(audio), "book": bool(book)}), file=sys.stderr)
+        raise SystemExit("a rehearsal fixture is missing from the catalog: Jellyfin or Grimmory has not indexed it")
     channels = call("GET", "/api/v1/channels")
     channel = channels[0]
     manifest = {

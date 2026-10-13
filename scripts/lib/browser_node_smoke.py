@@ -261,9 +261,12 @@ class Journey:
         audio = self.manifest["audio"]["id"]
 
         def hls():
-            media = self.member.json("GET", "/api/v1/media/items")
-            if not media:
+            libraries = self.member.json("GET", "/api/v1/media")
+            if not libraries:
                 raise Assertion("the Stream catalog is empty")
+            listing = self.member.json("GET", f"/api/v1/media/items?libraryId={urllib.parse.quote(str(libraries[0].get('id')), safe='')}")
+            if listing is None:
+                raise Assertion("the first Stream library cannot be listed")
             status, headers, _ = self.member.request("GET", f"/api/v1/stream/video/{urllib.parse.quote(video, safe='')}")
             if status not in (302, 303, 307):
                 raise Assertion(f"video entry returned {status}, expected an HLS redirect")
@@ -371,11 +374,24 @@ class Journey:
         return True
 
     def outages(self):
+        video = urllib.parse.quote(self.manifest["video"]["id"], safe="")
+        book = urllib.parse.quote(self.manifest["ebook"]["id"], safe="")
+        # Each outage is probed through a request that needs its dependency live. The
+        # catalog listings are served from Telos's own state, and an item authorized a
+        # moment ago stays authorized for a short time, so the first reply after the
+        # dependency stops may still be a success: wait for the first failure instead.
+        wait = float(os.environ.get("TELOS_SMOKE_OUTAGE_WAIT", "75"))
+
         def degraded(stage, module_path, label):
             def probe():
                 if not self.stage(stage):
                     raise SmokeError("outage control is unavailable")
-                status, headers, _ = self.member.request("GET", module_path)
+                deadline = time.monotonic() + wait
+                while True:
+                    status, headers, _ = self.member.request("GET", module_path)
+                    if status in (502, 503, 504) or time.monotonic() >= deadline:
+                        break
+                    time.sleep(3)
                 if status not in (502, 503, 504):
                     raise Assertion(f"{label} answered {status} during its outage instead of a degraded 502/503")
                 if "text/html" in headers.get("content-type", ""):
@@ -395,15 +411,21 @@ class Journey:
                 self.report.append({"id": identifier, "description": "outage stage", "status": "not_run",
                                     "detail": "no outage controller (--stage-pipe) was attached"})
             return
-        self.check("outage.jellyfin", "a Jellyfin outage degrades Stream only", degraded("jellyfin-down", "/api/v1/media/items", "Stream"))
-        self.check("outage.grimmory", "a Grimmory outage degrades Library only", degraded("grimmory-down", "/api/v1/library/books", "Library"))
+        self.check("outage.jellyfin", "a Jellyfin outage degrades Stream only", degraded("jellyfin-down", f"/api/v1/stream/video/{video}", "Stream"))
+        self.check("outage.grimmory", "a Grimmory outage degrades Library only", degraded("grimmory-down", f"/api/v1/library/books/{book}/content", "Library"))
 
         def restored():
             if not self.stage("restored"):
                 raise SmokeError("outage control is unavailable")
-            if self.member.request("GET", "/api/v1/media/items")[0] != 200 or self.member.request("GET", "/api/v1/library/books")[0] != 200:
-                raise Assertion("Stream or Library did not recover")
-            return "both modules recovered"
+            deadline = time.monotonic() + wait
+            while True:
+                stream = self.member.request("GET", f"/api/v1/stream/video/{video}")[0]
+                library = self.member.request("GET", f"/api/v1/library/books/{book}/content")[0]
+                if stream in (200, 302, 303, 307) and library == 200:
+                    return "both modules recovered"
+                if time.monotonic() >= deadline:
+                    raise Assertion(f"Stream ({stream}) or Library ({library}) did not recover")
+                time.sleep(3)
         self.check("outage.restored", "both modules recover after the outages", restored)
 
     def run(self):
