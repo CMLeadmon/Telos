@@ -91,13 +91,13 @@
       "source": "docker.io/library/redis:7-alpine"
     },
     "squid": {
-      "manifestDigest": "sha256:805f2d60c08be89a5f3a08175203ef27819494a2158b47d63068b07c42ecc987",
+      "manifestDigest": "sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c",
       "platforms": {
-        "linux/amd64": "sha256:c2b7da596149b5353421a208bcd2406909477c4baf2825438620b6fc1d0f832a"
+        "linux/amd64": "sha256:94f844158e12b52f51b4ae996515e37e8fb3e8d85e1c86caba1a297376e4ec4f"
       },
       "registry": "docker.io",
-      "resolvedAt": "2026-10-13T19:46:43Z",
-      "source": "docker.io/ubuntu/squid:7.2-26.04_edge"
+      "resolvedAt": "2026-10-13T20:11:54Z",
+      "source": "docker.io/ubuntu/squid:6.6-24.04_edge"
     },
     "traefik": {
       "manifestDigest": "sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f",

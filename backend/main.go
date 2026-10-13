@@ -257,6 +257,11 @@ func main() {
 		runAudiobookMigrateCommand(os.Args[2:])
 		return
 	}
+	if mode == "setup-proxy" {
+		// The first-run loopback relay (see setup_proxy.go). Dispatched before any
+		// secret, key, database or Redis dependency: it needs none of them.
+		os.Exit(runSetupProxyCommand(os.Args[2:]))
+	}
 	if mode == "validate-integrations" {
 		// Dispatched before validateSecrets, signing-key loading, PostgreSQL and
 		// Redis so guided setup works on a node whose configuration is still

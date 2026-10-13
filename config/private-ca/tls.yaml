@@ -1,0 +1,14 @@
+# Traefik file-provider fragment for a node served by an operator-managed private CA
+# (TELOS_PRIVATE_CA=1; see docker-compose.private-ca.yml). The certificate and key are
+# mounted read-only from TELOS_TLS_PATH. Browsers and the desktop client accept it only
+# because the operator installed the CA in the operating-system trust store; there is
+# no client-side override.
+tls:
+  certificates:
+    - certFile: /etc/telos-tls/server.crt
+      keyFile: /etc/telos-tls/server.key
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /etc/telos-tls/server.crt
+        keyFile: /etc/telos-tls/server.key

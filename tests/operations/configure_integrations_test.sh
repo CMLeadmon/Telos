@@ -24,10 +24,14 @@ python3 - "$repo_root/docker-compose.setup.yml" <<'PY'
 import sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
 services = doc["services"]
-assert set(services) == {"jellyfin", "grimmory"}, services
-assert services["jellyfin"] == {"ports": ["127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096"]}, services["jellyfin"]
-assert services["grimmory"] == {"ports": ["127.0.0.1:${GRIMMORY_SETUP_PORT:-6060}:6060"]}, services["grimmory"]
-assert set(doc) == {"services"}, "the overlay may only add the two loopback bindings"
+assert set(services) == {"telos-setup-proxy"}, services
+relay = services["telos-setup-proxy"]
+# Only the relay publishes, and only on loopback; the upstream UIs publish nothing
+# (a container on an internal network cannot have a working published port).
+assert relay["ports"] == ["127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096", "127.0.0.1:${GRIMMORY_SETUP_PORT:-6060}:6060"], relay["ports"]
+assert set(relay["networks"]) == {"telos-backend", "telos-setup"}, relay["networks"]
+assert doc["networks"]["telos-setup"].get("internal") in (None, False), "the setup network must be an ordinary bridge"
+assert set(doc) == {"networks", "services"}, "the overlay may only add the relay and its network"
 PY
 python3 - "$repo_root/docker-compose.yml" <<'PY'
 import sys, yaml
@@ -81,6 +85,17 @@ PY
 case "$1" in
   info) echo false ;;
   ps) cat "$state/containers" 2>/dev/null || true ;;
+  rm)
+    # Direct removal by name (podman-compose has no `rm`). Fails like the real thing when
+    # the test asks for a removal failure, and leaves the listener alive when asked.
+    [[ "${STUB_RM_FAILS:-0}" == 1 ]] && exit 1
+    : >"$state/containers"
+    if [[ "${STUB_RM_LEAVES_LISTENER:-0}" != 1 ]]; then
+      for pidfile in "$state"/listener.*.pid; do
+        [[ -f "$pidfile" ]] && kill -KILL "$(cat "$pidfile")" 2>/dev/null && rm -f "$pidfile"
+      done
+    fi ;;
+  network) ;;
   compose)
     shift
     verb=""
@@ -202,7 +217,7 @@ assert request == {"jellyfinToken": sys.argv[2], "grimmoryUser": "gateway-user",
 PY
 done
 ! grep -q 'docker-compose.setup.yml' "$work/state/run.1.argv" || fail "the setup overlay was used without --setup"
-grep -q 'compose --env-file '"$env_file"' --project-directory '"$skeleton"' -p telos' "$STUB_LOG" || fail "Compose was not run against node.env with a stable project"
+grep -q 'compose --env-file '"$env_file"' -p telos' "$STUB_LOG" || fail "Compose was not run against node.env with a stable project"
 
 # --- blank password keeps the stored one; an explicit one replaces it --------------------------
 reset_state; mark_running
@@ -264,7 +279,7 @@ PY
 
 # --- --setup lifecycle ---------------------------------------------------------------------------
 check_setup_started() {
-  grep -q "compose .*-f $skeleton/docker-compose.yml -f $skeleton/docker-compose.setup.yml up -d jellyfin grimmory-db grimmory telos-egress-proxy" "$STUB_LOG" \
+  grep -q "compose .*-f $skeleton/docker-compose.yml -f $skeleton/docker-compose.setup.yml up -d jellyfin grimmory-db grimmory telos-egress-proxy telos-setup-proxy" "$STUB_LOG" \
     || fail "--setup must start exactly Jellyfin, Grimmory, its database and the egress proxy with base+setup files: $(grep ' up ' "$STUB_LOG")"
   [[ "$(grep -c ' up ' "$STUB_LOG")" -eq 1 ]] || fail "--setup started more than one set of services"
   ! grep -E ' up .*(postgres|redis|telos-core|traefik|telos-client|clamav)' "$STUB_LOG" >/dev/null || fail "--setup started an unrelated service"
@@ -272,7 +287,7 @@ check_setup_started() {
 assert_setup_closed() {
   port_open "$JELLYFIN_SETUP_PORT" && fail "Jellyfin setup port is still open"
   port_open "$GRIMMORY_SETUP_PORT" && fail "Grimmory setup port is still open"
-  grep -q "rm -sf jellyfin grimmory-db grimmory telos-egress-proxy" "$STUB_LOG" || fail "teardown did not remove the setup containers"
+  grep -q "podman rm -f --ignore -t 10 telos-jellyfin telos-grimmory-db telos-grimmory telos-egress-proxy telos-setup-proxy" "$STUB_LOG" || fail "teardown did not remove the setup containers by name"
   ! grep -E 'down|volume|rm .*-v' "$STUB_LOG" >/dev/null || fail "teardown touched volumes"
   return 0
 }

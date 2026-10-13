@@ -207,6 +207,29 @@ PY
   [[ $status -ne 0 ]] || { echo "setup overlay variant $index was accepted" >&2; exit 1; }
   grep -Fq setup-overlay <<<"$output" || { echo "variant $index did not name setup-overlay: $output" >&2; exit 1; }
 done
+# The relay's other invariants: an internal setup network (the published port would
+# silently not work), an extra network (a path to the Internet or the database),
+# root, and the upstream services publishing directly again.
+for variant in internal-network extra-network root-user upstream-publishes; do
+  fixture="$work/overlay-$variant"
+  make_fixture "$fixture"
+  python3 - "$fixture/docker-compose.setup.yml" "$variant" <<'PY'
+import sys
+path, variant = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+if variant == "internal-network":
+    text = text.replace("    driver: bridge\n", "    driver: bridge\n    internal: true\n", 1)
+elif variant == "extra-network":
+    text = text.replace("      - telos-setup\n    ports:", "      - telos-setup\n      - telos-db\n    ports:", 1)
+elif variant == "root-user":
+    text = text.replace('    user: "10001:10001"\n', '    user: "0:0"\n', 1)
+else:
+    text += "  jellyfin:\n    ports:\n      - \"127.0.0.1:8096:8096\"\n"
+open(path, "w", encoding="utf-8").write(text)
+PY
+  set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
+  [[ $status -ne 0 ]] || { echo "setup overlay variant $variant was accepted" >&2; exit 1; }
+done
 fixture="$work/overlay-extra-service"
 make_fixture "$fixture"
 printf '  postgres:\n    ports:\n      - "127.0.0.1:5432:5432"\n' >>"$fixture/docker-compose.setup.yml"

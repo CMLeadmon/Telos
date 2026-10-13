@@ -29,8 +29,8 @@ Run it interactively: it needs a terminal for the hidden prompts.
 EOF
 }
 
-CFG_SETUP_SERVICES=(jellyfin grimmory-db grimmory telos-egress-proxy)
-CFG_SETUP_CONTAINERS=(telos-jellyfin telos-grimmory-db telos-grimmory telos-egress-proxy)
+CFG_SETUP_SERVICES=(jellyfin grimmory-db grimmory telos-egress-proxy telos-setup-proxy)
+CFG_SETUP_CONTAINERS=(telos-jellyfin telos-grimmory-db telos-grimmory telos-egress-proxy telos-setup-proxy)
 CFG_STARTED_SETUP=0
 CFG_ECHO_RESTORE=0
 
@@ -48,11 +48,16 @@ cfg_port_open() {
 cfg_teardown() {
   [ "$CFG_STARTED_SETUP" -eq 1 ] || return 0
   CFG_STARTED_SETUP=0
-  local status=0
-  if ! compose_with docker-compose.setup.yml -- rm -sf "${CFG_SETUP_SERVICES[@]}" >/dev/null 2>&1; then
+  local status=0 runtime
+  runtime="$(detect_runtime)"
+  # Directly through the runtime, by the exact container names this command
+  # started: podman-compose 1.6.0 has no `rm` subcommand, so a compose-level removal
+  # silently left the loopback ports open. Volumes are never touched.
+  if ! "$runtime" rm -f --ignore -t 10 "${CFG_SETUP_CONTAINERS[@]}" >/dev/null 2>&1; then
     status=1
-    warn "could not remove the setup containers; run: podman compose -p telos -f $REPO_ROOT/docker-compose.yml -f $REPO_ROOT/docker-compose.setup.yml rm -sf ${CFG_SETUP_SERVICES[*]}"
+    warn "could not remove the setup containers; run: podman rm -f ${CFG_SETUP_CONTAINERS[*]}"
   fi
+  "$runtime" network rm -f telos-setup >/dev/null 2>&1 || true
   local port
   for port in "$CFG_JELLYFIN_PORT" "$CFG_GRIMMORY_PORT"; do
     if cfg_port_open "$port"; then
@@ -251,7 +256,8 @@ EOF
   local first second jellyfin_ids grimmory_ids error_file
   error_file="$(mktemp)"
   if ! first="$(cfg_discover "$token" "$user" "$password" 2>"$error_file")"; then
-    warn "validation failed: $(tr -d '\n' <"$error_file" | cut -c1-200)"
+    # The compose provider prints a banner first; show the tail, where the reason is.
+    warn "validation failed: $(sed 's/>>>> [^<]*<<<<//g' "$error_file" | tr -d '\n' | tail -c 300)"
     rm -f "$error_file"
     unset token user password
     return 1

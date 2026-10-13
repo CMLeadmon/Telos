@@ -4,10 +4,43 @@
 # integrations` records them. Layered only by `telos configure integrations
 # --setup`, which removes the containers (never the volumes) and verifies both
 # ports are closed before it returns. Never layer this onto a running stack.
+#
+# The upstream containers publish nothing: they sit on internal networks, and a
+# container attached only to an internal network cannot have a published port (the
+# runtime reserves the host port but installs no forwarding). A tiny relay from the
+# gateway image, attached to the internal backend network and to one ordinary setup
+# network, publishes 127.0.0.1 and forwards to exactly these two UIs.
+networks:
+  telos-setup:
+    name: telos-setup
+    driver: bridge
+
 services:
-  jellyfin:
+  telos-setup-proxy:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: telos-setup-proxy
+    restart: "no"
+    user: "10001:10001"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - ./telos-core
+      - setup-proxy
+      - --map
+      - 0.0.0.0:8096=jellyfin:8096
+      - --map
+      - 0.0.0.0:6060=grimmory:6060
+    depends_on:
+      - jellyfin
+      - grimmory
+    networks:
+      - telos-backend
+      - telos-setup
     ports:
       - "127.0.0.1:${JELLYFIN_SETUP_PORT:-8096}:8096"
-  grimmory:
-    ports:
       - "127.0.0.1:${GRIMMORY_SETUP_PORT:-6060}:6060"

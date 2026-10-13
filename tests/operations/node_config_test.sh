@@ -294,7 +294,7 @@ fi
 restore_valid
 : >"$STUB_LOG"
 telos start --dev >"$work/start.out" 2>&1 || true
-grep -q "podman compose --env-file $env_file --project-directory $skeleton -p telos" "$STUB_LOG" \
+grep -q "podman compose --env-file $env_file -p telos" "$STUB_LOG" \
   || fail "start did not invoke Compose with node.env: $(cat "$STUB_LOG")"
 
 # --- doctor ----------------------------------------------------------------------------

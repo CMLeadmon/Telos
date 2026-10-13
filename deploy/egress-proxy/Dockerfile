@@ -1,7 +1,7 @@
 # Telos controlled-egress proxy: a minimal Squid with the deny-by-default policy
 # and reviewed-domain allowlist baked in. The only container that joins the
 # non-internal telos-egress network.
-FROM docker.io/ubuntu/squid:7.2-26.04_edge@sha256:805f2d60c08be89a5f3a08175203ef27819494a2158b47d63068b07c42ecc987
+FROM docker.io/ubuntu/squid:6.6-24.04_edge@sha256:8a3baed477e2c282ab8aa5edad442f69873246964f225c5c2ae8364b6610963c
 
 # The policy and allowlist are provided read-only at runtime by Compose:
 #   ./config/egress/squid.conf         -> /etc/squid/squid.conf

@@ -11,7 +11,7 @@
 #   database-observer  pg_stat_statements is preloaded and no app carries the observer URL.
 #   standalone-client  telos-client is isolated: ingress-only, no ports/volumes/secrets, hardened.
 #   route-split        Traefik sends /api/v1/* to telos-core and every other path to telos-client.
-#   setup-overlay      docker-compose.setup.yml binds only Jellyfin/Grimmory admin ports, on 127.0.0.1.
+#   setup-overlay      docker-compose.setup.yml publishes only the setup relay's two ports, on 127.0.0.1.
 #
 # --root points the checks at another checkout (used only by the mutation tests).
 # A missing podman or Compose provider exits 3 (not_run): nothing was rendered.
@@ -381,26 +381,29 @@ except OSError:
     print("docker-compose.setup.yml is missing")
     raise SystemExit
 services = (overlay or {}).get("services") or {}
-if set(overlay or {}) != {"services"}:
-    problems.append("the overlay may only define services")
-if set(services) != {"jellyfin", "grimmory"}:
-    problems.append(f"the overlay may only touch jellyfin and grimmory, found {sorted(services)}")
-expected = {"jellyfin": ("JELLYFIN_SETUP_PORT", 8096, 8096), "grimmory": ("GRIMMORY_SETUP_PORT", 6060, 6060)}
-for name, spec in services.items():
-    if set(spec) != {"ports"}:
-        problems.append(f"{name} may only add ports in the setup overlay")
-        continue
-    ports = spec["ports"]
-    if len(ports) != 1:
-        problems.append(f"{name} must publish exactly one setup port")
-    for port in ports:
-        text = str(port)
-        pattern = r"127\.0\.0\.1:\$\{%s:-%d\}:%d" % (expected.get(name, ("", 0, 0))[0], expected.get(name, ("", 0, 0))[1], expected.get(name, ("", 0, 0))[2])
-        if not re.fullmatch(pattern, text):
-            problems.append(f"{name} setup binding {text!r} must be loopback-only 127.0.0.1:${{{expected.get(name, ('?',))[0]}}}:<port>")
+if set(overlay or {}) != {"networks", "services"}:
+    problems.append("the overlay may only define networks and services")
+if set(services) != {"telos-setup-proxy"}:
+    problems.append(f"the overlay may only add telos-setup-proxy, found {sorted(services)}")
+# The relay is the ONLY thing that publishes, and only to 127.0.0.1, one fixed port each.
+proxy = services.get("telos-setup-proxy") or {}
+ports = [str(p) for p in proxy.get("ports") or []]
+expected = [r"127\.0\.0\.1:\$\{JELLYFIN_SETUP_PORT:-8096\}:8096", r"127\.0\.0\.1:\$\{GRIMMORY_SETUP_PORT:-6060\}:6060"]
+if len(ports) != 2 or not all(re.fullmatch(pattern, port) for pattern, port in zip(expected, ports)):
+    problems.append(f"the relay must publish exactly the two loopback setup ports, found {ports}")
+networks = set(proxy.get("networks") or [])
+if networks != {"telos-backend", "telos-setup"}:
+    problems.append(f"the relay must join exactly telos-backend and telos-setup, found {sorted(networks)}")
+if (overlay.get("networks") or {}).get("telos-setup", {}).get("internal"):
+    problems.append("telos-setup must be an ordinary (non-internal) network: that is what makes the loopback port work")
+if proxy.get("user") != "10001:10001" or not proxy.get("read_only") or "ALL" not in (proxy.get("cap_drop") or []):
+    problems.append("the relay must run as 10001:10001, read-only, with all capabilities dropped")
+command = [str(c) for c in proxy.get("command") or []]
+if command[:2] != ["./telos-core", "setup-proxy"]:
+    problems.append("the relay must run ./telos-core setup-proxy")
 # The production model itself must stay port-free for both services.
 rendered = yaml.safe_load(open(sys.argv[2]))
-for name in ("jellyfin", "grimmory"):
+for name in ("jellyfin", "grimmory", "telos-setup-proxy"):
     if (rendered.get("services", {}).get(name) or {}).get("ports"):
         problems.append(f"the production model publishes a port for {name}")
 print("; ".join(problems))

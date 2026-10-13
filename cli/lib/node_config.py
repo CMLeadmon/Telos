@@ -384,6 +384,31 @@ def validate_allowed_origins(raw, production):
     return problems
 
 
+def validate_private_ca(values):
+    """TELOS_PRIVATE_CA=1 needs a readable certificate chain and a private key."""
+    flag = values.get("TELOS_PRIVATE_CA", "")
+    if flag not in ("", "0", "1"):
+        return ["TELOS_PRIVATE_CA must be 1 or empty"]
+    if flag != "1":
+        return []
+    directory = values.get("TELOS_TLS_PATH", "")
+    if not directory or not os.path.isabs(directory):
+        return ["TELOS_TLS_PATH must be an absolute directory when TELOS_PRIVATE_CA=1"]
+    problems = []
+    for name, strict in (("server.crt", False), ("server.key", True)):
+        path = os.path.join(directory, name)
+        try:
+            info = os.stat(path)
+        except OSError:
+            problems.append(f"{path} is missing (TELOS_PRIVATE_CA=1)")
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            problems.append(f"{path} must be a regular file")
+        elif strict and stat.S_IMODE(info.st_mode) & 0o077:
+            problems.append(f"{path} must not be readable by group or other (mode 0600)")
+    return problems
+
+
 def validate_node(path, mode, repo_root, runtime_uid=None, runtime_gid=None, strict_owner=None, only="all"):
     """Return a list of defects for a node.env in ``production`` or ``development`` mode.
 
@@ -416,6 +441,7 @@ def validate_node(path, mode, repo_root, runtime_uid=None, runtime_gid=None, str
             problems += validate_signing(config_path, uid, gid, owner_check)
     if only == "all":
         problems += validate_allowed_origins(values.get("TELOS_ALLOWED_ORIGINS", ""), production)
+        problems += validate_private_ca(values)
     if production and only in ("all", "integrations"):
         for key in PRODUCTION_SECRETS:
             if PLACEHOLDER.search(values.get(key, "")):

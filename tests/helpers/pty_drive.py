@@ -6,6 +6,9 @@ The step script is a JSON array on stdin; each step is one of
   {"expect": REGEX}                      wait for output matching REGEX
   {"send": TEXT}                         type TEXT (use \\n for Enter)
   {"signal": "INT"|"TERM"|"HUP"|"KILL"}  signal the child
+  {"waitfile": PATH, "timeout": N}       wait (while still pumping the terminal) for PATH to exist
+  {"sendfile": PATH}                     type the contents of PATH plus Enter (for a value only
+                                         known mid-run, such as a freshly minted API key)
 Everything the terminal displayed is appended to TRANSCRIPT, so a secret that was
 echoed would appear there. Exits with the child's exit status (128+N if signalled).
 """
@@ -61,6 +64,18 @@ def main():
                     return 97
                 pump(0.1)
             buffer = buffer[pattern.search(buffer).end():]
+        elif "waitfile" in step:
+            limit = time.time() + float(step.get("timeout", timeout))
+            while not os.path.exists(step["waitfile"]):
+                if time.time() > limit:
+                    log.write(f"\n[pty_drive] timed out waiting for file {step['waitfile']}\n".encode())
+                    os.kill(pid, signal.SIGKILL)
+                    os.waitpid(pid, 0)
+                    return 97
+                pump(0.1)
+        elif "sendfile" in step:
+            with open(step["sendfile"], encoding="utf-8") as handle:
+                os.write(master, (handle.read().strip() + "\n").encode())
         elif "send" in step:
             os.write(master, step["send"].encode())
         elif "signal" in step:

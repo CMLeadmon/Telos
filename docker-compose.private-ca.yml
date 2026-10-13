@@ -1,0 +1,12 @@
+# Opt-in overlay for a node whose HTTPS certificate comes from an operator-managed
+# private CA instead of public ACME (TELOS_PRIVATE_CA=1 in node.env). The CLI layers it
+# automatically; never layer it by hand onto a node that expects public certificates.
+services:
+  traefik:
+    environment:
+      # ACME is unused here. Point it at an unreachable directory so nothing is ever
+      # sent to a public CA for a name it cannot validate.
+      - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_CASERVER=https://acme.disabled.invalid/directory
+    volumes:
+      - ${TELOS_TLS_PATH:?Set TELOS_TLS_PATH to the directory holding server.crt and server.key}:/etc/telos-tls:ro,z
+      - ./config/private-ca/tls.yaml:/etc/traefik/dynamic/tls.yaml:ro,z

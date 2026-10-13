@@ -83,7 +83,10 @@ compose_with() {
     [ -f "$REPO_ROOT/$overlay" ] || die "compose_with: overlay not found: $overlay"
     files+=(-f "$REPO_ROOT/$overlay")
   done
-  "${COMPOSE_CMD[@]}" --env-file "$(node_env_path)" --project-directory "$REPO_ROOT" -p telos "${files[@]}" "$@"
+  # podman-compose 1.6.0 has no --project-directory: the project directory is the
+  # directory of the first -f file, which is the release root here, so relative bind
+  # mounts (./config, ./deploy) resolve against it exactly as they would elsewhere.
+  "${COMPOSE_CMD[@]}" --env-file "$(node_env_path)" -p telos "${files[@]}" "$@"
 }
 
 # compose [args...] — compose_with plus the development overlay when --dev.
@@ -92,6 +95,12 @@ compose() {
   if [ "${TELOS_DEV:-0}" = "1" ]; then
     [ -f "$REPO_ROOT/docker-compose.dev.yml" ] || die "TELOS_DEV=1 but docker-compose.dev.yml is missing"
     overlays+=(docker-compose.dev.yml)
+  fi
+  # A node served by an operator-managed private CA says so in node.env; every
+  # command (start, status, stop) then layers the same overlay, so none of them can
+  # disagree about how Traefik gets its certificate.
+  if [ "$(env_value "$(node_env_path)" TELOS_PRIVATE_CA 2>/dev/null || true)" = "1" ]; then
+    overlays+=(docker-compose.private-ca.yml)
   fi
   compose_with ${overlays+"${overlays[@]}"} -- "$@"
 }
