@@ -25,5 +25,6 @@ python3 -B tests/operations/candidate_workflow_contract_test.py
 python3 -B tests/operations/evidence_bundle_test.py
 python3 -B tests/operations/stage_release_test.py
 bash tests/operations/browser_certification_test.sh
+python3 -B tests/operations/frontend_quality_test.py
 bash tests/operations/release_cli_test.sh
 echo "Release test suite passed."

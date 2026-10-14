@@ -894,8 +894,13 @@ assert [
     gate["id"] for gate in catalog["gates"] if "terminationGraceSeconds" in gate
 ] == ["frontend-playwright"], catalog
 accessibility_gate = gate_by_id["frontend-accessibility"]
+# A source gate: the audit machinery exists and covers every route. Conformance evidence is candidate-run and rides
+# the browser-matrix records; the fail-closed `npm run check:a11y-evidence` stub is kept (and pinned) for that claim.
 assert accessibility_gate["command"] == [
-    "npm", "--prefix", "frontend", "run", "check:a11y-evidence",
+    "python3", "scripts/check-frontend-quality.py", "accessibility",
+]
+assert gate_by_id["frontend-quality"]["command"] == [
+    "python3", "scripts/check-frontend-quality.py", "quality",
 ]
 assert "frontend-accessibility" in gate_by_id["frontend-quality"]["prerequisites"]
 assert "frontend-accessibility" in gate_by_id["beta-certification"]["prerequisites"]

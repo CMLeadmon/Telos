@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 
 // Hosted-node journeys: real browser, real HTTPS origin, NO route mocking.
@@ -18,6 +19,16 @@ const REQUIRE_LIVE = process.env.E2E_REQUIRE_LIVE === "1";
 const CONFIGURED = BASE.startsWith("https://") && !!(OWNER.user && OWNER.pass && MEMBER.user && MEMBER.pass);
 
 test.use({ trace: "off", video: "off", screenshot: "off" });
+
+// axe-core is already a transitive dependency (through the lint plugins); its source is evaluated in the page through
+// the browser's debugging protocol, which a strict Content-Security-Policy does not block.
+const AXE_SOURCE = readFileSync(require.resolve("axe-core/axe.min.js"), "utf8");
+const AXE_ROUTES = ["/chat/", "/stream/", "/library/", "/files/", "/settings/"];
+const AXE_VIEWPORTS = [
+  { width: 390, height: 844 },
+  { width: 1440, height: 900 },
+];
+const AXE_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
 test.describe("hosted node (cookie mode, same origin)", () => {
   test.beforeEach(() => {
@@ -125,6 +136,26 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await expect(ownerPage.getByTestId("settings-page")).toBeVisible();
     await expect(ownerPage.getByRole("button", { name: "Members", exact: true }).first()).toBeVisible();
     await ownerContext.close();
+  });
+
+  test("every shell route has no serious or critical WCAG 2.2 A/AA violation at phone and desktop widths @assertion:accessibility-axe", async ({ page }) => {
+    await signIn(page, MEMBER);
+    const findings: string[] = [];
+    for (const viewport of AXE_VIEWPORTS) {
+      await page.setViewportSize(viewport);
+      for (const route of AXE_ROUTES) {
+        await page.goto(route);
+        await page.waitForLoadState("networkidle");
+        await page.evaluate(AXE_SOURCE);
+        const serious = await page.evaluate(async (tags) => {
+          const axe = (window as unknown as { axe: { run: (context: Document, options: unknown) => Promise<{ violations: { id: string; impact: string; nodes: unknown[] }[] }> } }).axe;
+          const result = await axe.run(document, { runOnly: { type: "tag", values: tags } });
+          return result.violations.filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => `${v.id} (${v.impact}) x${v.nodes.length}`);
+        }, AXE_TAGS);
+        for (const finding of serious) findings.push(`${route} at ${viewport.width}px: ${finding}`);
+      }
+    }
+    expect(findings, findings.join("\n")).toEqual([]);
   });
 
   test("logging out ends the session and signing in works again @assertion:logout-login", async ({ page }) => {

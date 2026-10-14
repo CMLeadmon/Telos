@@ -144,6 +144,10 @@
         {
           "id": "responsive-layout",
           "text": "The shell lays out at phone and desktop widths with every module reachable."
+        },
+        {
+          "id": "accessibility-axe",
+          "text": "Every shell route has no serious or critical WCAG 2.2 A/AA violation (axe-core) at phone and desktop widths."
         }
       ]
     },

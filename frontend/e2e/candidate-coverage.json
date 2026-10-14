@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "note": "Which automated browser journeys (release/guided-assertions.json, browser.automatedAssertions) have a tagged candidate-bound Playwright test in hosted-node.spec.ts, and why the others do not. An uncovered journey is answered not_run by the report tool, so the browser-matrix gate stays not_run for it: it can never be read as passed. Adding a test removes its entry here; scripts/check-frontend-quality.py fails when this file and the specs disagree.",
+  "uncovered": {
+    "owner-and-invite": "Bootstrapping an owner needs a node with no owner; the hosted-node run starts from an existing owner and member. Covered by the clean-install journey (smoke-browser-node.sh), not by Playwright.",
+    "upstream-degradation": "Stopping Jellyfin and Grimmory needs a controller on the node's host; module-outage.spec.ts mocks the API and may not stand in for a candidate run. Covered by the clean-install journey's outage stages.",
+    "offline-reconnect": "ws-reconnection.spec.ts drives a mocked socket; no candidate-bound test drops a real network yet.",
+    "responsive-layout": "mobile-layout.spec.ts needs E2E_USERNAME/E2E_PASSWORD and runs only in the default projects; it is not wired to the candidate projects yet."
+  }
+}

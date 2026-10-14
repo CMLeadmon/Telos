@@ -201,6 +201,8 @@ scripts/lib/candidate_install.py
 scripts/lib/evidence_bundle.py
 scripts/lib/stage_release.py
 scripts/lib/guided_smoke.py
+scripts/check-frontend-quality.py
+frontend/e2e/candidate-coverage.json
 scripts/lib/backup_gate.py
 scripts/drills/backup.sh
 scripts/lib/browser_report.py
@@ -248,6 +250,7 @@ tests/operations/candidate_workflow_contract_test.py
 tests/operations/evidence_bundle_test.py
 tests/operations/stage_release_test.py
 tests/operations/guided_smoke_test.py
+tests/operations/frontend_quality_test.py
 tests/operations/backup_gate_test.py
 tests/operations/release_cli_test.sh
 tests/operations/generations_test.py
