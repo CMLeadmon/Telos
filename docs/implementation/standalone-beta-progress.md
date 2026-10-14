@@ -411,3 +411,28 @@ Found by running it: (1) the gate sent its node program as `str` where the trans
 layout, so the first complete run failed `backup.schedule` — correctly; the runbook step now says to install the units from the active generation and
 enable the timer, and that the gate checks it. **Limits:** the repository is an SFTP path on the verifier VM, not an independent off-site location; the
 password was copied to the verifier by hand (the gate's contract is that the verifier holds its own copy); rehearsal record, not a candidate's.
+
+## P5 (live) — candidate-supply-chain scan run against a rehearsal candidate (rehearsal; the gate is RED)
+
+`scripts/scan-candidate.sh --rehearsal-lock …` ran for the first time on the real tools (Syft 1.54.1, Trivy 0.75.0, gitleaks 8.30.1, downloaded by digest from
+`ci/tools.lock`) against the rehearsal candidate T2c: 11 images, SBOMs, the source tree. Artifacts: `telos-review/beta-evidence/vm/*candidate-supply-chain-scan-rehearsal`.
+
+**Tooling defects the live run exposed (fixed, with tests):** `supply_chain.py` had been committed with a second copy of `write_scan_result`, `check_policy` and a
+stale `main` plus a fragment of `scan()` spliced into `main` — the later copy won at import and the scan command crashed on its first real use (a structural test
+now forbids duplicate top-level definitions; the whole repository was checked for the same accident, none other); Trivy reads an OCI image only as a layout
+*directory* while the builder archives third-party images as OCI-archive tarballs, so those are now unpacked defensively (regular files and directories only, nothing
+outside the target) and the scratch space is always removed; gitleaks' own config discovery looks only at the scan root, so the tree's `.gitleaks.toml` is now named
+explicitly and its digest recorded; Go binaries carry no license data and the "isolated service" rule matched names (A41); one more planted test string needed
+its exact value in the allowlist.
+
+**Result of the corrected scan: failed, 465 findings, all vulnerabilities** — 0 secrets, 0 license or linking findings. By artifact: clamav 0, grimmory 78, jellyfin
+149, mariadb 26, postgres 34, prometheus 8, redis 2, telos-client 41, telos-core 45, telos-egress-proxy 4, traefik 78. **23 distinct Critical advisories**: Grimmory
+(Go stdlib 1.17.8 ×4, Tomcat 11.0.24 ×3), Jellyfin (perl-base ×3, libxml2, ASP.NET runtime 9.0.16 ×2), MariaDB and Postgres (the `gosu` binary's Go stdlib 1.24.6),
+Traefik (stdlib 1.23.8, grpc 1.71.0, OpenSSL), and OpenSSL `CVE-2026-31789` in the Alpine layers of `telos-core` and `telos-client` (our own images).
+
+**What a refresh of the pins would buy** (measured with the gate's own Trivy and database, not applied — moving a pin changes what runs and needs the stack re-exercised;
+the table is in the archive): Alpine 3.22.2 → 3.22.6 takes 2 Critical / 19 High to 0 / 0; Traefik v3.3 → v3.7.14 takes 4 / 74 to 0 / 4; nginx-unprivileged 1.27 → 1.29
+takes 2 / 39 to 0 / 43; Postgres 16.14 → 16.15 takes 33 High to 24 but the `gosu` Critical remains, as it does in MariaDB 10.11.19; Redis and Prometheus have no Critical.
+Grimmory v3.5.0 and Jellyfin 10.11.11 were not re-measured. So most Criticals are fixable by moving pins; the `gosu` one and whatever remains in Grimmory and Jellyfin
+need an upstream rebuild, a different image, or a decision by a person (the gate cannot accept a Critical; a High needs an exact, expiring, operator-signed record).
+That triage is a maintainer decision and is **not** made here: `ci/risk-acceptances.json` stays empty.
