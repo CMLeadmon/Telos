@@ -8,7 +8,8 @@
 
 The target file is an operator-owned, mode-0600 JSON object that names the one node this may run
 against:  {"schemaVersion": 1, "purpose": "capacity-test", "candidateLockDigest": "sha256:..."|null,
-"origin": "https://...", "hostId": "sha256:..."}.  The script refuses unless purpose is exactly
+"origin": "https://...", "hostId": "sha256:...", "sourceAddresses": [...]}  (the last is the load host's
+own addresses; the capacity drill reads it, this script only tolerates it).  The script refuses unless purpose is exactly
 ``capacity-test``, the origin is an HTTPS DNS name that answers over a verified TLS connection, and the
 candidate-lock digest matches the one the caller is testing. (The machine identity is checked by the
 caller through the fixed node collector; there is no public health field to read it from.)
@@ -60,8 +61,8 @@ def load_target(path, lock_digest):
         document = json.loads(Path(path).read_text(encoding="utf-8"))
     except ValueError:
         raise Refused("the capacity target is not JSON")
-    expected = {"schemaVersion", "purpose", "candidateLockDigest", "origin", "hostId"}
-    if not isinstance(document, dict) or set(document) != expected or document["schemaVersion"] != 1:
+    required = {"schemaVersion", "purpose", "candidateLockDigest", "origin", "hostId"}
+    if not isinstance(document, dict) or not required <= set(document) <= required | {"sourceAddresses"} or document["schemaVersion"] != 1:
         raise Refused("the capacity target must be a closed schemaVersion 1 object")
     if document["purpose"] != PURPOSE:
         raise Refused(f"the capacity target's purpose must be exactly {PURPOSE!r}; refusing to touch a node that was not declared disposable")

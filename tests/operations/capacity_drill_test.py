@@ -366,6 +366,9 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(len(cleanup["userIds"]), 100)
         self.assertTrue(cleanup["channelId"])
 
+    def test_the_load_hosts_source_addresses_are_tolerated_but_other_keys_are_not(self):
+        self.assertEqual(self.main("prepare", target=self.write_target(sourceAddresses=["192.0.2.10"]))[0], 0)
+
     def test_cleanup_removes_every_account_and_the_channel(self):
         self.main("prepare")
         self.assertEqual(len(FakeSession.users), 100)
