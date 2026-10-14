@@ -39,6 +39,7 @@ SCHEMA_FILES = {
     "candidate-lock": "candidate-lock.schema.json",
     "generation-manifest": "generation-manifest.schema.json",
     "installed-generation": "installed-generation.schema.json",
+    "operation-journal": "operation-journal.schema.json",
     "artifact-identity": "artifact-identity.schema.json",
     "gate-result": "gate-result.schema.json",
     "observed-subject": "observed-subject.schema.json",
@@ -326,6 +327,28 @@ def _semantic_installed_generation(doc):
         fail("generationPath must be absolute and normalized")
 
 
+UPGRADE_STATES = ("started", "snapshot-verified", "maintenance", "migrating", "migrated", "activated", "serving", "complete",
+                  "aborted", "rolled-back", "restore-required", "failed")
+ROLLBACK_STATES = ("started", "maintenance", "activated", "serving", "complete", "restore-required", "failed")
+SCHEMA_CHANGED_STATES = ("migrated", "activated", "serving", "complete", "rolled-back")
+
+
+def _semantic_operation_journal(doc):
+    states = UPGRADE_STATES if doc["kind"] == "upgrade" else ROLLBACK_STATES
+    if doc["state"] not in states:
+        fail(f"state {doc['state']!r} does not exist for a {doc['kind']}")
+    if doc["updatedAt"] < doc["startedAt"]:
+        fail("updatedAt precedes startedAt")
+    if doc["kind"] == "upgrade" and doc["fromGeneration"] == doc["toGeneration"]:
+        fail("an upgrade must change generation")
+    if doc["kind"] == "rollback" and doc["fromGeneration"] is None:
+        fail("a rollback needs the generation it leaves")
+    if doc["state"] in SCHEMA_CHANGED_STATES and doc["kind"] == "upgrade" and doc["postSchema"] is None:
+        fail(f"an upgrade in state {doc['state']} must record the schema it reached")
+    if doc["kind"] == "upgrade" and doc["state"] not in ("started", "snapshot-verified", "aborted", "failed") and doc["snapshotId"] is None:
+        fail("an upgrade past its snapshot must name the snapshot")
+
+
 def _semantic_artifact_identity(doc):
     return None
 
@@ -445,6 +468,7 @@ SEMANTICS = {
     "candidate-lock": _semantic_candidate_lock,
     "generation-manifest": _semantic_generation_manifest,
     "installed-generation": _semantic_installed_generation,
+    "operation-journal": _semantic_operation_journal,
     "artifact-identity": _semantic_artifact_identity,
     "gate-result": _semantic_gate_result,
     "observed-subject": _semantic_observed_subject,
