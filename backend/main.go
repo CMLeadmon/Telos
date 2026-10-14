@@ -837,6 +837,7 @@ func handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("Owner bootstrapped successfully request_id=%s. Bootstrap token consumed.", requestIDFrom(ctx))
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
 }
@@ -1136,6 +1137,7 @@ func handleAcceptInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success", "userId": userID})
 }
@@ -3612,6 +3614,7 @@ func processUploadWithLimits(w http.ResponseWriter, r *http.Request, uploaderID 
 	}
 
 	if writeResponse {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		json.NewEncoder(w).Encode(map[string]string{
 			"id":          fileID,
@@ -3728,6 +3731,7 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "Failed to delete file from disk", http.StatusInternalServerError)
 					return
 				}
+				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
 				json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 				return
@@ -3754,6 +3758,7 @@ func handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
@@ -3799,6 +3804,7 @@ func handleCreateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := base64.RawURLEncoding.EncodeToString([]byte(rel))
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]string{"id": id, "name": name, "path": rel})
 }
@@ -3835,6 +3841,7 @@ func handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to delete folder", http.StatusInternalServerError)
 		return
 	}
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
