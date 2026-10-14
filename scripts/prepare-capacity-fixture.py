@@ -129,20 +129,18 @@ def prepare(target, owner, manifest, out_dir, accounts, make_session, sleep=time
     results = {}
     cleanup_path = os.path.join(out_dir, "cleanup.json")
     lock = threading.Lock()
-    local = threading.local()
+    owner_lock = threading.Lock()
 
-    def owner_for_this_worker():
-        # One owner sign-in per worker (a session is not shared between threads), not one per account.
-        if getattr(local, "session", None) is None:
-            local.session = make_session()
-            call(local.session, "POST", "/api/v1/auth/login", (200,), json_body={"username": owner["username"], "password": owner["password"]})
-        return local.session
+    def new_invite():
+        # Creating an invite is cheap; the expensive work (two password hashes) is the member's accept and sign-in, which run in
+        # parallel. One owner session is shared under a lock so the owner signs in once, not once per worker (sign-ins are throttled).
+        with owner_lock:
+            return call(owner_session, "POST", "/api/v1/auth/invites", (200, 201), json_body={"roleId": "Member"})
 
     def make_account(number):
         username = f"{ACCOUNT_PREFIX}{number:03d}"
         password = secrets.token_urlsafe(18)
-        creator = owner_for_this_worker()
-        invite = call(creator, "POST", "/api/v1/auth/invites", (200, 201), json_body={"roleId": "Member"})
+        invite = new_invite()
         token = invite.get("invite_token")
         if not token:
             raise Refused("an invite response carried no token")
