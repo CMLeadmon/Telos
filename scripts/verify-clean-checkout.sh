@@ -148,6 +148,9 @@ config/egress/allowed-domains.txt
 config/private-ca/traefik.yaml
 config/private-ca/tls.yaml
 docker-compose.private-ca.yml
+docker-compose.release.yml
+release/generation-compat.json
+scripts/install-candidate.sh
 ci/tools.lock
 ci/license-policy.json
 ci/risk-acceptance.schema.json
@@ -192,6 +195,9 @@ scripts/lib/exposure_audit.py
 scripts/lib/egress_drill.py
 scripts/lib/capacity_drill.py
 scripts/lib/supply_chain.py
+scripts/lib/build_release.py
+scripts/lib/release_compose.py
+scripts/lib/candidate_install.py
 scripts/lib/runtime_hardening.py
 scripts/lib/monitoring_check.py
 scripts/lib/node_observe.py
@@ -223,6 +229,11 @@ tests/operations/upgrade_rollback_fixtures_test.sh
 tests/operations/capacity_exposure_test.sh
 tests/operations/supply_chain_test.sh
 tests/operations/supply_chain_test.py
+tests/operations/build_release_test.py
+tests/operations/release_compose_test.py
+tests/operations/candidate_install_test.py
+tests/operations/candidate_workflow_contract_test.py
+tests/operations/release_cli_test.sh
 tests/operations/generations_test.py
 tests/operations/recovery_drill_test.py
 tests/operations/exposure_audit_test.py

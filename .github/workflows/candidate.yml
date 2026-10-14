@@ -1,0 +1,143 @@
+name: Candidate
+
+# Builds ONE immutable standalone candidate from a signed tag. Nothing here signs, publishes or certifies:
+# the candidate lock this produces is what every later gate, signature and promotion names. A new
+# candidate is a new run; a frozen one is never rebuilt. Scan evidence is generated after the lock exists
+# (scripts/scan-candidate.sh) and is stored outside the candidate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Signed annotated tag, e.g. v0.1.0-beta.1'
+        required: true
+      version:
+        description: 'Version, e.g. 0.1.0-beta.1 (must equal the tag without its v)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Resolve and verify the tag identity
+        id: identity
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [ "$TAG" = "v$VERSION" ] || { echo "tag and version disagree" >&2; exit 1; }
+          [ "$(git cat-file -t "refs/tags/$TAG")" = tag ] || { echo "the tag is not annotated" >&2; exit 1; }
+          git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=release/telos-tag-signers tag -v "$TAG"
+          echo "commit=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+      - name: Validate locks, schemas and the release tooling
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-yaml zstd
+          bash scripts/verify-release-pins.sh
+          python3 scripts/verify-image-lock.py --source
+          bash tests/operations/release_test.sh
+
+  desktop:
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+      NO_STRIP: "1"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+      - name: Install the declared Tauri prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential curl wget file pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev librsvg2-dev libayatana-appindicator3-dev squashfs-tools xdg-utils patchelf
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - run: npm --prefix frontend ci
+      - name: Build the unsigned AppImage
+        run: npm --prefix frontend run tauri -- build --bundles appimage
+      - name: Write the artifact identity and verify the bundle
+        env:
+          VERSION: ${{ inputs.version }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+        run: |
+          set -euo pipefail
+          bundle=frontend/src-tauri/target/release/bundle/appimage
+          version="$VERSION"
+          image="$bundle/Telos_${version}_amd64.AppImage"
+          python3 scripts/write-artifact-identity.py --artifact "$image" --source-commit "$COMMIT" \
+            --version "$version" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --out "$image.identity.json"
+          python3 scripts/verify-desktop-artifact.py --platform linux --artifact "$bundle" --identity "$image.identity.json"
+          mkdir desktop-out
+          cp "$image" "$image.identity.json" desktop-out/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: telos-linux-appimage-${{ inputs.version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: desktop-out/*
+
+  assemble:
+    needs: [validate, desktop]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: telos-linux-appimage-${{ inputs.version }}
+          path: ${{ runner.temp }}/desktop
+      - name: Install the build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman skopeo zstd squashfs-tools python3-yaml
+      - name: Build the candidate once and prove the build reproducible
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ inputs.version }}
+          WORK: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          bash scripts/build-release.sh --tag "$TAG" --version "$VERSION" \
+            --desktop-dir "$WORK/desktop" --out-dir "$WORK/candidate-out" --verify-reproducible
+      - name: Name the upload after the candidate lock
+        id: lock
+        env:
+          WORK: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          digest="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidateLockDigest"].split(":")[1])' "$WORK/candidate-out/build-record.json")"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: telos-${{ inputs.version }}-candidate-${{ steps.lock.outputs.digest }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            ${{ runner.temp }}/candidate-out/telos-${{ inputs.version }}-candidate.tar.zst
+            ${{ runner.temp }}/candidate-out/telos-${{ inputs.version }}-candidate.tar.zst.sha256
+            ${{ runner.temp }}/candidate-out/build-record.json

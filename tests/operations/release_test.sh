@@ -21,5 +21,6 @@ python3 -B tests/operations/frozen_artifact_test.py
 python3 -B tests/operations/release_compose_test.py
 python3 -B tests/operations/build_release_test.py
 python3 -B tests/operations/candidate_install_test.py
+python3 -B tests/operations/candidate_workflow_contract_test.py
 bash tests/operations/release_cli_test.sh
 echo "Release test suite passed."
