@@ -26,6 +26,44 @@ var (
 		Name: "telos_active_sockets",
 		Help: "Current count of active WebSocket client connections",
 	}, func() float64 { return float64(sessionRegistryInstance.Total()) })
+	// Saturation signals the capacity drill reads: pool and stream use against their configured maxima.
+	// Computed on every scrape from the live objects; before they exist (tests, early boot) they read 0.
+	DBPoolAcquired = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "telos_db_pool_acquired_connections",
+		Help: "Database connections currently checked out of the gateway's pool",
+	}, func() float64 {
+		if dbPool == nil {
+			return 0
+		}
+		return float64(dbPool.Stat().AcquiredConns())
+	})
+	DBPoolMax = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "telos_db_pool_max_connections",
+		Help: "Configured maximum size of the gateway's database pool",
+	}, func() float64 {
+		if dbPool == nil {
+			return 0
+		}
+		return float64(dbPool.Stat().MaxConns())
+	})
+	ActiveStreams = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "telos_active_streams",
+		Help: "Long-lived media streams currently admitted",
+	}, func() float64 {
+		if streamCapacity == nil {
+			return 0
+		}
+		return float64(streamCapacity.InFlight())
+	})
+	StreamCapacityMax = prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+		Name: "telos_stream_capacity_max",
+		Help: "Configured maximum of concurrently admitted media streams",
+	}, func() float64 {
+		if streamCapacity == nil {
+			return 0
+		}
+		return float64(streamCapacity.globalMax)
+	})
 	OutboxQueueSize = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "telos_outbox_queue_size",
 		Help: "Current size of the outbox message queue",
@@ -59,6 +97,10 @@ var (
 func init() {
 	prometheus.MustRegister(AuthThrottledCount)
 	prometheus.MustRegister(ActiveSocketCount)
+	prometheus.MustRegister(DBPoolAcquired)
+	prometheus.MustRegister(DBPoolMax)
+	prometheus.MustRegister(ActiveStreams)
+	prometheus.MustRegister(StreamCapacityMax)
 	prometheus.MustRegister(OutboxQueueSize)
 	prometheus.MustRegister(CatalogReconciledSources)
 	prometheus.MustRegister(CatalogReconcileDuration)

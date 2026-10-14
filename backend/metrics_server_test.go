@@ -239,6 +239,34 @@ func TestActiveSocketsFollowTheRegistry(t *testing.T) {
 	}
 }
 
+func TestSaturationGaugesAreExportedAndTrackTheLimiter(t *testing.T) {
+	previous := streamCapacity
+	defer func() { streamCapacity = previous }()
+	streamCapacity = newStreamCapacity(7, 2)
+	release, ok := streamCapacity.Acquire("u1")
+	if !ok {
+		t.Fatal("a stream should be admitted")
+	}
+	value := func(name string) float64 {
+		series := gaugeSeries(t, name)
+		if len(series.Metric) != 1 {
+			t.Fatalf("%s must be exported as one series, got %d", name, len(series.Metric))
+		}
+		return series.Metric[0].GetGauge().GetValue()
+	}
+	if value("telos_active_streams") != 1 || value("telos_stream_capacity_max") != 7 {
+		t.Fatalf("stream gauges = %v/%v, want 1/7", value("telos_active_streams"), value("telos_stream_capacity_max"))
+	}
+	release()
+	if value("telos_active_streams") != 0 {
+		t.Fatalf("active streams after release = %v", value("telos_active_streams"))
+	}
+	// With no pool (unit tests, early boot) the pool gauges read zero rather than panic.
+	if value("telos_db_pool_acquired_connections") != 0 || value("telos_db_pool_max_connections") != 0 {
+		t.Fatal("pool gauges must read 0 without a pool")
+	}
+}
+
 func TestBackupStatusIsBoundedAndNeverCarriesLabels(t *testing.T) {
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
 	recent := now.Add(-2 * time.Hour).Unix()

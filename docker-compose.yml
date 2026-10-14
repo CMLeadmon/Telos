@@ -415,7 +415,10 @@ services:
         hard: 8192
     networks:
       - telos-backend
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    # maxmemory sits below mem_limit so Redis refuses to grow before the kernel would kill it;
+    # only keys with a TTL (cache, rate-limit and presence entries) are evicted, never a key that
+    # has none, and the capacity drill treats Redis at maxmemory as saturation.
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD} --maxmemory 384mb --maxmemory-policy volatile-lru
     environment:
       - REDISCLI_AUTH=${REDIS_PASSWORD}
     volumes:

@@ -29,6 +29,8 @@ telos-core ──(telos-observability, internal)── telos-prometheus
 | `telos_dependency_up{service}` | 1 when a readiness check is ok; `service` ∈ postgres, redis, outbox, storage, jellyfin, grimmory |
 | `telos_active_sockets` | live WebSockets, computed from the registry on every scrape |
 | `telos_outbox_queue_size` | pending outbox entries |
+| `telos_db_pool_acquired_connections`, `telos_db_pool_max_connections` | the gateway's database pool use against its configured maximum (read by the capacity drill) |
+| `telos_active_streams`, `telos_stream_capacity_max` | admitted long-lived media streams against the configured maximum |
 | `telos_auth_throttled_total` | throttled sign-in attempts |
 | `telos_backup_last_success_timestamp_seconds`, `telos_backup_last_result`, `telos_backup_status_valid` | read from `<node>/ops/last-backup.prom` |
 | `telos_catalog_*` | catalog reconciliation outcomes by provider |
