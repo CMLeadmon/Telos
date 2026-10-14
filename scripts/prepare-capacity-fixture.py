@@ -23,6 +23,7 @@ The owner's credentials arrive on an open file descriptor, never on a command li
 """
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -30,6 +31,7 @@ import secrets
 import ssl
 import stat
 import sys
+import threading
 import time
 import urllib.parse
 from pathlib import Path
@@ -37,6 +39,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 import browser_node_smoke as smoke  # noqa: E402
 
+WORKERS = 4
 PURPOSE = "capacity-test"
 ACCOUNT_PREFIX = "capacity-"
 EXIT_REFUSED = 2
@@ -123,27 +126,47 @@ def prepare(target, owner, manifest, out_dir, accounts, make_session, sleep=time
     channel = call(owner_session, "POST", "/api/v1/admin/channels", (200, 201), json_body={"name": channel_name}) or {}
     channel_id = channel.get("id") or channel.get("ID")
     created = {"channelId": channel_id, "userIds": []}
-    credentials = []
+    results = {}
     cleanup_path = os.path.join(out_dir, "cleanup.json")
-    try:
-        for number in range(1, accounts + 1):
-            username = f"{ACCOUNT_PREFIX}{number:03d}"
-            password = secrets.token_urlsafe(18)
-            invite = call(owner_session, "POST", "/api/v1/auth/invites", (200, 201), json_body={"roleId": "Member"})
-            token = invite.get("invite_token")
-            if not token:
-                raise Refused("an invite response carried no token")
-            member = make_session()
-            call(member, "POST", "/api/v1/auth/invites/accept", (200, 201), json_body={"token": token, "username": username, "password": password})
-            call(member, "POST", "/api/v1/auth/login", (200,), json_body={"username": username, "password": password})
-            me = call(member, "GET", "/api/v1/auth/me", (200,)) or {}
-            user_id = me.get("ID") or me.get("id")
-            call(member, "POST", "/api/v1/auth/logout", (200, 204))
-            if not user_id:
-                raise Refused("/auth/me carried no user id, so the account could not be recorded for cleanup")
+    lock = threading.Lock()
+    local = threading.local()
+
+    def owner_for_this_worker():
+        # One owner sign-in per worker (a session is not shared between threads), not one per account.
+        if getattr(local, "session", None) is None:
+            local.session = make_session()
+            call(local.session, "POST", "/api/v1/auth/login", (200,), json_body={"username": owner["username"], "password": owner["password"]})
+        return local.session
+
+    def make_account(number):
+        username = f"{ACCOUNT_PREFIX}{number:03d}"
+        password = secrets.token_urlsafe(18)
+        creator = owner_for_this_worker()
+        invite = call(creator, "POST", "/api/v1/auth/invites", (200, 201), json_body={"roleId": "Member"})
+        token = invite.get("invite_token")
+        if not token:
+            raise Refused("an invite response carried no token")
+        member = make_session()
+        call(member, "POST", "/api/v1/auth/invites/accept", (200, 201), json_body={"token": token, "username": username, "password": password})
+        call(member, "POST", "/api/v1/auth/login", (200,), json_body={"username": username, "password": password})
+        me = call(member, "GET", "/api/v1/auth/me", (200,)) or {}
+        user_id = me.get("ID") or me.get("id")
+        call(member, "POST", "/api/v1/auth/logout", (200, 204))
+        if not user_id:
+            raise Refused("/auth/me carried no user id, so the account could not be recorded for cleanup")
+        with lock:
             created["userIds"].append(user_id)
-            credentials.append({"username": username, "password": password})
-            write_private(cleanup_path, created)   # recorded before the next account, so a crash still leaves a usable manifest
+            results[number] = {"username": username, "password": password}
+            write_private(cleanup_path, created)   # recorded as each account lands, so a crash still leaves a usable manifest
+        return number
+
+    credentials = []
+    try:
+        # Each account costs two password hashes at the gateway; a few workers keep a 100-account fixture to minutes.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            for _ in pool.map(make_account, range(1, accounts + 1)):
+                pass
+        credentials = [results[number] for number in sorted(results)]
         # A member must be able to see and use the channel; prove it before the load starts.
         probe = make_session()
         call(probe, "POST", "/api/v1/auth/login", (200,), json_body=credentials[0])
