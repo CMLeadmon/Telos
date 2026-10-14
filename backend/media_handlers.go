@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 )
 
@@ -93,6 +94,8 @@ func handleMediaPlaybackInfo(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, r, http.StatusNotFound, "not_found", "Media item not found.")
 			return
 		}
+		// The response stays generic; the cause is logged so an upstream fault is diagnosable from the node.
+		log.Printf("playback info failed request_id=%s item=%s: %v", requestIDFrom(r.Context()), id, err)
 		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "Failed to load playback options.")
 		return
 	}
