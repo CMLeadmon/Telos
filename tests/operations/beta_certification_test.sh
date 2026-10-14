@@ -19,14 +19,16 @@ trap cleanup EXIT
 
 printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$tmp/candidate.json"
 
+# Scripts that are still fail-closed placeholders for work not yet implemented: with no inputs (or only
+# a candidate lock) each must report not_run (exit 3) and never anything like success. A script leaves
+# this list when it is implemented; from then on its own suite proves its behavior (for example
+# runtime_hardening_policy_test.py, monitoring_test.sh, upgrade_rollback_test.sh, recovery_drill_test.py).
 scripts=(
-  certify-beta.sh verify-runtime-hardening.sh run-capacity-drill.sh
+  certify-beta.sh run-capacity-drill.sh
   audit-host-exposure.sh certify-browser-matrix.sh build-release.sh
   build-predecessor.sh stage-release.sh sign-evidence.sh
-  verify-restored-node.sh verify-monitoring.sh upgrade.sh rollback.sh
   provision-jellyfin.sh provision-grimmory.sh ci/run-local.sh
-  ci/validate-sbom.sh drills/clean-node-install.sh drills/recovery.sh
-  drills/upgrade-rollback.sh
+  ci/validate-sbom.sh drills/upgrade-rollback.sh
 )
 
 assert_not_run() {
@@ -172,19 +174,8 @@ for script in "${scripts[@]}"; do
   assert_not_run "$script"
 done
 
-for option in --compose --env-file; do
-  set +e
-  bash "$repo_root/scripts/verify-runtime-hardening.sh" "$option" --unknown >/dev/null 2>&1
-  status=$?
-  set -e
-  [[ $status -eq 2 ]] || { echo "verify-runtime-hardening.sh accepted an option token as a $option path" >&2; exit 1; }
-
-  set +e
-  bash "$repo_root/scripts/verify-runtime-hardening.sh" "$option" "$tmp/ordinary-path" >/dev/null 2>&1
-  status=$?
-  set -e
-  [[ $status -eq 3 ]] || { echo "verify-runtime-hardening.sh rejected an ordinary $option path" >&2; exit 1; }
-done
+# verify-runtime-hardening.sh is implemented (static and runtime checks); its argument handling is covered by
+# tests/operations/runtime_hardening_policy_test.py rather than by this placeholder suite.
 
 python3 - "$repo_root/scripts/lib/evidence.py" <<'PY'
 import hashlib

@@ -1,55 +1,25 @@
 #!/usr/bin/env bash
-# restore-state.sh — atomic active-generation pointer management for restore.
+# restore-state.sh -- inspect and repair the active-generation pointer and the operation journal.
 #
-# The active generation is named by a mode-0600 pointer file consumed by
-# Compose. Activation writes the new generation to a temp file, fsyncs the
-# journal, then atomically renames the pointer. On any post-activation failure
-# the caller swaps the pointer back to the preserved prior generation. An
-# untrappable exit is recovered by reading the journal on the next invocation.
+#   restore-state.sh current              the active generation id (empty when none)
+#   restore-state.sh journal              the last upgrade/rollback journal as JSON
+#   restore-state.sh recover SCHEMA       what an interrupted operation must do next (read-only)
+#
+# This is a thin, read-only view over scripts/lib/generations.py; it does not move the pointer. Changing
+# the active generation is upgrade.sh, rollback.sh or restore.sh --mode rollback, each under the host-wide
+# maintenance lock and each journaling every step first. (The earlier pointer-file/journal pair that lived here
+# was replaced by the generation layout /srv/telos/{generations,current} and <node>/state/operation.json.)
 set -euo pipefail
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+release_base="${TELOS_RELEASE_BASE:-/srv/telos}"
+node_path="${TELOS_NODE_PATH:-/var/lib/telos}"
+generations() { python3 -I "$script_dir/lib/generations.py" "$@"; }
 
-POINTER="${TELOS_ACTIVE_GENERATION_FILE:-/var/lib/telos/active-generation}"
-JOURNAL="${TELOS_RESTORE_JOURNAL:-/var/lib/telos/restore-journal}"
-
-cmd="${1:-}"
-gen="${2:-}"
-
-case "$cmd" in
-current)
-	cat "$POINTER" 2>/dev/null || echo ""
-	;;
-journal-begin)
-	# Record the intended transition and fsync before activating.
-	mkdir -p "$(dirname "$JOURNAL")"
-	prev="$(cat "$POINTER" 2>/dev/null || echo "")"
-	printf 'from=%s\nto=%s\nstate=activating\n' "$prev" "$gen" >"$JOURNAL.tmp"
-	sync "$JOURNAL.tmp" 2>/dev/null || true
-	mv -f "$JOURNAL.tmp" "$JOURNAL"
-	;;
-activate)
-	mkdir -p "$(dirname "$POINTER")"
-	umask 077
-	printf '%s\n' "$gen" >"$POINTER.tmp"
-	sync "$POINTER.tmp" 2>/dev/null || true
-	mv -f "$POINTER.tmp" "$POINTER"           # atomic rename
-	printf 'state=activated\ngen=%s\n' "$gen" >>"$JOURNAL"
-	;;
-rollback)
-	# Swap back to the prior generation recorded in the journal.
-	prev="$(sed -n 's/^from=//p' "$JOURNAL" | head -1)"
-	if [ -n "$prev" ]; then
-		printf '%s\n' "$prev" >"$POINTER.tmp"
-		mv -f "$POINTER.tmp" "$POINTER"
-	fi
-	printf 'state=rolled_back\n' >>"$JOURNAL"
-	;;
-recover)
-	# After an untrappable exit, complete or roll back per the journal state.
-	state="$(sed -n 's/^state=//p' "$JOURNAL" | tail -1 || echo "")"
-	echo "restore-state: journal state is '${state:-none}'"
-	;;
-*)
-	echo "usage: restore-state.sh {current|journal-begin <gen>|activate <gen>|rollback|recover}" >&2
-	exit 2
-	;;
+case "${1:-}" in
+  current) generations current --root "$release_base" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["current"] or "")' ;;
+  journal) generations journal show --node "$node_path" ;;
+  recover)
+    [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "usage: restore-state.sh recover SCHEMA_VERSION" >&2; exit 2; }
+    generations plan-recovery --root "$release_base" --node "$node_path" --schema "$2" ;;
+  *) echo "usage: restore-state.sh {current|journal|recover SCHEMA_VERSION}" >&2; exit 2 ;;
 esac

@@ -15,7 +15,11 @@ while [[ $# -gt 0 ]]; do
     *) usage ;;
   esac
 done
-arguments=(--gate-id "${TELOS_GATE_ID:-predecessor-build}" --reason "verified predecessor building is implemented in Phase 4")
+# The predecessor must be an exact, obtainable release (scripts/lib/predecessor.py); even then it can only be
+# built by the release builder (scripts/build-release.sh), so this command reports not_run until both exist.
+reason="$(python3 -I "$script_dir/lib/predecessor.py" check | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["reason"])' || true)"
+[[ -n "$reason" ]] || reason="the predecessor policy could not be read"
+arguments=(--gate-id "${TELOS_GATE_ID:-predecessor-build}" --reason "$reason")
 [[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
 [[ -n "$evidence_out" ]] && arguments+=(--evidence-out "$evidence_out")
 [[ -n "$result_out" ]] && arguments+=(--result-out "$result_out")

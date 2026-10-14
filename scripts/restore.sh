@@ -4,6 +4,15 @@
 #   restore.sh --mode separate-host --snapshot ID (--candidate-lock PATH | --rehearsal)
 #              --result-out PATH [--incident-declared-at 2026-10-14T04:30:00Z]
 #              --confirm RESTORE-TO-EMPTY-REFERENCE-HOST
+#   restore.sh --mode rollback --operation-id ID (--candidate-lock PATH | --rehearsal)
+#              --result-out PATH --confirm RESTORE-RECORDED-ROLLBACK
+#
+# `--mode rollback` is the answer to an upgrade that ended `restore-required`: the SAME host, the
+# snapshot the upgrade journal recorded (never one named on the command line), the host that made it.
+# It still checks everything first, then brings the stack down, keeps the failed state (node files,
+# shared storage and an export of every data volume) under telos-rollback/, activates the generation
+# the upgrade left, and restores exactly as below. It closes the journal as `restored`. Same-host
+# evidence never satisfies the separate-host-restore gate.
 #
 # --incident-declared-at is when host loss was declared: the recovery drill measures RTO from it.
 # Without it the recovery clock never started and the drill reports the objectives as not_run.
@@ -38,6 +47,8 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$script_dir/lib/maintenance.sh"
 
 CONFIRMATION="RESTORE-TO-EMPTY-REFERENCE-HOST"
+ROLLBACK_CONFIRMATION="RESTORE-RECORDED-ROLLBACK"
+release_base="${TELOS_RELEASE_BASE:-/srv/telos}"
 VOLUMES=(traefik_acme jellyfin_config grimmory_config)
 
 node_path="${TELOS_NODE_PATH:-/var/lib/telos}"
@@ -48,7 +59,7 @@ machine_id_file="${TELOS_MACHINE_ID_FILE:-/etc/machine-id}"
 journal="$state_dir/restore-journal.jsonl"
 export TELOS_MAINTENANCE_DIR="$state_dir"
 
-mode="" snapshot="" candidate_lock="" result_out="" confirm="" incident_declared_at="" rehearsal=0
+mode="" snapshot="" operation_id="" candidate_lock="" result_out="" confirm="" incident_declared_at="" rehearsal=0
 stage=""
 step="starting"
 stack_touched=0
@@ -76,12 +87,14 @@ journal_event() {   # step state -- one JSON line per transition, written before
 
 usage() {
   echo "usage: $0 --mode separate-host --snapshot ID (--candidate-lock PATH | --rehearsal) --result-out PATH [--incident-declared-at TIME] --confirm $CONFIRMATION" >&2
+  echo "       $0 --mode rollback --operation-id ID (--candidate-lock PATH | --rehearsal) --result-out PATH --confirm $ROLLBACK_CONFIRMATION" >&2
   exit 2
 }
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode)           [ $# -ge 2 ] && [ -z "$mode" ] || usage; mode="$2"; shift 2 ;;
     --snapshot)       [ $# -ge 2 ] && [ -z "$snapshot" ] || usage; snapshot="$2"; shift 2 ;;
+    --operation-id)   [ $# -ge 2 ] && [ -z "$operation_id" ] || usage; operation_id="$2"; shift 2 ;;
     --candidate-lock) [ $# -ge 2 ] && [ -z "$candidate_lock" ] || usage; candidate_lock="$2"; shift 2 ;;
     --rehearsal)      rehearsal=1; shift ;;
     --result-out)     [ $# -ge 2 ] && [ -z "$result_out" ] || usage; result_out="$2"; shift 2 ;;
@@ -90,15 +103,22 @@ while [ $# -gt 0 ]; do
     *) usage ;;
   esac
 done
-[ "$mode" = separate-host ] || usage
-[[ "$snapshot" =~ ^[0-9a-f]{8,64}$ ]] || usage
+case "$mode" in
+  separate-host) [[ "$snapshot" =~ ^[0-9a-f]{8,64}$ ]] && [ -z "$operation_id" ] || usage ;;
+  rollback)      [[ "$operation_id" =~ ^[0-9a-f]{32}$ ]] && [ -z "$snapshot" ] || usage; CONFIRMATION="$ROLLBACK_CONFIRMATION" ;;
+  *)             usage ;;
+esac
 [ -n "$result_out" ] || usage
 [ -n "$candidate_lock" ] || [ "$rehearsal" -eq 1 ] || usage
 [ -z "$candidate_lock" ] || [ "$rehearsal" -eq 0 ] || usage
 [ -z "$incident_declared_at" ] || [[ "$incident_declared_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || usage
 if [ "$confirm" != "$CONFIRMATION" ]; then
   echo "restore replaces databases, configuration, volumes and shared storage on THIS host." >&2
-  echo "It is only for an empty reference host. Re-run with --confirm $CONFIRMATION to proceed." >&2
+  if [ "$mode" = rollback ]; then
+    echo "A rollback restore discards the failed upgrade's data (kept under telos-rollback/). Re-run with --confirm $CONFIRMATION to proceed." >&2
+  else
+    echo "It is only for an empty reference host. Re-run with --confirm $CONFIRMATION to proceed." >&2
+  fi
   exit 2
 fi
 
@@ -185,18 +205,50 @@ run_restore() {
   [ "$tmp_root" != / ] || die "the temp root must not be /"
   journal_event "$step" done
 
+  local rollback="" volume previous_generation=""
+  if [ "$mode" = rollback ]; then
+    step="upgrade journal check"
+    journal_event "$step" begin
+    local upgrade_journal host_hash
+    host_hash="sha256:$(sha256sum "$machine_id_file" | cut -d' ' -f1)"
+    upgrade_journal="$(python3 -I "$script_dir/lib/generations.py" journal show --node "$node_path")" || die "the upgrade journal is unreadable"
+    snapshot="$(python3 -I - "$operation_id" "$host_hash" "$upgrade_journal" <<'PY'
+import json, sys
+operation, host, text = sys.argv[1:4]
+try:
+    j = json.loads(text)
+except ValueError:
+    sys.exit("the upgrade journal is not JSON")
+checks = [(j.get("operationId") == operation, "that is not the node's last operation"),
+          (j.get("kind") == "upgrade", "only an upgrade can be rolled back by a restore"),
+          (j.get("state") in ("restore-required", "failed"), f"the operation is {j.get('state')}; a restore is only for restore-required or failed"),
+          (j.get("snapshotId"), "the operation recorded no snapshot"),
+          (j.get("hostIdSha256") == host, "this is not the host the upgrade ran on")]
+for ok, message in checks:
+    if not ok:
+        sys.exit(message)
+print(j["snapshotId"])
+PY
+)" || die "refusing the rollback restore"
+    previous_generation="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["fromGeneration"] or "")' "$upgrade_journal")"
+    journal_event "$step" done
+  fi
+
   step="empty-host check"
   journal_event "$step" begin
-  local existing
-  existing="$(podman ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^telos-' || true)"
-  [ -z "$existing" ] || die "this host already has Telos containers; a separate-host restore needs an empty reference host"
-  local volume
-  for volume in "${VOLUMES[@]}" postgres_data grimmory_db_data; do
-    ! podman volume exists "telos_$volume" 2>/dev/null || die "volume telos_$volume already exists; this is not an empty reference host"
-  done
-  local rollback=""
-  if [ -f "$node_path/node.env" ] || [ -d "$node_path/config" ]; then
+  if [ "$mode" = rollback ]; then
+    # The host is NOT empty: it holds the failed upgrade's state, which is kept, not discarded.
     rollback="$(dirname "$node_path")/telos-rollback/$(date -u +%Y%m%dT%H%M%SZ)"
+  else
+    local existing
+    existing="$(podman ps -a --format '{{.Names}}' 2>/dev/null | grep -E '^telos-' || true)"
+    [ -z "$existing" ] || die "this host already has Telos containers; a separate-host restore needs an empty reference host"
+    for volume in "${VOLUMES[@]}" postgres_data grimmory_db_data; do
+      ! podman volume exists "telos_$volume" 2>/dev/null || die "volume telos_$volume already exists; this is not an empty reference host"
+    done
+    if [ -f "$node_path/node.env" ] || [ -d "$node_path/config" ]; then
+      rollback="$(dirname "$node_path")/telos-rollback/$(date -u +%Y%m%dT%H%M%SZ)"
+    fi
   fi
   journal_event "$step" done
 
@@ -217,7 +269,7 @@ run_restore() {
   target_id="sha256:$(sha256sum "$machine_id_file" | cut -d' ' -f1)"
   [ -z "$candidate_lock" ] || candidate_digest="sha256:$(sha256sum "$candidate_lock" | cut -d' ' -f1)"
   free_tmp="$(df -PB1 "$tmp_root" | awk 'NR==2 {print $4}')"
-  plan_args=(plan --data "$data" --target-machine-id-sha256 "$target_id" --migrations "$release_root/backend/db/migrations" --free "TMP=$free_tmp")
+  plan_args=(plan --mode "$mode" --data "$data" --target-machine-id-sha256 "$target_id" --migrations "$release_root/backend/db/migrations" --free "TMP=$free_tmp")
   local storage_path
   storage_path="$(sed -n "s/^STORAGE_PATH=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" "$data/node.env" | head -n1)"
   storage_path="${storage_path:-/mnt/storage/shared}"
@@ -233,6 +285,22 @@ run_restore() {
 
   step="preserve prior state"
   journal_event "$step" begin
+  if [ "$mode" = rollback ]; then
+    # Down first; then keep every data volume of the failed state; only then remove them so the
+    # databases are initialised afresh (an in-place restore would leave the newer schema's objects).
+    stack_touched=1
+    stack down >/dev/null 2>&1 || log "bringing the stack down reported a problem; continuing"
+    mkdir -p "$rollback/volumes"; chmod 0700 "$rollback" "$rollback/volumes"
+    for volume in "${VOLUMES[@]}" postgres_data grimmory_db_data; do
+      if podman volume exists "telos_$volume" 2>/dev/null; then
+        podman volume export "telos_$volume" --output "$rollback/volumes/$volume.tar" || die "could not keep the failed state of telos_$volume"
+        podman volume rm "telos_$volume" >/dev/null || die "could not remove telos_$volume"
+      fi
+    done
+    if [ -n "$previous_generation" ] && [ -d "$release_base/generations/$previous_generation" ]; then
+      python3 -I "$script_dir/lib/generations.py" activate --root "$release_base" --id "$previous_generation" >/dev/null || die "could not activate the generation the upgrade left"
+    fi
+  fi
   if [ -n "$rollback" ]; then
     mkdir -p "$rollback"; chmod 0700 "$rollback"
     [ -f "$node_path/node.env" ] && mv -- "$node_path/node.env" "$rollback/node.env"
@@ -324,13 +392,14 @@ run_restore() {
 
   step="result"
   local manifest_digest; manifest_digest="$(sha256sum "$data/manifest.json" | cut -d' ' -f1)"
-  python3 -I - "$result_out" "$snapshot" "$manifest_digest" "$data/manifest.json" "$target_id" "$rehearsal" "$incident_declared_at" <<'PY'
+  python3 -I - "$result_out" "$snapshot" "$manifest_digest" "$data/manifest.json" "$target_id" "$rehearsal" "$incident_declared_at" "$mode" "$operation_id" <<'PY'
 import json, os, sys, datetime
-out, snapshot, digest, manifest_path, target, rehearsal, incident = sys.argv[1:8]
+out, snapshot, digest, manifest_path, target, rehearsal, incident, mode, operation = sys.argv[1:10]
 manifest = json.load(open(manifest_path))
 record = {
     "status": "restored",
-    "mode": "separate-host",
+    "mode": mode,
+    "operationId": operation or None,
     "recordKind": "rehearsal" if rehearsal == "1" else "candidate",
     "snapshot": snapshot,
     "manifestSha256": digest,
@@ -347,6 +416,12 @@ with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as ha
     json.dump(record, handle, indent=1, sort_keys=True)
 os.replace(tmp, out)
 PY
+  if [ "$mode" = rollback ]; then
+    python3 -I "$script_dir/lib/generations.py" journal resolve --node "$node_path" --operation-id "$operation_id" >/dev/null || die "the restore finished but the upgrade journal could not be closed"
+    if [ -n "$previous_generation" ] && [ -d "$release_base/generations/$previous_generation" ]; then
+      python3 -I "$script_dir/lib/generations.py" receipt --root "$release_base" --node "$node_path" --id "$previous_generation" >/dev/null || log "the installed-generation receipt could not be refreshed"
+    fi
+  fi
   journal_event "$step" done
   log "restored snapshot ${snapshot:0:8} from $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["consistencyPointAt"])' "$data/manifest.json"); sanitized and serving"
 }

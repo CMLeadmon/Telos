@@ -18,7 +18,7 @@
     "schemaVersion": {"const": 1},
     "snapshotId": {"oneOf": [{"pattern": "^[0-9a-f]{8,64}$", "type": "string"}, {"type": "null"}]},
     "startedAt": {"$ref": "#/$defs/timestamp"},
-    "state": {"enum": ["started", "snapshot-verified", "maintenance", "migrating", "migrated", "activated", "serving", "complete", "aborted", "rolled-back", "restore-required", "failed"]},
+    "state": {"enum": ["started", "snapshot-verified", "maintenance", "migrating", "migrated", "activated", "serving", "complete", "aborted", "rolled-back", "restore-required", "restored", "failed"]},
     "toGeneration": {"$ref": "#/$defs/generationId"},
     "updatedAt": {"$ref": "#/$defs/timestamp"}
   },

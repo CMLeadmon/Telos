@@ -25,6 +25,7 @@ guesses after a migration: an unexplained schema is `restore`.
     generations.py journal begin   --node N --kind upgrade|rollback --from HEX|- --to HEX --schema N --host SHA256 [--supersede OPID]
     generations.py journal advance --node N --state STATE [--snapshot ID] [--post-schema N] [--error TEXT]
     generations.py journal show    --node N
+    generations.py journal resolve --node N --operation-id ID     (restore-required/failed -> restored, after a restore)
     generations.py plan-recovery   --root R --node N --schema N [--ready true|false]
 
 Exit codes: 0 ok, 1 refused (message on stderr), 2 usage.
@@ -46,7 +47,7 @@ GENERATION_ID = re.compile(r"[0-9a-f]{64}\Z")
 OPERATION_ID = re.compile(r"[0-9a-f]{32}\Z")
 JOURNAL_NAME = "operation.json"
 RECEIPT_NAME = "installed-generation.json"
-TERMINAL = ("complete", "aborted", "rolled-back", "restore-required", "failed")
+TERMINAL = ("complete", "aborted", "rolled-back", "restore-required", "restored", "failed")
 BLOCKING = ("restore-required", "failed")   # a new operation needs an explicit acknowledgement of these
 
 # state -> states it may move to; any non-terminal state may also move to restore-required or failed
@@ -319,6 +320,20 @@ def begin(node, kind, from_id, to_id, schema, host, supersede=None):
     return record
 
 
+def resolve(node, operation_id, state="restored"):
+    """Close a blocking operation (restore-required / failed) once its snapshot has been restored."""
+    record = read_journal(node)
+    if record is None or record["operationId"] != operation_id:
+        fail("that operation is not the node's last operation")
+    if record["state"] not in BLOCKING:
+        fail(f"only an operation that ended {' or '.join(BLOCKING)} can be resolved by a restore; this one is {record['state']}")
+    if state != "restored":
+        fail("a blocked operation can only be resolved as restored")
+    record.update(state=state, updatedAt=now())
+    write_journal(node, record)
+    return record
+
+
 def advance(node, state, snapshot=None, post_schema=None, error=None):
     record = read_journal(node)
     if record is None:
@@ -421,6 +436,7 @@ def build_parser():
     p.add_argument("--node", required=True); p.add_argument("--state", required=True)
     p.add_argument("--snapshot"); p.add_argument("--post-schema", type=int); p.add_argument("--error")
     p = journal.add_parser("show"); p.add_argument("--node", required=True)
+    p = journal.add_parser("resolve"); p.add_argument("--node", required=True); p.add_argument("--operation-id", required=True)
     p = sub.add_parser("plan-recovery")
     p.add_argument("--root", required=True); p.add_argument("--node", required=True)
     p.add_argument("--schema", type=int, required=True); p.add_argument("--ready", type=parse_bool)
@@ -457,6 +473,8 @@ def run(args):
             return begin(args.node, args.kind, args.from_id, args.to, args.schema, args.host, args.supersede)
         if args.journal_command == "advance":
             return advance(args.node, args.state, args.snapshot, args.post_schema, args.error)
+        if args.journal_command == "resolve":
+            return resolve(args.node, args.operation_id)
         return read_journal(args.node) or {}
     if args.command == "plan-recovery":
         journal = read_journal(args.node)

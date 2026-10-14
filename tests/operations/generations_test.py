@@ -240,6 +240,22 @@ class JournalTests(Fixture):
             with self.subTest(change), self.assertRaises(rg.GraphError):
                 rg.validate_record("operation-journal", dict(record, **change))
 
+    def test_a_restore_resolves_only_a_blocked_operation_of_the_last_id(self):
+        first = self.begin()
+        with self.assertRaisesRegex(gen.GenerationError, "can be resolved"):
+            gen.resolve(self.node, first["operationId"])
+        with self.assertRaises(rg.GraphError):   # nothing to restore before a snapshot exists
+            gen.advance(self.node, "restore-required")
+        gen.advance(self.node, "snapshot-verified", snapshot="abcdef12")
+        gen.advance(self.node, "restore-required", error="old binaries cannot run")
+        with self.assertRaisesRegex(gen.GenerationError, "last operation"):
+            gen.resolve(self.node, "f" * 32)
+        done = gen.resolve(self.node, first["operationId"])
+        self.assertEqual(done["state"], "restored")
+        with self.assertRaisesRegex(gen.GenerationError, "already ended"):
+            gen.advance(self.node, "failed")
+        self.begin()   # a restored operation no longer blocks the next one
+
     def test_a_crash_between_temp_file_and_rename_leaves_the_last_journal_intact(self):
         self.begin()
         Path(self.node, "state", ".operation.json.123.deadbeef").write_text("{half")

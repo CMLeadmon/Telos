@@ -328,8 +328,8 @@ def _semantic_installed_generation(doc):
 
 
 UPGRADE_STATES = ("started", "snapshot-verified", "maintenance", "migrating", "migrated", "activated", "serving", "complete",
-                  "aborted", "rolled-back", "restore-required", "failed")
-ROLLBACK_STATES = ("started", "maintenance", "activated", "serving", "complete", "restore-required", "failed")
+                  "aborted", "rolled-back", "restore-required", "restored", "failed")
+ROLLBACK_STATES = ("started", "maintenance", "activated", "serving", "complete", "restore-required", "restored", "failed")
 SCHEMA_CHANGED_STATES = ("migrated", "activated", "serving", "complete", "rolled-back")
 
 

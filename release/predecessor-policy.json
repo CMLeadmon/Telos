@@ -1,5 +1,7 @@
 {
-  "predecessorVersion": "0.1.0-alpha.1",
-  "maxSchemaMigration": 18,
-  "allowInPlaceRollback": true
+  "schemaVersion": 1,
+  "predecessor": null,
+  "maxSchemaMigration": 24,
+  "allowInPlaceRollback": true,
+  "note": "No release has been published, so no exact predecessor exists. When one does, replace null with {version, sourceTag, sourceCommit, candidateLockDigest, generationManifestDigest}; build-predecessor.sh never accepts a version-only assertion."
 }

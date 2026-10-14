@@ -54,7 +54,7 @@ class Backup:
 
 
 def run_plan(backup, **overrides):
-    argv = ["plan", "--data", str(backup.data), "--target-machine-id-sha256", overrides.get("host", TARGET_HOST),
+    argv = ["plan", "--mode", overrides.get("mode", "separate-host"), "--data", str(backup.data), "--target-machine-id-sha256", overrides.get("host", TARGET_HOST),
             "--migrations", str(overrides.get("migrations", MIGRATIONS)), "--free", f"TMP={overrides.get('free', 10 << 30)}"]
     if overrides.get("rehearsal"):
         argv.append("--rehearsal")
@@ -90,6 +90,17 @@ class Plan(unittest.TestCase):
 
     def test_the_same_machine_is_refused(self):
         self.refused("machine that made the backup", host=SOURCE_HOST)
+
+    def test_a_rollback_restore_runs_on_the_host_that_made_the_backup_and_nowhere_else(self):
+        self.assertEqual(run_plan(self.backup, mode="rollback", host=SOURCE_HOST), (0, ""))
+        self.refused("runs on the machine that made the backup", mode="rollback", host=TARGET_HOST)
+        # the other direction still holds
+        self.refused("machine that made the backup", mode="separate-host", host=SOURCE_HOST)
+
+    def test_a_rollback_restore_still_checks_candidate_schema_and_integrity(self):
+        self.refused("different candidate", mode="rollback", host=SOURCE_HOST, candidate="sha256:" + "d" * 64)
+        (self.backup.data / "postgres.dump").write_bytes(b"tampered")
+        self.refused("not trustworthy", mode="rollback", host=SOURCE_HOST)
 
     def test_candidate_binding(self):
         self.refused("different candidate", candidate="sha256:" + "d" * 64)

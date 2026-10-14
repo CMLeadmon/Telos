@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pre-flight checks for a restore: everything that can be proved before a service is touched.
 
-    restore_check.py plan --data DIR --target-machine-id-sha256 D --migrations DIR
+    restore_check.py plan [--mode separate-host|rollback] --data DIR --target-machine-id-sha256 D --migrations DIR
                           [--candidate-lock-digest D | --rehearsal]
                           --free TMP=BYTES --free STORAGE=BYTES [--free VOLUMES=BYTES]
     restore_check.py tar  ARCHIVE [ARCHIVE ...]
@@ -9,7 +9,8 @@
 ``plan`` takes the directory a snapshot was restored into and refuses unless:
   * the manifest is valid and every component matches its recorded size and SHA-256;
   * the host being restored to is NOT the host that produced the backup (a restore on the
-    same machine proves nothing about recovery);
+    same machine proves nothing about recovery) -- except `--mode rollback`, which is the
+    reverse: it undoes a failed upgrade on the host that made the pre-upgrade snapshot;
   * the candidate lock matches the one the backup was made under (a rehearsal states that it
     is skipping this and says so);
   * the backup's schema is not newer than the release being restored to, and every
@@ -71,7 +72,11 @@ def plan(args):
     except (bm.ManifestError, OSError, ValueError) as error:
         raise Refusal(f"the backup manifest is not trustworthy: {error}")
 
-    if document["source"]["hostIdSha256"] == args.target_machine_id_sha256:
+    same_host = document["source"]["hostIdSha256"] == args.target_machine_id_sha256
+    if args.mode == "rollback":
+        if not same_host:
+            problems.append("a rollback restore runs on the machine that made the backup; this is a different machine")
+    elif same_host:
         problems.append("this is the machine that made the backup; a separate-host restore needs a different machine")
 
     recorded = document["source"]["candidateLockDigest"]
@@ -146,6 +151,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("plan")
+    p.add_argument("--mode", choices=("separate-host", "rollback"), default="separate-host")
     p.add_argument("--data", required=True)
     p.add_argument("--target-machine-id-sha256", required=True)
     p.add_argument("--migrations", required=True)

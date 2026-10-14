@@ -29,6 +29,8 @@ case "$1" in
       exists) [[ -f "$state/existing-volumes" ]] && grep -qx "$3" "$state/existing-volumes"; exit $? ;;
       create) touch "$state/volume.$3"; exit 0 ;;
       import) [[ "$fail_at" == volume-import ]] && exit 1; exit 0 ;;
+      export) out=""; prev=""; for a in "$@"; do [[ "$prev" == --output ]] && out="$a"; prev="$a"; done; [[ -n "$out" ]] && echo "exported $3" >"$out"; exit 0 ;;
+      rm)     [[ -f "$state/existing-volumes" ]] && sed -i "/^$3\$/d" "$state/existing-volumes"; exit 0 ;;
     esac ;;
   exec)
     shift; [[ "$1" == -i ]] && { shift; cat >/dev/null; }
@@ -307,6 +309,120 @@ for needed in ("configuration", "empty-host check", "snapshot retrieval", "verif
                "volume restore", "start databases", "postgres restore", "mariadb restore", "migrations", "sanitize", "start stack", "result"):
     assert needed in done, (needed, done)
 PY
+# ---------------------------------------------------------------- --mode rollback: undo a failed upgrade on the same host
+FROM_GEN="$(printf '1%.0s' $(seq 64))"; TO_GEN="$(printf '2%.0s' $(seq 64))"
+make_rollback_host() {  # NAME [journal-state] [host-machine-file] -> a host that holds a failed upgrade's state and its journal
+  local n="$1" state="${2:-restore-required}" machine="${3:-$SOURCE_ID_FILE}"
+  make_host "$n" >/dev/null
+  local node="$work/host-$n/node"
+  mkdir -p "$node/state" "$node/config" "$work/host-$n/srv/generations/$FROM_GEN" "$work/host-$n/srv/generations/$TO_GEN" "$work/restored-storage-$n"
+  chmod 0700 "$node/state"
+  echo "FAILED=1" >"$node/node.env"; echo "failed-state key" >"$node/config/failed.json"
+  printf 'telos_traefik_acme\ntelos_jellyfin_config\ntelos_grimmory_config\ntelos_postgres_data\ntelos_grimmory_db_data\n' >"$work/host-$n/stub/existing-volumes"
+  printf 'telos-core\ntelos-postgres\n' >"$work/host-$n/stub/existing-containers"
+  ROLLBACK_OP="$(python3 -I scripts/lib/generations.py journal begin --node "$node" --kind upgrade --from "$FROM_GEN" --to "$TO_GEN" --schema 22 \
+    --host "sha256:$(sha256sum "$machine" | cut -d' ' -f1)" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["operationId"])')"
+  python3 -I scripts/lib/generations.py journal advance --node "$node" --state snapshot-verified --snapshot "$SNAPSHOT_ID" >/dev/null
+  case "$state" in
+    restore-required) python3 -I scripts/lib/generations.py journal advance --node "$node" --state restore-required --error "old binaries cannot run" >/dev/null ;;
+    failed)           python3 -I scripts/lib/generations.py journal advance --node "$node" --state failed --error "stack would not start" >/dev/null ;;
+    complete)         for st in maintenance migrating migrated activated serving complete; do
+                        python3 -I scripts/lib/generations.py journal advance --node "$node" --state "$st" --post-schema 24 >/dev/null; done ;;
+  esac
+}
+run_rollback() {  # NAME [flags...] -- [VAR=value ...]
+  local n="$1"; shift
+  local flags=()
+  while [[ $# -gt 0 && "$1" != -- ]]; do flags+=("$1"); shift; done
+  [[ "${1:-}" == -- ]] && shift
+  env -i HOME="$work" PATH="$bin:/usr/bin:/bin" NO_COLOR=1 PODMAN_COMPOSE_PROVIDER="$bin/podman-compose" TELOS_DEV=1 TELOS_HEALTH_URL="$HEALTH_URL" \
+    STUB_STATE="$work/host-$n/stub" TELOS_NODE_PATH="$work/host-$n/node" TELOS_BACKUP_TMP_ROOT="$work/host-$n/tmp" \
+    TELOS_RELEASE_ROOT="$work/host-$n/release" TELOS_RELEASE_BASE="$work/host-$n/srv" TELOS_BACKUP_REQUIRE_ROOT=0 TELOS_MACHINE_ID_FILE="$SOURCE_ID_FILE" \
+    RESTIC_REPOSITORY="sftp:backup@offsite.example:/srv/telos" RESTIC_PASSWORD_FILE="$work/host-$n/pw" RESTIC_CACHE_DIR="$work/cache" "$@" \
+    bash scripts/restore.sh --mode rollback --operation-id "${ROLLBACK_OP_OVERRIDE:-$ROLLBACK_OP}" --result-out "$work/host-$n/result.json" "${flags[@]}" \
+    >"$work/out-$n" 2>&1
+}
+ROLLBACK_GOOD=(--rehearsal --confirm RESTORE-RECORDED-ROLLBACK)
+rollback_untouched() {  # NAME -> a refused rollback changed nothing
+  local n="$1"
+  ! grep -qE '^(volume (export|rm|create)|compose.* down)' "$work/host-$n/stub/podman.log" 2>/dev/null || fail "$n: the runtime was changed by a refused rollback: $(cat "$work/host-$n/stub/podman.log")"
+  [[ ! -s "$work/host-$n/stub/order.log" ]] || fail "$n: a stack operation ran: $(cat "$work/host-$n/stub/order.log")"
+  [[ "$(cat "$work/host-$n/node/node.env")" == FAILED=1 ]] || fail "$n: node.env was changed"
+  [[ ! -e "$work/host-$n/result.json" ]] || fail "$n: a result was written for a refused rollback"
+  [[ ! -e "$work/host-$n/srv/current" ]] || fail "$n: the generation pointer moved"
+  [[ -z "$(find "$work/host-$n/tmp" -mindepth 1 -maxdepth 1 -name 'telos-restore.*')" ]] || fail "$n: the plaintext staging directory survived"
+}
+rollback_refuses() {  # NAME FRAGMENT [flags/env as run_rollback]
+  local n="$1" fragment="$2"; shift 2
+  if run_rollback "$n" "$@"; then fail "$n: the rollback restore was accepted but should be refused ($fragment)"; fi
+  grep -qF -- "$fragment" "$work/out-$n" || fail "$n: expected '$fragment', got: $(tail -4 "$work/out-$n")"
+  rollback_untouched "$n"
+}
+
+make_rollback_host rbusage
+run_rollback rbusage --rehearsal && fail "rbusage: a missing confirmation was accepted"
+grep -q "RESTORE-RECORDED-ROLLBACK" "$work/out-rbusage" || fail "rbusage: no instruction for the confirmation"
+run_rollback rbusage "${ROLLBACK_GOOD[@]}" --snapshot "$SNAPSHOT_ID" && fail "rbusage: a snapshot named on the command line was accepted; the journal's is the only one"
+run_rollback rbusage --rehearsal --confirm RESTORE-TO-EMPTY-REFERENCE-HOST && fail "rbusage: the separate-host confirmation unlocked a rollback"
+rollback_untouched rbusage
+
+make_rollback_host rbwrongop
+ROLLBACK_OP_OVERRIDE="$(printf 'f%.0s' $(seq 32))" rollback_refuses rbwrongop "not the node's last operation" "${ROLLBACK_GOOD[@]}"
+make_rollback_host rbdone complete
+rollback_refuses rbdone "a restore is only for restore-required or failed" "${ROLLBACK_GOOD[@]}"
+make_rollback_host rbhost restore-required "$TARGET_ID_FILE"
+rollback_refuses rbhost "not the host the upgrade ran on" "${ROLLBACK_GOOD[@]}"
+make_rollback_host rbdiff restore-required "$TARGET_ID_FILE"   # the journal and this machine agree, but the snapshot came from another
+rollback_refuses rbdiff "runs on the machine that made the backup" "${ROLLBACK_GOOD[@]}" -- TELOS_MACHINE_ID_FILE="$TARGET_ID_FILE"
+
+for start_state in restore-required failed; do
+  id="rb-$start_state"
+  make_rollback_host "$id" "$start_state"
+  # the snapshot was made by SOURCE; this host IS that machine
+  run_rollback "$id" "${ROLLBACK_GOOD[@]}" || fail "$id: the rollback restore failed: $(tail -4 "$work/out-$id")"
+  python3 - "$work/host-$id/stub/podman.log" <<'PY' || fail "$id: unsafe rollback order: $(cat "$work/host-$id/stub/podman.log")"
+import sys
+lines = open(sys.argv[1]).read().splitlines()
+def first(prefix):
+    for i, l in enumerate(lines):
+        if prefix in l: return i
+    raise SystemExit(f"missing: {prefix}")
+down = first(" down")
+for volume in ("postgres_data", "grimmory_db_data", "traefik_acme"):
+    assert down < first(f"volume export telos_{volume}") < first(f"volume rm telos_{volume}") < first(f"volume create telos_traefik_acme"), volume
+assert first("volume create telos_traefik_acme") < first("exec -i telos-postgres") < first("exec -i telos-grimmory-db")
+PY
+  rollback_dir="$(find "$work/host-$id" -maxdepth 2 -type d -path '*telos-rollback/*' | head -1)"
+  [[ -n "$rollback_dir" && -f "$rollback_dir/node.env" && -f "$rollback_dir/config/failed.json" ]] || fail "$id: the failed state was not kept"
+  for v in postgres_data grimmory_db_data traefik_acme jellyfin_config grimmory_config; do
+    [[ -s "$rollback_dir/volumes/$v.tar" ]] || fail "$id: the failed state of $v was not exported"
+  done
+  [[ "$(stat -c %a "$rollback_dir")" == 700 && "$(stat -c %a "$rollback_dir/volumes")" == 700 ]] || fail "$id: the rollback directory is not private"
+  [[ "$(readlink "$work/host-$id/srv/current")" == "generations/$FROM_GEN" ]] || fail "$id: the generation the upgrade left was not reactivated"
+  grep -q 'TELOS_DOMAIN=telos.test' "$work/host-$id/node/node.env" || fail "$id: node.env was not restored from the snapshot"
+  python3 -I - "$work/host-$id/stub/order.log" <<'PY' || fail "$id: bad stack order: $(cat "$work/host-$id/stub/order.log")"
+import sys
+order = [l.split()[0] for l in open(sys.argv[1]).read().splitlines()]
+expected = ["STACK-DOWN", "DATABASES-UP", "MIGRATED", "SANITIZED", "telos"]
+assert [x for x in order if x in expected] == expected, order
+PY
+  python3 -I - "$work/host-$id" "$ROLLBACK_OP" <<'PY' || fail "$id: bad journal or result"
+import json, sys
+host, op = sys.argv[1:3]
+result = json.load(open(f"{host}/result.json"))
+assert result["status"] == "restored" and result["mode"] == "rollback" and result["operationId"] == op, result
+journal = json.load(open(f"{host}/node/state/operation.json"))
+assert journal["state"] == "restored" and journal["operationId"] == op, journal
+PY
+  # the failed upgrade can now be superseded without acknowledgement, because it is closed
+  python3 -I scripts/lib/generations.py journal begin --node "$work/host-$id/node" --kind upgrade --from "$FROM_GEN" --to "$TO_GEN" --schema 22 \
+    --host "sha256:$(sha256sum "$SOURCE_ID_FILE" | cut -d' ' -f1)" >/dev/null || fail "$id: a restored operation still blocks the next one"
+done
+make_rollback_host rbfail
+FAIL_AT=sanitize run_rollback rbfail "${ROLLBACK_GOOD[@]}" -- FAIL_AT=sanitize && fail "rbfail: a failing sanitize was accepted"
+python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1]))["state"] == "restore-required"' "$work/host-rbfail/node/state/operation.json" || fail "rbfail: a failed rollback restore closed the journal"
+grep -q STACK-DOWN "$work/host-rbfail/stub/order.log" || fail "rbfail: the stack was not brought down after the failure"
+
 ! grep -rq "restic-password" "$work"/out-* "$work"/host-*/stub/*.log || fail "a secret reached output or a command line"
 
-echo "restore: refusals change nothing; late failures stop the stack and name the step; the order is volumes, databases, restore, migrate, sanitize, start; prior state is preserved"
+echo "restore (separate-host and rollback): refusals change nothing; late failures stop the stack and name the step; the order is volumes, databases, restore, migrate, sanitize, start; prior state is preserved"
