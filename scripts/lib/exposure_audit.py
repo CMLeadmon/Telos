@@ -43,7 +43,30 @@ assertion, check, not_run = cid.assertion, cid.check, cid.not_run
 
 
 def is_loopback(address):
-    return address in LOOPBACK or str(address).startswith("127.")
+    return address in LOOPBACK or str(address).split("%", 1)[0].startswith("127.")
+
+
+def routable(address, networks):
+    """Could a machine outside this host reach a socket bound to ``address``?
+
+    Loopback cannot. Neither can an address inside a container network's subnet: that is a bridge
+    gateway such as the one aardvark-dns answers container DNS on, and no packet from outside is routed
+    to it. Everything else (a wildcard, a LAN or public address) can; the external scan then decides
+    whether anything actually answers.
+    """
+    import ipaddress
+    bare = str(address).split("%", 1)[0].strip("[]")
+    if is_loopback(bare):
+        return False
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        return True
+    for network in networks or []:
+        for subnet in network.get("subnets") or []:
+            if ip in ipaddress.ip_network(subnet, strict=False):
+                return False
+    return True
 
 
 class PolicyError(Exception):
@@ -168,7 +191,8 @@ def evaluate_local(policy, facts):
                      not offenders and traefik_ports == set(telos["publicTcp"]),
                      f"{telos['publisher']} alone publishes TCP {sorted(traefik_ports)}", f"unexpected bindings {offenders[:5]}; Traefik ports {sorted(traefik_ports)}"))
     setup = sorted(c["name"] for c in rows if c["name"] in telos["setupContainers"] and c.get("state") == "running")
-    setup_listening = sorted({l["port"] for l in facts.get("listeners") or [] if l["port"] in (8096, 6060) and not is_loopback(l["address"])})
+    networks_seen = facts.get("networks") or []
+    setup_listening = sorted({l["port"] for l in facts.get("listeners") or [] if l["port"] in (8096, 6060) and routable(l["address"], networks_seen)})
     out.append(check("exposure.setup", "no guided-setup container or port is left behind", not setup and not setup_listening,
                      "no setup relay is running and nothing listens on the setup ports off-loopback", f"setup containers {setup}, off-loopback setup listeners {setup_listening}"))
     networks = {n["name"]: n for n in facts.get("networks") or []}
@@ -188,14 +212,14 @@ def evaluate_local(policy, facts):
                      "telos-backend, telos-db and telos-observability are internal; only declared services join telos-ingress and telos-egress", "; ".join(network_problems[:4])))
     allowed_tcp = set(telos["publicTcp"]) | set(declared["tcp"])
     allowed_udp = set(telos["publicUdp"]) | set(declared["udp"])
-    exposed_tcp = sorted({l["port"] for l in facts.get("listeners") or [] if not is_loopback(l["address"]) and l["port"] not in allowed_tcp})
-    exposed_udp = sorted({l["port"] for l in facts.get("udpListeners") or [] if not is_loopback(l["address"]) and l["port"] not in allowed_udp})
+    exposed_tcp = sorted({l["port"] for l in facts.get("listeners") or [] if routable(l["address"], networks_seen) and l["port"] not in allowed_tcp})
+    exposed_udp = sorted({l["port"] for l in facts.get("udpListeners") or [] if routable(l["address"], networks_seen) and l["port"] not in allowed_udp})
     forbidden = sorted({l["port"] for l in (facts.get("listeners") or []) + (facts.get("udpListeners") or [])
-                        if not is_loopback(l["address"]) and l["port"] in {i["port"] for i in telos["neverReachable"]}})
+                        if routable(l["address"], networks_seen) and l["port"] in {i["port"] for i in telos["neverReachable"]}})
     listeners_known = facts.get("listeners") is not None and facts.get("udpListeners") is not None
-    out.append(check("exposure.listeners", "every off-loopback listener is Telos's 80/443 or an operator-declared management port",
+    out.append(check("exposure.listeners", "every listener a machine outside the host could reach is Telos's 80/443 or an operator-declared management port",
                      listeners_known and not exposed_tcp and not exposed_udp and not forbidden,
-                     "no undeclared TCP or UDP listener on a routable address",
+                     "no undeclared TCP or UDP listener on a routable address (loopback and container-network gateways such as container DNS are not routable)",
                      f"undeclared TCP {exposed_tcp[:6]}, undeclared UDP {exposed_udp[:6]}, never-reachable {forbidden}" if listeners_known else "listening sockets could not be read"))
     return out
 
@@ -223,7 +247,7 @@ def evaluate_scan(policy, scan, facts):
         out.append(check("scan.udp", "no Telos UDP port answers from outside", not extra and scan.get("udpPortsScanned", 0) > 0,
                          f"{scan['udpPortsScanned']} UDP ports probed; open: {sorted(open_udp)}", f"undeclared UDP answering {extra[:8]}"))
     if scan.get("tcp") is not None and facts.get("listeners") is not None:
-        local = {l["port"] for l in facts["listeners"] if not is_loopback(l["address"])}
+        local = {l["port"] for l in facts["listeners"] if routable(l["address"], facts.get("networks"))}
         unexplained = sorted(set(scan["tcp"]) - local)
         out.append(check("scan.agreement", "everything reachable from outside is a listener the node itself reports", not unexplained,
                          "the external scan and the node's own listener list agree", f"externally open but not listening on the node: {unexplained[:8]} (a forward or another host is answering)"))

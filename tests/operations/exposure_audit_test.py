@@ -159,6 +159,17 @@ class LocalFactsTests(unittest.TestCase):
                 failed = sorted(k for k, v in self.evaluate(facts).items() if v == "failed")
                 self.assertIn(expected, failed, f"{expected} mutation {index} failed {failed}")
 
+    def test_loopback_scopes_and_container_network_gateways_are_not_routable(self):
+        facts = good_facts()
+        facts["listeners"] += [{"address": "10.89.0.1", "port": 53, "process": "aardvark-dns"}, {"address": "127.0.0.53%lo", "port": 53, "process": "systemd-resolve"},
+                               {"address": "10.201.0.1", "port": 53, "process": "aardvark-dns"}]
+        facts["udpListeners"] += [{"address": "10.89.0.1", "port": 53, "process": "aardvark-dns"}, {"address": "10.0.2.15%enp0s2", "port": 68, "process": "systemd-network"}]
+        facts["networks"][1]["subnets"] = ["10.89.0.0/24"]
+        facts["networks"].append({"name": "other", "internal": False, "driver": "bridge", "subnets": []})
+        self.assertEqual(self.evaluate(facts)["exposure.listeners"], "passed")
+        facts["listeners"].append({"address": "0.0.0.0", "port": 53, "process": "dnsmasq"})   # a wildcard 53 IS reachable
+        self.assertEqual(self.evaluate(facts)["exposure.listeners"], "failed")
+
     def test_an_undeclared_management_port_is_a_failure_and_a_declared_one_is_not(self):
         facts = good_facts()
         self.assertEqual(self.evaluate(facts, policy())["exposure.listeners"], "failed", "SSH and DHCP undeclared")
