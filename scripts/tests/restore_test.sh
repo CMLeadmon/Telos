@@ -23,6 +23,7 @@ state="$STUB_STATE"; printf '%s\n' "$*" >>"$state/podman.log"
 fail_at="${FAIL_AT:-}"
 case "$1" in
   ps)     [[ -f "$state/existing-containers" ]] && cat "$state/existing-containers"; exit 0 ;;
+  image)  [[ "$2" == exists ]] && { [[ -f "$state/images-present" ]]; exit $?; }; exit 0 ;;
   volume)
     case "$2" in
       exists) [[ -f "$state/existing-volumes" ]] && grep -qx "$3" "$state/existing-volumes"; exit $? ;;
@@ -39,8 +40,9 @@ case "$1" in
   compose)
     shift; args="$*"
     case "$args" in
-      *"sanitize-restore"*) [[ "$fail_at" == sanitize ]] && exit 1; echo "SANITIZED $*" >>"$state/order.log"; exit 0 ;;
-      *"telos-migrate"*)    [[ "$fail_at" == migrate ]] && exit 1; echo "MIGRATED" >>"$state/order.log"; exit 0 ;;
+      *" build "*)          echo "BUILT $*" >>"$state/build.log"; exit 0 ;;
+      *"sanitize-restore --snapshot"*) [[ "$fail_at" == sanitize ]] && exit 1; echo "SANITIZED $*" >>"$state/order.log"; exit 0 ;;
+      *"run --rm"*"telos-migrate"*)    [[ "$fail_at" == migrate ]] && exit 1; echo "MIGRATED" >>"$state/order.log"; exit 0 ;;
       *"up -d postgres grimmory-db"*) echo "DATABASES-UP" >>"$state/order.log"; exit 0 ;;
       *" down"*)            echo "STACK-DOWN" >>"$state/order.log"; exit 0 ;;
     esac

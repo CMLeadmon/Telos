@@ -285,7 +285,13 @@ run_restore() {
 
   step="migrations"
   journal_event "$step" begin
-  stack build telos-core >/dev/null
+  # Images the host already holds (loaded from the release's artifacts) are used as they
+  # are; only a missing one is built from the installed release.
+  local missing_build=() service
+  for service in telos-migrate telos-sanitize-restore; do
+    podman image exists "localhost/telos_$service" 2>/dev/null || missing_build+=("$service")
+  done
+  [ "${#missing_build[@]}" -eq 0 ] || stack --profile restore build "${missing_build[@]}" >/dev/null
   stack run --rm --no-deps -T telos-migrate >/dev/null
   journal_event "$step" done
 
@@ -296,7 +302,13 @@ run_restore() {
 
   step="start stack"
   journal_event "$step" begin
-  telos_cli start --build
+  local build_flag=(--build)
+  local image all_present=1
+  for image in telos-core telos-client telos-egress-proxy; do
+    podman image exists "localhost/telos_$image" 2>/dev/null || all_present=0
+  done
+  [ "$all_present" -eq 0 ] || build_flag=()
+  telos_cli start "${build_flag[@]}"
   local wait=0
   until gateway_ready; do
     wait=$((wait + 1)); [ "$wait" -lt 60 ] || die "the restored gateway did not report ready within 5 minutes"
