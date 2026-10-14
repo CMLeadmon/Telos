@@ -294,3 +294,52 @@ not eliminated; several stale tests (doctor's container count, Compose network m
 v2 (linked ecosystems versus isolated services), `ci/risk-acceptance.schema.json` + empty `ci/risk-acceptances.json`, `.gitleaks.toml`,
 `scripts/lib/supply_chain.py`, `generate-sbom.sh`, `scan-candidate.sh`, `scripts/ci/validate-sbom.sh`, 47 unit tests, the CI jobs
 `operations-fixtures` and `supply-chain-source`. `candidate-supply-chain` is `not_run` without a frozen candidate.
+
+## P4-T7 (continued) — the capacity drill, three live runs, two product defects (rehearsal, not candidate evidence)
+
+The 30-minute, 25-session capacity drill ran three times on the reference VMs. **Run 1** failed on stability, latency and semantics: Jellyfin
+restarted (exit 139, SIGSEGV) and requests failed during the restart. I first blamed Jellyfin 10.11.11 and added a request start gate (A30),
+which cut but did not remove the crashes. **A one-option-at-a-time differential test then found the cause:** the same Jellyfin image on a copy
+of the real config under identical direct load was stable with a read-only root (0 restarts), dropped capabilities (0), memory/CPU/PID limits (0)
+and jemalloc disabled, stable unhardened (0 restarts in 144,000 requests), and crash-looped only with `no-new-privileges` (49 restarts in 100 s).
+It is the A16 mechanism (Ubuntu 26.04 AppArmor label split denies the .NET runtime's own signals), so Jellyfin now carries the same documented
+exception (A33). **Run 2** then failed only on `capacity.semantics`: 46 of 7,200 playback-info requests answered 500. Logging the cause showed
+`context canceled`: `jellyfinGET` cancelled the request's deadline context when it returned, before the caller read the body (A34; a regression
+test reproduces it). **Run 3** (commit `d45b8d3`): every capacity assertion passed — 75,825 requests, 0 failed, p95 74 ms (mutation p95 53 ms),
+12 containers with no restart, CPU/memory/storage inside bounds, 25 live sessions throughout, journey passes afterwards, fixture removed — and the
+drill reports `not_run` only for `subject.runtime`: the rehearsal node has no installed-generation receipt, so the observation cannot be bound to
+a generation. Artifacts: `telos-review/beta-evidence/vm/*capacity-rehearsal-{1,2,3}-*`. **Candidate status:** none.
+
+## P4-T9 — Phase 4 exit gate (local)
+
+`scripts/check-product-truth.sh` now enforces the operational inventory structurally (Phase 4 gate IDs/scopes/commands and their scripts, the
+locks, schemas, policies, systemd units and operation scripts, absence of success-only script bodies), with five mutation tests; the status
+document keeps implementation, rehearsal and candidate evidence apart and backup/recovery stay "not shipping until Phase 5 candidate evidence".
+`verify-clean-checkout.sh` carries every Phase 4/5 path. **Known leftover:** the legacy full-stack smoke mode of `verify-clean-checkout.sh
+--source-ref` still fails at compose validation (its generated `.env` predates the hardened model); the gate only uses `--inventory-only`, and the
+real clean-host proof is the `clean-install` drill. Not repaired.
+
+## P5 (continued) — builder, installer, evidence import/sign/certify, staging, guided records (implemented; no keys, no devices)
+
+- **Builder** `scripts/build-release.sh` → `scripts/lib/build_release.py` (+ `release_compose.py`, `docker-compose.release.yml`,
+  `release/generation-compat.json`): signed-tag/clean-checkout candidate mode (exit 3 while `release/telos-tag-signers` enrolls no signer) or an
+  explicit-commit **rehearsal** mode that can never become a candidate; `git archive` source, locked-base `podman build --timestamp`, third-party
+  images archived byte-for-byte with `skopeo --preserve-digests` (verified live to keep the upstream platform digest through `podman load`), a derived
+  build-free Compose model (podman-compose 1.6.0 cannot `!reset` a `build:` key), `images.env`, candidate-independent `generation.json`, artifact-bound
+  SBOMs with fixed timestamps, the hash graph, a normalized `tar.zst`, optional build-twice-and-compare. 41 tests with stand-in podman/skopeo.
+- **Installer** `scripts/install-candidate.sh` (`candidate_install.py`): verifies the graph, loads and proves every image by digest, copies an
+  immutable root-owned generation, keeps the lock in node state; `--activate` writes the receipt and `state/current-candidate-lock.json`. CLI release
+  mode (`images.env` strictly parsed, overlay layered, `--build` refused). 14 + 6 tests. Backup unit/scripts now follow the generation layout.
+- **Evidence** `evidence_bundle.py` (`import-evidence.py`, `sign-evidence.sh`, `verify-evidence.sh --bundle-dir`, `certify-beta.sh`): exact required
+  set, freshness, dependency order, secret scan, signed index, subject re-derivation from the frozen bytes, signed tag, distinct certification signature,
+  diagnostic-only on failure. 43 tests built on the real runner.
+- **Staging** `stage-release.sh` / `promote-release.sh` (`stage_release.py`), verification-only `release.yml`, `candidate.yml` (pinned actions, no
+  secrets): fake-`gh` tests for every refusal. `release/publisher-policy.json` is **unreviewed**, so staging is `not_run` until a reviewer names the
+  repository and logins.
+- **Guided/automated smoke** `release/guided-assertions.json`, `record-guided-smoke.py`, `browser_report.py`, `guided_smoke.py aggregate`
+  (`certify-browser-matrix.sh`, `certify-desktop.sh`), candidate-mode Playwright projects: 40 tests. No tester is enrolled; 9 of 13 automated journeys
+  have a tagged test.
+- **Encrypted-backup gate** `scripts/drills/backup.sh` (`backup_gate.py`): the node takes a real backup, the verifier judges it from the repository
+  (wrong password refused, `restic check`, dumped manifest, component sizes, no plaintext left, services up). 23 hermetic tests; not yet run live.
+- **Frontend gates** (A35): `frontend-accessibility`/`frontend-quality` are real source checks; the axe-core audit is a candidate journey; the unsupported
+  "Certified, 0 known failures" accessibility claim was withdrawn.
