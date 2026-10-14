@@ -12,6 +12,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import re
 import os
 import stat
 import subprocess
@@ -285,12 +286,64 @@ class LicenseTests(unittest.TestCase):
         self.assertEqual(findings, [])
         self.assertEqual(inventory, {"GPL-2.0-only": 1, "MIT": 1})
 
+    def forbidden_services(self):
+        return [name for name, entry in self.POLICY["isolatedServices"].items() if entry["linkingForbidden"]]
+
     def test_isolated_service_code_in_a_linked_graph_is_flagged(self):
         sboms = {"core": {"packages": [spdx_package("github.com/jellyfin/jellyfin-sdk", "1", "golang", "MIT"), spdx_package("grimmory", "3", "npm", "MIT")]}}
-        findings = sc.isolated_code_in_linked(sboms, list(self.POLICY["isolatedServices"]), self.POLICY)
+        findings = sc.isolated_code_in_linked(sboms, self.forbidden_services(), self.POLICY)
         self.assertEqual(len(findings), 2)
         clean = {"core": {"packages": [spdx_package("github.com/jackc/pgx", "5", "golang", "MIT")]}}
-        self.assertEqual(sc.isolated_code_in_linked(clean, list(self.POLICY["isolatedServices"]), self.POLICY), [])
+        self.assertEqual(sc.isolated_code_in_linked(clean, self.forbidden_services(), self.POLICY), [])
+
+    def test_only_copyleft_services_are_barred_from_linked_code_and_client_libraries_are_judged_by_license(self):
+        # found by the live scan: the gateway legitimately links the Redis and Prometheus CLIENT libraries (BSD-2-Clause, Apache-2.0)
+        self.assertEqual(sorted(self.forbidden_services()), ["clamav", "grimmory", "jellyfin", "mariadb", "squid"])
+        clients = {"core": {"packages": [spdx_package("github.com/redis/go-redis/v9", "v9.6.3", "golang", "BSD-2-Clause"),
+                                         spdx_package("github.com/prometheus/client_golang", "v1.17.0", "golang", "Apache-2.0")]}}
+        self.assertEqual(sc.isolated_code_in_linked(clients, self.forbidden_services(), self.POLICY), [])
+        self.assertEqual(len(sc.isolated_code_in_linked({"core": {"packages": [spdx_package("github.com/mariadb/connector", "1", "golang", "MIT")]}},
+                                                        self.forbidden_services(), self.POLICY)), 1)
+
+    def test_a_reviewed_license_fills_the_gap_an_sbom_cannot_but_never_overrides_one_and_never_covers_another_version(self):
+        reviewed = "github.com/gorilla/websocket"
+        version = next(k.split("@")[1] for k in self.POLICY["reviewedLicenses"]["golang"] if k.startswith(reviewed + "@"))
+        findings, inventory = self.judge(spdx_package(reviewed, version, "golang", None))
+        self.assertEqual((findings, inventory), ([], {"BSD-2-Clause": 1}))
+        findings, _ = self.judge(spdx_package(reviewed, "v0.0.1-other", "golang", None))
+        self.assertEqual(len(findings), 1, "a different version has not been reviewed")
+        findings, _ = self.judge(spdx_package("github.com/never/reviewed", "v1", "golang", None))
+        self.assertEqual(len(findings), 1, "an unreviewed module with no license is still a finding")
+        findings, _ = self.judge(spdx_package(reviewed, version, "golang", "GPL-3.0-only"))
+        self.assertEqual(len(findings), 1, "a license the SBOM declares is never replaced by the reviewed one")
+        findings, inventory = self.judge(spdx_package(reviewed, version, "golang", None), isolated="jellyfin")
+        self.assertEqual(inventory, {"NOASSERTION": 1}, "an isolated service is inventoried as the SBOM states it")
+
+    def test_every_module_the_gateway_requires_has_a_reviewed_license_at_its_exact_version(self):
+        # A dependency bump must be a finding until someone reads the new license. Two go.mod modules are not in the gateway binary:
+        # gopkg.in/yaml.v3 is used only by the experimental Go CLI (backend/cmd/telos) and kr/text only by tests.
+        not_linked = {"gopkg.in/yaml.v3", "github.com/kr/text"}
+        required = dict(re.findall(r"^\s+(\S+) (v\S+)", (ROOT / "backend" / "go.mod").read_text(), re.M))
+        reviewed = {k: v for k, v in self.POLICY["reviewedLicenses"]["golang"].items() if k != "telos-core@UNKNOWN"}
+        expected = {f"{name}@{version}" for name, version in required.items() if name not in not_linked}
+        self.assertEqual(set(reviewed), expected)
+        self.assertIn("telos-core@UNKNOWN", self.POLICY["reviewedLicenses"]["golang"])
+
+    def test_a_policy_with_an_unreviewable_entry_is_refused(self):
+        mutations = [
+            lambda p: p["reviewedLicenses"]["golang"].update({"github.com/x/y@v1": {"license": "GPL-3.0-only", "evidence": "read"}}),
+            lambda p: p["reviewedLicenses"]["golang"].update({"github.com/x/y@v1": {"license": "MIT", "evidence": ""}}),
+            lambda p: p["reviewedLicenses"]["golang"].update({"no-version": {"license": "MIT", "evidence": "read"}}),
+            lambda p: p["reviewedLicenses"].update({"deb": {}}),
+            lambda p: p["isolatedServices"]["redis"].pop("linkingForbidden"),
+            lambda p: p["isolatedServices"]["redis"].update(linkingForbidden="no"),
+            lambda p: p.pop("reviewedLicenses"),
+        ]
+        for mutate in mutations:
+            bad = copy.deepcopy(self.POLICY)
+            mutate(bad)
+            with self.subTest(mutate), self.assertRaises(sc.Refused):
+                sc.validate_license_policy(bad)
 
     def test_a_policy_that_allows_what_it_forbids_is_refused(self):
         bad = copy.deepcopy(self.POLICY)

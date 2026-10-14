@@ -129,8 +129,9 @@ def validate_acceptances(document, now=None):
 # ------------------------------------------------------------------ licenses
 
 def validate_license_policy(policy):
-    if not isinstance(policy, dict) or policy.get("schemaVersion") != 2 or set(policy) != {"schemaVersion", "linkedArtifacts", "isolatedServices", "forbiddenLinked"}:
-        raise Refused("license-policy.json must be schemaVersion 2 with linkedArtifacts, isolatedServices and forbiddenLinked")
+    keys = {"schemaVersion", "linkedArtifacts", "isolatedServices", "reviewedLicenses", "forbiddenLinked"}
+    if not isinstance(policy, dict) or policy.get("schemaVersion") != 3 or set(policy) != keys:
+        raise Refused("license-policy.json must be schemaVersion 3 with linkedArtifacts, isolatedServices, reviewedLicenses and forbiddenLinked")
     linked = policy["linkedArtifacts"]
     if not isinstance(linked, dict) or not linked:
         raise Refused("linkedArtifacts must name at least the Go core, the browser JavaScript and the Rust desktop bundle")
@@ -140,12 +141,28 @@ def validate_license_policy(policy):
     if not isinstance(policy["isolatedServices"], dict) or not policy["isolatedServices"]:
         raise Refused("isolatedServices must name the separately-run third-party images")
     for name, entry in policy["isolatedServices"].items():
-        if not isinstance(entry, dict) or set(entry) != {"why"} or not entry["why"]:
-            raise Refused(f"isolated service {name!r} needs a why")
+        if not isinstance(entry, dict) or set(entry) != {"why", "linkingForbidden"} or not entry["why"] or not isinstance(entry["linkingForbidden"], bool):
+            raise Refused(f"isolated service {name!r} needs a why and an explicit linkingForbidden (true for copyleft code that must never enter linked code)")
     forbidden = set(policy["forbiddenLinked"])
     allowed = {l for entry in linked.values() for l in entry["allowed"]}
     if forbidden & allowed:
         raise Refused(f"licenses both allowed and forbidden: {sorted(forbidden & allowed)}")
+    # Reviewed licenses fill the gap where an SBOM cannot know a package's license (a Go binary carries no license files). Each is
+    # keyed by the exact name@version, so a dependency change is a finding until someone reads the new license; each must itself
+    # be allowed for linked code of its ecosystem.
+    allowed_by_ecosystem = {entry["ecosystem"]: set(entry["allowed"]) for entry in linked.values()}
+    reviewed = policy["reviewedLicenses"]
+    if not isinstance(reviewed, dict):
+        raise Refused("reviewedLicenses must map an ecosystem to its reviewed packages")
+    for ecosystem, packages in reviewed.items():
+        if ecosystem not in allowed_by_ecosystem or not isinstance(packages, dict):
+            raise Refused(f"reviewedLicenses names {ecosystem!r}, which is not a linked ecosystem")
+        for key, entry in packages.items():
+            if not re.fullmatch(r"[^@\s]+@\S+", key) or not isinstance(entry, dict) or set(entry) != {"license", "evidence"} \
+                    or not isinstance(entry["license"], str) or not entry["evidence"]:
+                raise Refused(f"reviewedLicenses {ecosystem}/{key!r}: name@version with a license and its evidence")
+            if not expression_allowed(entry["license"], allowed_by_ecosystem[ecosystem]) or set(split_expression(entry["license"])) & forbidden:
+                raise Refused(f"reviewedLicenses {ecosystem}/{key}: {entry['license']} is not allowed for linked code")
     return policy
 
 
@@ -232,10 +249,14 @@ def evaluate_licenses(sbom, policy, isolated_name=None):
     forbidden = set(policy["forbiddenLinked"])
     for package in sbom.get("packages") or []:
         license_text = package_license(package)
+        ecosystem = package_ecosystem(package)
+        if license_text is None and isolated_name is None:
+            # a reviewed license fills the gap an SBOM cannot (never overrides one the SBOM declares)
+            reviewed = (policy.get("reviewedLicenses") or {}).get(ecosystem, {}).get(f"{package.get('name')}@{package.get('versionInfo')}")
+            license_text = reviewed["license"] if reviewed else None
         inventory[license_text or "NOASSERTION"] = inventory.get(license_text or "NOASSERTION", 0) + 1
         if isolated_name is not None:
             continue
-        ecosystem = package_ecosystem(package)
         if ecosystem not in linked_by_ecosystem:
             continue
         _, entry = linked_by_ecosystem[ecosystem]
@@ -588,7 +609,7 @@ def scan(candidate_lock, artifact_root, sbom_dir, tools_dir, source_dir=None, ru
         license_report[path] = {"class": "isolated-service" if isolated else "telos", "service": isolated, "licenses": inventory}
         if not isolated:
             ours[path] = document
-    findings += isolated_code_in_linked(ours, list(policy["isolatedServices"]), policy)
+    findings += isolated_code_in_linked(ours, [n for n, e in policy["isolatedServices"].items() if e["linkingForbidden"]], policy)
     report = {
         "schemaVersion": 1, "candidateLockDigest": lock_digest, "startedAt": stamp(started), "finishedAt": stamp(now_utc()),
         "tools": {"trivy": {"version": trivy_version, "binarySha256": trivy_digest}, "gitleaks": {"version": gitleaks_version, "binarySha256": gitleaks_digest},

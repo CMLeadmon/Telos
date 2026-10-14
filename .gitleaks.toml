@@ -2,7 +2,7 @@
 #
 # The default ruleset applies in full. The allowlist below names the only values the scan has ever flagged in
 # this tree: canary strings that tests plant on purpose to prove a secret never reaches a log, an output file or
-# a command line, one fake locator token in a unit test, and a documentation sentence. Each entry is an exact
+# a command line, one fake locator token in a unit test, the planted password and token in the guided-smoke redaction test, and a documentation sentence. Each entry is an exact
 # value or an unmistakable canary -- never a path, so a real secret in a test file is still found. Add to it only
 # with a reviewed reason.
 title = "Telos"
@@ -19,4 +19,6 @@ regexes = [
   '''^eyJ5IjoiaGxzIn0\.c2ln$''',
   '''^abcdef0123456789$''',
   '''^forbidden/incompatible$''',
+  '''^hunter2hunter2$''',
+  '''^abcd1234efgh$''',
 ]
