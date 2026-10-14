@@ -75,7 +75,7 @@ var (
 	}
 	// upstreamRoundTripper is upstreamTransport behind the Jellyfin start gate: every request to Jellyfin,
 	// whichever code path sends it (API call, media proxy, health probe), takes a slot for its start.
-	upstreamRoundTripper http.RoundTripper = gatedTransport{base: upstreamTransport, gate: func(ctx context.Context) (func(), error) { return jellyfinStartGate(ctx) }, applies: isJellyfinRequest}
+	upstreamRoundTripper http.RoundTripper = gatedTransport{base: upstreamTransport, gate: jellyfinGateFor, applies: isJellyfinRequest}
 	upstreamHTTPClient                     = &http.Client{Transport: upstreamRoundTripper}
 )
 

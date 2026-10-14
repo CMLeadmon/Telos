@@ -65,7 +65,7 @@ var errUpstreamBusy = errors.New("upstream busy")
 // gone, so any number of started streams are unaffected.
 type gatedTransport struct {
 	base    http.RoundTripper
-	gate    func(ctx context.Context) (release func(), err error)
+	gate    func(req *http.Request) (release func(), err error)
 	applies func(*http.Request) bool
 }
 
@@ -73,7 +73,7 @@ func (t gatedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.gate == nil || t.applies == nil || !t.applies(req) {
 		return t.base.RoundTrip(req)
 	}
-	release, err := t.gate(req.Context())
+	release, err := t.gate(req)
 	if err != nil {
 		if errors.Is(err, errUpstreamBusy) {
 			return nil, fmt.Errorf("the media server is busy: %w", errUpstreamBusy)

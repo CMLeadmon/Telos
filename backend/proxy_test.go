@@ -262,7 +262,7 @@ func TestGatedTransportHoldsTheSlotOnlyUntilHeadersAndOnlyForTheGatedHost(t *tes
 	defer other.Close()
 
 	gate := startGate(1, 100*time.Millisecond)
-	transport := gatedTransport{base: http.DefaultTransport, gate: gate,
+	transport := gatedTransport{base: http.DefaultTransport, gate: func(req *http.Request) (func(), error) { return gate(req.Context()) },
 		applies: func(req *http.Request) bool { return req.URL.Host == strings.TrimPrefix(upstream.URL, "http://") }}
 	client := &http.Client{Transport: transport}
 
@@ -288,6 +288,58 @@ func TestGatedTransportHoldsTheSlotOnlyUntilHeadersAndOnlyForTheGatedHost(t *tes
 	release()
 	close(finish)
 	resp.Body.Close()
+}
+
+func TestAudioStartsAreSerializedButOtherCallsAreNot(t *testing.T) {
+	var audioPeak, audioIn, otherPeak, otherIn int32
+	bump := func(in, peak *int32) {
+		n := atomic.AddInt32(in, 1)
+		for {
+			p := atomic.LoadInt32(peak)
+			if n <= p || atomic.CompareAndSwapInt32(peak, p, n) {
+				break
+			}
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		in, peak := &otherIn, &otherPeak
+		if strings.Contains(r.URL.Path, "/Audio/") {
+			in, peak = &audioIn, &audioPeak
+		}
+		bump(in, peak)
+		time.Sleep(30 * time.Millisecond)
+		atomic.AddInt32(in, -1)
+		w.Write([]byte("{}"))
+	}))
+	defer server.Close()
+	oldBase, oldGate, oldAudio := getJellyfinBaseURL, jellyfinStartGate, jellyfinAudioStartGate
+	getJellyfinBaseURL = func() string { return server.URL }
+	jellyfinStartGate = startGate(6, 5*time.Second)
+	jellyfinAudioStartGate = startGate(1, 5*time.Second)
+	defer func() { getJellyfinBaseURL, jellyfinStartGate, jellyfinAudioStartGate = oldBase, oldGate, oldAudio }()
+
+	var done sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		for _, path := range []string{"/Audio/x/stream", "/Users"} {
+			done.Add(1)
+			go func(path string) {
+				defer done.Done()
+				resp, err := jellyfinGET(context.Background(), path, "")
+				if err != nil {
+					t.Errorf("%s: %v", path, err)
+					return
+				}
+				resp.Body.Close()
+			}(path)
+		}
+	}
+	done.Wait()
+	if atomic.LoadInt32(&audioPeak) != 1 {
+		t.Fatalf("audio starts overlapped (peak %d); they must be serialized", audioPeak)
+	}
+	if atomic.LoadInt32(&otherPeak) < 2 {
+		t.Fatalf("other Jellyfin calls were serialized too (peak %d); only audio starts are", otherPeak)
+	}
 }
 
 func TestAnyRequestToJellyfinIsGatedWhicheverClientSendsIt(t *testing.T) {

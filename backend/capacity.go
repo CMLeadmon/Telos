@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -112,3 +113,25 @@ func isJellyfinRequest(req *http.Request) bool {
 // directory. Twelve-way is fine, so six slots keep a wide margin. Members already streaming are
 // unaffected: a slot is held only until the response headers arrive.
 var jellyfinStartGate = startGate(envInt("TELOS_JELLYFIN_MAX_STARTS", 6), 5*time.Second)
+
+// jellyfinAudioStartGate serializes audio direct-stream STARTS. Overlapping starts race on Jellyfin's
+// transcode-directory marker file and the loser gets a 500 ("being used by another process"); one
+// start at a time costs a few tens of milliseconds each and nothing once the stream is running.
+var jellyfinAudioStartGate = startGate(1, 5*time.Second)
+
+// jellyfinGateFor takes the general start slot and, for an audio stream, the audio one.
+func jellyfinGateFor(req *http.Request) (func(), error) {
+	release, err := jellyfinStartGate(req.Context())
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(req.URL.Path, "/Audio/") {
+		return release, nil
+	}
+	releaseAudio, err := jellyfinAudioStartGate(req.Context())
+	if err != nil {
+		release()
+		return nil, err
+	}
+	return func() { releaseAudio(); release() }, nil
+}
