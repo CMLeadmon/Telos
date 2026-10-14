@@ -85,8 +85,14 @@ scripts/restore.sh --mode rollback --operation-id <id> --result-out OUT.json \
   (--candidate-lock OLD.lock | --rehearsal) --confirm RESTORE-RECORDED-ROLLBACK
 ```
 
-That restore works only on the host that ran the upgrade, only for an operation that ended `restore-required` or `failed`,
-and only from the snapshot **recorded in the journal** (never one named on the command line). It brings the stack
+That restore works only on the host that ran the upgrade, only for an operation that ended `restore-required` or `failed`
+**or that finished `complete` on a schema the previous generation cannot run on**, and only from the snapshot **recorded in
+the journal** (never one named on the command line). For a `complete` upgrade the restore first claims the journal
+(`generations.py journal claim-restore`): it moves `complete` to `restore-required` only after re-verifying both
+generations and proving from their manifests that the previous binaries cannot run on the schema the upgrade left. When
+they can, the claim is refused and `rollback.sh` — which keeps every byte written since — is the way back. (The live
+rehearsal found that `rollback.sh` named the restore for a finished schema upgrade and the restore then refused it.) A
+claimed operation blocks the next upgrade until the restore closes it, exactly like one that failed. It brings the stack
 down, keeps the failed state under `telos-rollback/<time>/` (node files, shared storage, and an export of every data
 volume), reactivates the generation the upgrade left, and restores the databases, volumes and storage as in
 [`backup-and-restore.md`](./backup-and-restore.md), sanitizing sessions, devices and invites. The journal then reads
@@ -95,7 +101,37 @@ volume), reactivates the generation the upgrade left, and restores the databases
 Neither command deletes a generation or a journal. Operators remove old generations deliberately, once the retention
 they want has passed.
 
+## The live drill (`upgrade-rollback` gate)
+
+```bash
+scripts/drills/upgrade-rollback.sh --target-file TARGET.json \
+  (--rehearsal --source-commit SHA --rehearsal-lock LOCK | --candidate-lock LOCK) --result-out OUT/result.json
+```
+
+Run from a machine that is not the node. The node serves the **predecessor** (the target descriptor's
+`predecessorGeneration`, `<base>/generations/<64 hex>`), the candidate is installed beside it, and the descriptor carries
+`"confirmation": "UPGRADE-AND-ROLL-BACK-THIS-NODE"` — without it the drill is `not_run`; with another value it refuses. The drill sends
+one fixed node-side program (`scripts/lib/upgrade_node.py`) that either observes the lifecycle state or runs exactly one of the
+candidate's own `upgrade.sh`, `rollback.sh`, `restore.sh --mode rollback` with their own confirmation tokens.
+
+1. It proves the node's identity, that the node starts settled (predecessor active and receipted, no unfinished or blocking
+   operation, gateway ok, candidate installed) and changes nothing if it does not.
+2. It leaves a marker (a chat message) as the owner, upgrades, and judges the journal, the verified snapshot, the schema
+   before/after, the receipt, the active generation, the marker, and a member journey over HTTPS.
+3. **The branch is computed here** from the two generation manifests and the schema the upgrade left, not from what the scripts say.
+   *Compatible*: `rollback.sh` must succeed and keep both markers, then the candidate is upgraded again.
+   *Incompatible*: `rollback.sh` must refuse with the journal, schema and active generation untouched; `restore.sh --mode rollback`
+   must then restore — schema back, the marker left after the snapshot gone, the earlier marker present, the failed state kept
+   under `telos-rollback/` — and the candidate is upgraded again.
+4. It ends on the candidate (receipt, services, public TLS, a final journey). A failing step stops the sequence; later steps are `not_run`.
+
+A candidate exercises only the branch its own compatibility selects. The other branch is proven by the hermetic suites and, as
+rehearsal evidence only, by a pair of rehearsal generations (one schema apart); it is never claimed for the candidate.
+
 ## What the tests prove, and what they do not
+
+`tests/operations/upgrade_drill_test.py` proves the drill's judgement against a simulated node (both branches, every injected
+fault, authorization and start-state refusals) and the node-side program against a stub tree; it is not evidence about a node.
 
 `tests/operations/upgrade_rollback_test.sh` drives the real scripts over real generation directories (verified by
 `generations.py`) with stub `telos`, `backup.sh` and `podman`: success and ordering; refusals that change nothing

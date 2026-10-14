@@ -107,22 +107,25 @@ class Remote:
             "sudo", "-n", "python3", "-I", "-", *arguments,
         ]
 
-    def collect(self, *arguments, timeout=COLLECTOR_TIMEOUT):
-        script = COLLECTOR.read_bytes()
+    def run_program(self, script, arguments, timeout=COLLECTOR_TIMEOUT, what="node collector"):
+        """Send a FIXED program (bytes from this repository) on stdin, locally or over SSH, and parse its JSON."""
         try:
             completed = subprocess.run(
                 self.command(list(arguments)), input=script, capture_output=True, timeout=timeout, check=False)
         except FileNotFoundError:
             raise NotRun("ssh is not installed on the machine running the drill")
         except subprocess.TimeoutExpired:
-            raise DrillError(f"the node collector timed out after {timeout}s")
+            raise DrillError(f"the {what} timed out after {timeout}s")
         if completed.returncode != 0:
             detail = completed.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no diagnostic"]
-            raise DrillError(f"the node collector failed ({completed.returncode}): {detail[0][:200]}")
+            raise DrillError(f"the {what} failed ({completed.returncode}): {detail[0][:200]}")
         try:
             return json.loads(completed.stdout.decode("utf-8"))
         except ValueError:
-            raise DrillError("the node collector returned malformed output")
+            raise DrillError(f"the {what} returned malformed output")
+
+    def collect(self, *arguments, timeout=COLLECTOR_TIMEOUT):
+        return self.run_program(COLLECTOR.read_bytes(), arguments, timeout)
 
 
 def verify_node_identity(remote, target):

@@ -219,6 +219,8 @@ scripts/lib/drill_common.py
 scripts/lib/remote_program.py
 scripts/lib/clean_install_drill.py
 scripts/lib/predecessor.py
+scripts/lib/upgrade_drill.py
+scripts/lib/upgrade_node.py
 scripts/drills/recovery.sh
 scripts/drills/egress.sh
 scripts/drills/upgrade-rollback.sh
@@ -258,6 +260,7 @@ tests/operations/recovery_drill_test.py
 tests/operations/exposure_audit_test.py
 tests/operations/egress_drill_test.py
 tests/operations/capacity_drill_test.py
+tests/operations/upgrade_drill_test.py
 tests/operations/edge_policy_test.py
 tests/operations/postgres_restore_roles_test.sh
 tests/operations/backup_restore_test.sh
