@@ -1,0 +1,22 @@
+# Release overlay: the images a generation runs. A release generation carries a derived,
+# build-free model (scripts/lib/release_compose.py) and `telos` layers this file on top of it
+# whenever the generation has an images.env. Every image comes from images.env -- the exact,
+# digest-addressed images of the candidate -- and Compose refuses to start a service whose
+# variable is unset. Nothing here builds; `telos start --build` is refused in a generation.
+# The source tree's docker-compose.yml still builds from source for development, and the CLI
+# never layers this file onto it.
+services:
+  telos-core:
+    image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+  telos-migrate:
+    image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+  telos-sanitize-restore:
+    image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+  telos-audiobook-migrate:
+    image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+  telos-setup-proxy:
+    image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+  telos-client:
+    image: ${TELOS_CLIENT_IMAGE:?the candidate client image is required (images.env)}
+  telos-egress-proxy:
+    image: ${TELOS_EGRESS_PROXY_IMAGE:?the candidate egress proxy image is required (images.env)}

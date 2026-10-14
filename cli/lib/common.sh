@@ -65,6 +65,34 @@ compose_prepare() {
   COMPOSE_CMD=(podman compose)
 }
 
+# A release generation (an installed candidate) carries images.env beside docker-compose.release.yml.
+# It runs only the candidate's own digest-addressed images: the release overlay is layered on a
+# derived build-free model, images.env supplies the image variables, and nothing may build.
+is_release_generation() {
+  [ -f "$REPO_ROOT/images.env" ] && [ -f "$REPO_ROOT/docker-compose.release.yml" ]
+}
+
+# load_release_images — export the image variables from images.env. The file is parsed, never
+# sourced: only the known names, each a digest-addressed reference, and nothing else.
+load_release_images() {
+  local file="$REPO_ROOT/images.env" line name value seen=""
+  [ -f "$file" ] || die "release generation without images.env: $file"
+  while IFS= read -r line || [ -n "$line" ]; do
+    [ -n "$line" ] || continue
+    name="${line%%=*}"; value="${line#*=}"
+    case "$name" in
+      TELOS_CORE_IMAGE|TELOS_CLIENT_IMAGE|TELOS_EGRESS_PROXY_IMAGE) ;;
+      *) die "images.env: unexpected variable '$name'" ;;
+    esac
+    [[ "$value" =~ ^[a-z0-9./_-]+@sha256:[0-9a-f]{64}$ ]] || die "images.env: $name is not a digest-addressed image reference"
+    export "$name=$value"
+    seen="$seen $name"
+  done <"$file"
+  for name in TELOS_CORE_IMAGE TELOS_CLIENT_IMAGE TELOS_EGRESS_PROXY_IMAGE; do
+    case " $seen " in *" $name "*) ;; *) die "images.env does not set $name" ;; esac
+  done
+}
+
 # compose_with [OVERLAY...] -- ARG... — run Compose with the base model exactly
 # once plus the named repository-relative overlays, always against this node's
 # node.env and a stable project name so releases can be swapped under it.
@@ -76,6 +104,10 @@ compose_with() {
   compose_prepare
   require_node_env
   local files=(-f "$REPO_ROOT/docker-compose.yml")
+  if is_release_generation; then
+    load_release_images
+    files+=(-f "$REPO_ROOT/docker-compose.release.yml")
+  fi
   for overlay in ${overlays+"${overlays[@]}"}; do
     case "$overlay" in
       ""|/*|*..*) die "compose_with: overlay must be a repository-relative path (got '$overlay')" ;;

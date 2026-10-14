@@ -29,6 +29,9 @@ run() {
     shift
   done
 
+  if [ "$build" -eq 1 ] && is_release_generation; then
+    die "start: --build is refused in a release generation; it runs the candidate's own images"
+  fi
   require_node_env
   # A configure run may be rewriting node.env right now; never validate or start
   # against a half-finished change.

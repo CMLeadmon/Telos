@@ -205,9 +205,14 @@ run() {
   local runtime; runtime="$(detect_runtime)"
   local running; running="$($runtime ps --format '{{.Names}}' 2>/dev/null || true)"
 
-  # The gateway image validates credentials; build it before first use.
-  info "Building the gateway validation image..."
-  compose_with -- build telos-core >/dev/null || { warn "could not build the telos-core image"; return 1; }
+  # The gateway image validates credentials; build it before first use. A release generation
+  # runs the candidate's own image, which `install-candidate` has already loaded: nothing builds.
+  if is_release_generation; then
+    info "Using the candidate's gateway image for validation..."
+  else
+    info "Building the gateway validation image..."
+    compose_with -- build telos-core >/dev/null || { warn "could not build the telos-core image"; return 1; }
+  fi
 
   if [ "$setup" -eq 1 ]; then
     local name

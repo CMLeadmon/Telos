@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "minSchema": 0,
+  "rollbackCompatibleThrough": 0,
+  "note": "minSchema is the oldest database schema this release can migrate forward from. rollbackCompatibleThrough is the highest schema the PREVIOUS release still starts on: the gateway refuses a database carrying a migration it does not know, so a release that adds a migration sets it to the previous release's highest migration and an upgrade across that migration can only be undone from the encrypted snapshot. 0 means no earlier release exists, so a binary rollback is never offered."
+}

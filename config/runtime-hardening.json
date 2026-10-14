@@ -387,7 +387,20 @@
       "stopGraceSeconds": 30,
       "health": true,
       "capAdd": [],
-      "exceptions": []
+      "exceptions": [
+        {
+          "control": "noNewPrivileges",
+          "reason": "On Ubuntu 26.04 no-new-privileges leaves a container's threads under different AppArmor labels and AppArmor denies the signals the .NET runtime sends between its own threads, so Jellyfin dies with SIGSEGV (exit 139) under concurrent requests. Differential test: only this option toggled, 0 crashes in 144,000 requests without it, 49 restarts in 100 seconds with it. docs/implementation/design-alterations.md A16 and A33.",
+          "compensating": [
+            "non-root user",
+            "all capabilities dropped",
+            "read-only root filesystem",
+            "internal-only network",
+            "default AppArmor profile enforced"
+          ],
+          "expires": "2027-04-30"
+        }
+      ]
     },
     "grimmory-db": {
       "container": "telos-grimmory-db",

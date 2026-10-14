@@ -510,8 +510,15 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     <<: *hardened
-    security_opt:
-      - no-new-privileges:true
+    # no-new-privileges is deliberately NOT set (documented exception, see
+    # config/runtime-hardening.json and docs/implementation/design-alterations.md A16/A33):
+    # on Ubuntu 26.04 it leaves this image's threads under different AppArmor labels, and the
+    # .NET runtime's signals between its own threads are then denied -- Jellyfin dies with
+    # SIGSEGV (exit 139) within seconds of concurrent requests. Differential test on the
+    # reference VM: identical container and load, only this option toggled: 0 crashes in
+    # 144,000 requests without it, 49 restarts in 100 s with it.
+    # Compensating controls: non-root user, all capabilities dropped, read-only root,
+    # internal-only network, default AppArmor profile still enforced.
     user: "${APP_UID}:${APP_GID}"
     tmpfs:
       - /tmp:size=256m,mode=1777
