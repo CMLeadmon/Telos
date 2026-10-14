@@ -52,6 +52,11 @@ scripts/build-release.sh --rehearsal --source-commit <40-hex> --version 0.1.0-be
 With `--verify-reproducible` it builds twice in separate scratch directories, the second without cache, and refuses unless
 every file of the two candidates is byte-identical. The candidate lock digest exists only after step 5; nothing built earlier mentions it.
 
+Measured, not assumed: on the Ubuntu 26.04 reference VM the builder was run with `--verify-reproducible` on a rehearsal commit. The two builds in that
+run were byte-identical, and the archive digest and candidate lock digest were also **identical to a build of the same commit made hours earlier from an
+earlier state of the builder's own tree** (`docs/implementation/standalone-beta-progress.md`). That shows the output depends on the source commit and the
+locked inputs and on nothing else about the machine or the moment. It is rehearsal evidence; the same test runs again on the frozen candidate.
+
 ### Payload layout
 
 | Path | Kind | Notes |

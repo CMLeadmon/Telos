@@ -456,3 +456,10 @@ capacity target must name the exact candidate under test; it had `null`.) Limits
 | Not passed anywhere | `static-client-image` and `desktop-builds` (`not_run`: "a verified frozen candidate is required" — they verify a frozen artifact, which a source checkpoint cannot be), and, behind the first, `browser-node-fixtures` and `frontend-quality`. `check-frontend-quality.py quality` itself passes when run directly |
 
 Running the catalog on the VM exposed real defects, all fixed with tests: the Playwright gate's process-ownership check treated a transient `EACCES` during `exec`, and a zombie, as an uninspectable process (it passed on the fast host only by timing); the backup lock test left a `sleep 30` behind, which the supervisor rightly rejects; ESLint scanned the desktop build output in `src-tauri/target`. Environment, not product: the VM needed ripgrep, Playwright browsers, a PostgreSQL 16 tree and a higher descriptor limit (the supervising runner tracks every descendant of a process-heavy test run). Once, a Podman gate was failed for "leaving a descendant running" (rootless Podman's first-use helper); it passed on re-run, and I did **not** widen the grace period, because the catalog test deliberately allows only the Playwright gate one.
+
+## P5 (live) — reproducible build verified on the reference VM (rehearsal)
+
+`scripts/build-release.sh --rehearsal … --verify-reproducible` on the node VM (11 min): `reproducibilityVerified: true` — the two builds in the run (separate scratch
+directories, the second without cache) were byte-identical — and the result equals a build of the same commit made hours earlier, before several later commits to the
+builder's own tree: archive `265ea5ce3cd88984…` and candidate lock `2eb453dbd766…` are identical in both. Archived with the other VM evidence
+(`telos-review/beta-evidence/vm/*reproducible-build-verification`). Rehearsal only; the freeze repeats it.
