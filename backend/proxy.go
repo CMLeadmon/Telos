@@ -71,11 +71,18 @@ func startGate(n int, wait time.Duration) func(ctx context.Context) (func(), err
 	}
 	slots := make(chan struct{}, n)
 	return func(ctx context.Context) (func(), error) {
+		var once sync.Once
+		// A free slot is taken before the caller's cancellation is even looked at, so an idle gate never
+		// changes how a request that is already cancelled fails.
+		select {
+		case slots <- struct{}{}:
+			return func() { once.Do(func() { <-slots }) }, nil
+		default:
+		}
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
 		case slots <- struct{}{}:
-			var once sync.Once
 			return func() { once.Do(func() { <-slots }) }, nil
 		case <-timer.C:
 			return nil, errUpstreamBusy
@@ -160,8 +167,13 @@ func proxyUpstream(w http.ResponseWriter, r *http.Request, target *url.URL, poli
 	if policy.StartGate != nil {
 		release, gateErr := policy.StartGate(r.Context())
 		if gateErr != nil {
-			w.Header().Set("Retry-After", "2")
-			writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_busy", "The media server is busy; try again in a moment.")
+			if errors.Is(gateErr, errUpstreamBusy) {
+				w.Header().Set("Retry-After", "2")
+				writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_busy", "The media server is busy; try again in a moment.")
+				return
+			}
+			// The caller went away while waiting: fail exactly as a cancelled upstream request does.
+			writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "An upstream service is unavailable.")
 			return
 		}
 		releaseStart = release
