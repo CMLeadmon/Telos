@@ -9,4 +9,5 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 bash scripts/tests/backup_test.sh
 bash tests/operations/backup_restore_test.sh
+python3 -B tests/operations/backup_gate_test.py
 echo "backup fixtures: lock, failure matrix, signals, manifest and capsule verified"

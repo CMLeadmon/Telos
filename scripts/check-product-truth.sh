@@ -740,10 +740,10 @@ PHASE4_INPUTS = [
     "scripts/upgrade.sh", "scripts/rollback.sh", "scripts/verify-restore.sh", "scripts/verify-restored-node.sh",
     "scripts/verify-runtime-hardening.sh", "scripts/verify-monitoring.sh", "scripts/run-capacity-drill.sh",
     "scripts/audit-host-exposure.sh", "scripts/generate-sbom.sh", "scripts/scan-candidate.sh",
-    "scripts/drills/recovery.sh", "scripts/drills/egress.sh", "scripts/drills/upgrade-rollback.sh",
+    "scripts/drills/recovery.sh", "scripts/drills/egress.sh", "scripts/drills/backup.sh", "scripts/drills/upgrade-rollback.sh",
     "scripts/lib/generations.py", "scripts/lib/lifecycle.sh", "scripts/lib/maintenance.sh",
     "scripts/lib/backup_manifest.py", "scripts/lib/recovery_drill.py", "scripts/lib/capacity_drill.py",
-    "scripts/lib/exposure_audit.py", "scripts/lib/egress_drill.py", "scripts/lib/supply_chain.py",
+    "scripts/lib/exposure_audit.py", "scripts/lib/egress_drill.py", "scripts/lib/backup_gate.py", "scripts/lib/supply_chain.py",
 ]
 SUCCESS_ONLY_LINE = re.compile(r"^(set\s+-\S+(\s+\S+)?|exit\s+0|true|:|echo\b.*|printf\b.*|return\s+0)$")
 STATUS_PASSED = re.compile(r"""["']?status["']?\s*[:=]\s*["']passed["']""")
