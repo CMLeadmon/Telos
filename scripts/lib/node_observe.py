@@ -12,6 +12,12 @@ Modes (argv[1]):
   identity                 machine/boot identity only
   clean                    what already exists on the host (for a clean-install check)
   install NODE_PATH        the full install picture described in the clean-install runbook
+  restore NODE_PATH [KIND=SHA256 ...]
+                           the install picture plus what a separate-host restore recorded:
+                           the restore journal and result, the sanitizer's audit row, and the
+                           credentials still live in the database (all counts, no secrets).
+                           Each KIND=SHA256 (session, invite or refresh) asks whether that
+                           credential's hash is in the restored database and was revoked
   watch-setup NODE_PATH SECONDS INTERVAL
                            poll for published setup ports and persist the result under
                            NODE_PATH/state/ (root-only), printing it as JSON
@@ -305,6 +311,89 @@ def mode_install(node_path):
     }
 
 
+SANITIZE_SQL = (
+    "SELECT (SELECT count(*) FROM sessions WHERE revoked_at IS NULL AND expires_at > NOW()),"
+    " (SELECT count(*) FROM devices WHERE revoked_at IS NULL),"
+    " (SELECT count(*) FROM device_refresh_tokens WHERE consumed_at IS NULL AND expires_at > NOW()),"
+    " (SELECT count(*) FROM invites WHERE used_at IS NULL AND expires_at > NOW()),"
+    " (SELECT count(*) FROM restore_events),"
+    " COALESCE((SELECT source_snapshot FROM restore_events ORDER BY restored_at DESC LIMIT 1), ''),"
+    " COALESCE((SELECT to_char(restored_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM restore_events ORDER BY restored_at DESC LIMIT 1), '')"
+)
+
+
+def sanitize_facts():
+    """Counts of credentials still live after a restore, from a fixed read-only query."""
+    status, out = run(["podman", "exec", "telos-postgres", "sh", "-c",
+                       'exec psql --no-psqlrc -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F "|" -c "$0"', SANITIZE_SQL])
+    fields = out.strip().split("|") if status == 0 else []
+    if len(fields) != 7:
+        return {"available": False}
+    live_sessions, live_devices, live_refresh, live_invites, events, snapshot, restored_at = fields
+    return {"available": True, "liveSessions": int(live_sessions), "liveDevices": int(live_devices),
+            "liveRefreshTokens": int(live_refresh), "usableInvites": int(live_invites),
+            "restoreEvents": int(events), "latestSnapshot": snapshot, "latestRestoredAt": restored_at}
+
+
+def read_json_lines(path, limit=200):
+    rows = []
+    for line in read_text(path, 262144).splitlines()[-limit:]:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    return rows
+
+
+def address_rows():
+    status, out = run(["ip", "-j", "-4", "addr", "show"])
+    try:
+        interfaces = json.loads(out) if status == 0 else []
+    except ValueError:
+        return []
+    return sorted({a["local"] for i in interfaces for a in i.get("addr_info", []) if a.get("scope") == "global" and a.get("local")})
+
+
+STALE_QUERIES = {
+    "session": "SELECT count(*), count(*) FILTER (WHERE revoked_at IS NOT NULL) FROM sessions WHERE token_hash = '%s'",
+    "invite": "SELECT count(*), count(*) FILTER (WHERE used_at IS NOT NULL) FROM invites WHERE token_hash = '%s'",
+    "refresh": "SELECT count(*), count(*) FILTER (WHERE consumed_at IS NOT NULL) FROM device_refresh_tokens WHERE token_hash = '%s'",
+}
+STALE_ARGUMENT = re.compile(r"(session|invite|refresh)=([0-9a-f]{64})")
+
+
+def stale_facts(arguments):
+    """For each credential hash the drill holds: is it in the restored database, and is it dead?"""
+    rows = {}
+    for argument in arguments:
+        match = STALE_ARGUMENT.fullmatch(argument)
+        if not match:
+            raise ValueError("stale credentials are KIND=SHA256 with KIND session, invite or refresh")
+        kind, digest = match.groups()
+        status, out = run(["podman", "exec", "telos-postgres", "sh", "-c",
+                           'exec psql --no-psqlrc -U "$POSTGRES_USER" -d "$POSTGRES_DB" -At -F "|" -c "$0"', STALE_QUERIES[kind] % digest])
+        fields = out.strip().split("|") if status == 0 else []
+        rows[argument] = ({"known": int(fields[0]) > 0, "dead": int(fields[0]) > 0 and int(fields[0]) == int(fields[1])}
+                          if len(fields) == 2 else {"known": None, "dead": None})
+    return rows
+
+
+def mode_restore(node_path, stale_arguments=()):
+    document = mode_install(node_path)
+    document["mode"] = "restore"
+    state = os.path.join(node_path, "state")
+    document["restore"] = {
+        "journal": read_json_lines(os.path.join(state, "restore-journal.jsonl")),
+        "result": (lambda text: json.loads(text) if text.strip().startswith("{") else None)(read_text(os.path.join(state, "restore-result.json"))),
+        "sanitization": sanitize_facts(),
+        "addresses": address_rows(),
+        "staleCredentials": stale_facts(stale_arguments),
+    }
+    return document
+
+
 def mode_watch_setup(node_path, seconds, interval):
     deadline = time.monotonic() + seconds
     samples, seen = [], set()
@@ -338,7 +427,7 @@ def mode_watch_setup(node_path, seconds, interval):
 
 def main(argv):
     if len(argv) < 2:
-        print("usage: node_observe.py identity|clean|install NODE|watch-setup NODE SECONDS INTERVAL", file=sys.stderr)
+        print("usage: node_observe.py identity|clean|install NODE|restore NODE|watch-setup NODE SECONDS INTERVAL", file=sys.stderr)
         return 2
     mode = argv[1]
     try:
@@ -348,6 +437,8 @@ def main(argv):
             document = mode_clean()
         elif mode == "install" and len(argv) == 3 and os.path.isabs(argv[2]):
             document = mode_install(os.path.normpath(argv[2]))
+        elif mode == "restore" and len(argv) >= 3 and os.path.isabs(argv[2]):
+            document = mode_restore(os.path.normpath(argv[2]), argv[3:])
         elif mode == "watch-setup" and len(argv) == 5 and os.path.isabs(argv[2]):
             seconds, interval = int(argv[3]), float(argv[4])
             if not (1 <= seconds <= 3600 and 0.2 <= interval <= 60):

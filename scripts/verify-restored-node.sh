@@ -1,22 +1,21 @@
 #!/usr/bin/env bash
+# verify-restored-node.sh -- verify a node restored by scripts/restore.sh, from another machine.
+#
+#   scripts/verify-restored-node.sh --target-file PATH
+#       (--rehearsal --source-commit SHA | --candidate-lock PATH) --result-out PATH
+#
+# The same live drill as the separate-host-restore gate (scripts/restore-drill.sh --live), recorded
+# under the gate id `restored-node` unless TELOS_GATE_ID says otherwise: host/candidate/snapshot
+# identities, journal and sanitizer audit, password re-authentication, old cookie/device/invite
+# rejection, DNS and TLS, the member journey (Chat, Stream, Library, Files, commentary, range
+# media), and RPO/RTO. It accepts no fixture statuses. Without a target it reports not_run.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-original_argv=("$0" "$@")
-candidate_lock=""
-evidence_out=""
-result_out=""
-usage() { echo "usage: $0 [--candidate-lock PATH] [--evidence-out PATH] [--result-out PATH]" >&2; exit 2; }
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --candidate-lock) [[ $# -ge 2 && -z "$candidate_lock" && -n "$2" && "$2" != --* ]] || usage; candidate_lock="$2"; shift 2 ;;
-    --evidence-out) [[ $# -ge 2 && -z "$evidence_out" && -n "$2" && "$2" != --* ]] || usage; evidence_out="$2"; shift 2 ;;
-    --result-out) [[ $# -ge 2 && -z "$result_out" && -n "$2" && "$2" != --* ]] || usage; result_out="$2"; shift 2 ;;
-    *) usage ;;
-  esac
+for argument in "$@"; do
+  if [[ "$argument" == --target-file ]]; then
+    TELOS_GATE_ID="${TELOS_GATE_ID:-restored-node}" exec bash "$script_dir/restore-drill.sh" --live "$@"
+  fi
 done
-arguments=(--gate-id "${TELOS_GATE_ID:-restored-node}" --reason "separate-host restored-node verification is implemented in Phase 4")
-[[ -n "$candidate_lock" ]] && arguments+=(--candidate-lock "$candidate_lock")
-[[ -n "$evidence_out" ]] && arguments+=(--evidence-out "$evidence_out")
-[[ -n "$result_out" ]] && arguments+=(--result-out "$result_out")
-exec python3 "$script_dir/not-run.py" "${arguments[@]}" -- "${original_argv[@]}"
+echo "verify-restored-node: not_run: --target-file (a drill-target descriptor for the restored host) is required; a restored node cannot be verified without observing it" >&2
+exit 3

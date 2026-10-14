@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# restore-drill.sh — rehearse a restore and emit a drill record with measured
-# RPO/RTO. Fails if RPO exceeds 24h (86400s) or RTO exceeds 4h (14400s).
+# restore-drill.sh — recovery drill. Fails if RPO exceeds 24h (86400s) or RTO exceeds 4h (14400s).
 #
 # Usage:
 #   scripts/restore-drill.sh --fixture --backup-epoch <s> --restore-start <s> \
 #       --restore-end <s> [--out <path>]
-#       Compute a drill record from supplied timestamps (used in CI/tests).
-#   scripts/restore-drill.sh --out <path>
-#       Run the real drill on the operator's reference recovery environment.
+#       Check the timestamp policy from supplied timestamps (CI/tests only). A fixture record
+#       is never gate evidence: it has no gate id, host identities or journey.
+#   scripts/restore-drill.sh --live --target-file PATH (--rehearsal --source-commit SHA |
+#       --candidate-lock PATH) --result-out PATH
+#       Judge a node that scripts/restore.sh restored, from a third machine
+#       (scripts/lib/recovery_drill.py). RPO = incidentDeclaredAt - consistencyPointAt;
+#       RTO = member journey passed - incidentDeclaredAt.
 #
 # For clean-node disaster recovery the RTO clock starts when host-loss recovery
 # is declared and ends only after automated firewall + A/AAAA cutover and a
@@ -17,6 +20,12 @@ set -euo pipefail
 
 RPO_MAX=86400
 RTO_MAX=14400
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ "${1:-}" = "--live" ]; then
+	shift
+	exec python3 -I "$script_dir/lib/recovery_drill.py" "$@"
+fi
 
 FIXTURE=0
 backup_epoch=""
@@ -37,8 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 if [ "$FIXTURE" -ne 1 ]; then
-	echo "restore-drill: live drill runs on the reference recovery node with the" >&2
-	echo "  documented DNS/provider credentials; see documentation/operations/restore-drill.md" >&2
+	echo "restore-drill: pass --live with a recovery target (see documentation/operations/restore-drill.md)" >&2
+	echo "  or --fixture with timestamps; a bare run proves nothing" >&2
 	exit 3
 fi
 

@@ -49,7 +49,7 @@ PRODUCTION_SECRETS = (
 )
 LONG_RUNNING = (
     "telos-traefik", "telos-core", "telos-client", "telos-postgres", "telos-redis",
-    "telos-egress-proxy", "telos-clamav", "telos-jellyfin", "telos-grimmory-db", "telos-grimmory",
+    "telos-egress-proxy", "telos-clamav", "telos-jellyfin", "telos-grimmory-db", "telos-grimmory", "telos-prometheus",
 )
 ONE_SHOT = "telos-migrate"
 PUBLIC_PORTS = {80, 443}

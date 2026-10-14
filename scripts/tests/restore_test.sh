@@ -287,7 +287,17 @@ import json, sys
 r = json.load(open(sys.argv[1]))
 assert r["status"] == "restored" and r["mode"] == "separate-host" and r["snapshot"] == sys.argv[2]
 assert r["recordKind"] == "rehearsal" and r["sourceHostIdSha256"] != r["targetHostIdSha256"]
+assert r["snapshotFinishedAt"] and r["consistencyPointAt"] <= r["snapshotFinishedAt"]
+assert r["incidentDeclaredAt"] is None   # nobody declared an incident, so the recovery clock never started
 PY
+# An operator-declared incident time is recorded as given, and a malformed one is refused before anything changes.
+make_host declared >/dev/null
+make_host badtime >/dev/null
+run_restore declared "${GOOD[@]}" --incident-declared-at 2026-10-14T04:30:00Z || fail "a restore with a declared incident time failed: $(tail -3 "$work/out-declared")"
+python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1]))["incidentDeclaredAt"] == "2026-10-14T04:30:00Z"' "$work/host-declared/result.json" \
+  || fail "the declared incident time was not recorded"
+run_restore badtime "${GOOD[@]}" --incident-declared-at yesterday && fail "a malformed incident time was accepted"
+[[ ! -e "$work/host-badtime/result.json" ]] || fail "a result was written for a refused restore"
 [[ -z "$(find "$work/host-ok/tmp" -mindepth 1 -maxdepth 1 -name 'telos-restore.*')" ]] || fail "ok: the staging directory survived"
 python3 - "$work/host-ok/node/state/restore-journal.jsonl" <<'PY' || fail "the journal is incomplete"
 import json, sys

@@ -2,7 +2,11 @@
 # restore.sh -- restore a Telos node from an encrypted off-node snapshot onto a DIFFERENT, empty host.
 #
 #   restore.sh --mode separate-host --snapshot ID (--candidate-lock PATH | --rehearsal)
-#              --result-out PATH --confirm RESTORE-TO-EMPTY-REFERENCE-HOST
+#              --result-out PATH [--incident-declared-at 2026-10-14T04:30:00Z]
+#              --confirm RESTORE-TO-EMPTY-REFERENCE-HOST
+#
+# --incident-declared-at is when host loss was declared: the recovery drill measures RTO from it.
+# Without it the recovery clock never started and the drill reports the objectives as not_run.
 #
 # Preconditions: the release is installed on this host (install.sh), Podman works, and
 # RESTIC_REPOSITORY / RESTIC_PASSWORD_FILE name the off-node repository (see backup.sh).
@@ -44,7 +48,7 @@ machine_id_file="${TELOS_MACHINE_ID_FILE:-/etc/machine-id}"
 journal="$state_dir/restore-journal.jsonl"
 export TELOS_MAINTENANCE_DIR="$state_dir"
 
-mode="" snapshot="" candidate_lock="" result_out="" confirm="" rehearsal=0
+mode="" snapshot="" candidate_lock="" result_out="" confirm="" incident_declared_at="" rehearsal=0
 stage=""
 step="starting"
 stack_touched=0
@@ -71,7 +75,7 @@ journal_event() {   # step state -- one JSON line per transition, written before
 }
 
 usage() {
-  echo "usage: $0 --mode separate-host --snapshot ID (--candidate-lock PATH | --rehearsal) --result-out PATH --confirm $CONFIRMATION" >&2
+  echo "usage: $0 --mode separate-host --snapshot ID (--candidate-lock PATH | --rehearsal) --result-out PATH [--incident-declared-at TIME] --confirm $CONFIRMATION" >&2
   exit 2
 }
 while [ $# -gt 0 ]; do
@@ -82,6 +86,7 @@ while [ $# -gt 0 ]; do
     --rehearsal)      rehearsal=1; shift ;;
     --result-out)     [ $# -ge 2 ] && [ -z "$result_out" ] || usage; result_out="$2"; shift 2 ;;
     --confirm)        [ $# -ge 2 ] && [ -z "$confirm" ] || usage; confirm="$2"; shift 2 ;;
+    --incident-declared-at) [ $# -ge 2 ] && [ -z "$incident_declared_at" ] || usage; incident_declared_at="$2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -90,6 +95,7 @@ done
 [ -n "$result_out" ] || usage
 [ -n "$candidate_lock" ] || [ "$rehearsal" -eq 1 ] || usage
 [ -z "$candidate_lock" ] || [ "$rehearsal" -eq 0 ] || usage
+[ -z "$incident_declared_at" ] || [[ "$incident_declared_at" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || usage
 if [ "$confirm" != "$CONFIRMATION" ]; then
   echo "restore replaces databases, configuration, volumes and shared storage on THIS host." >&2
   echo "It is only for an empty reference host. Re-run with --confirm $CONFIRMATION to proceed." >&2
@@ -318,9 +324,9 @@ run_restore() {
 
   step="result"
   local manifest_digest; manifest_digest="$(sha256sum "$data/manifest.json" | cut -d' ' -f1)"
-  python3 -I - "$result_out" "$snapshot" "$manifest_digest" "$data/manifest.json" "$target_id" "$rehearsal" <<'PY'
+  python3 -I - "$result_out" "$snapshot" "$manifest_digest" "$data/manifest.json" "$target_id" "$rehearsal" "$incident_declared_at" <<'PY'
 import json, os, sys, datetime
-out, snapshot, digest, manifest_path, target, rehearsal = sys.argv[1:7]
+out, snapshot, digest, manifest_path, target, rehearsal, incident = sys.argv[1:8]
 manifest = json.load(open(manifest_path))
 record = {
     "status": "restored",
@@ -332,6 +338,8 @@ record = {
     "targetHostIdSha256": target,
     "candidateLockDigest": manifest["source"]["candidateLockDigest"],
     "consistencyPointAt": manifest["consistencyPointAt"],
+    "snapshotFinishedAt": manifest["finishedAt"],
+    "incidentDeclaredAt": incident or None,
     "restoredAt": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
 }
 tmp = out + ".tmp"
