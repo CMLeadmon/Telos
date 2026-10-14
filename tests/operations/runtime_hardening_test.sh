@@ -115,7 +115,7 @@ elif mutation == "core-published":
     end = text.index("\n  postgres:\n") + 1
     block = text[start:end]
 elif mutation == "core-loses-db":
-    text = text.replace("      - telos-backend\n      - telos-db\n    environment:\n      # Least-privilege", "      - telos-backend\n    environment:\n      # Least-privilege", 1)
+    text = text.replace("      - telos-db\n      - telos-observability\n    environment:", "      - telos-observability\n    environment:", 1)
     start = text.index("  telos-client:\n")
     end = text.index("\n  postgres:\n") + 1
     block = text[start:end]

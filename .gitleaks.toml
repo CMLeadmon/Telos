@@ -1,0 +1,22 @@
+# Secret-scan configuration for the Telos repository (gitleaks 8.30.1, pinned in ci/tools.lock).
+#
+# The default ruleset applies in full. The allowlist below names the only values the scan has ever flagged in
+# this tree: canary strings that tests plant on purpose to prove a secret never reaches a log, an output file or
+# a command line, one fake locator token in a unit test, and a documentation sentence. Each entry is an exact
+# value or an unmistakable canary -- never a path, so a real secret in a test file is still found. Add to it only
+# with a reviewed reason.
+title = "Telos"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "test canaries and fixtures that exist to be detected by secret-hygiene tests"
+condition = "OR"
+regexes = [
+  '''(?i)canary''',
+  '''^tok-secret-1234$''',
+  '''^eyJ5IjoiaGxzIn0\.c2ln$''',
+  '''^abcdef0123456789$''',
+  '''^forbidden/incompatible$''',
+]

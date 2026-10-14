@@ -218,8 +218,8 @@ else:
         problems.append("telos-client must not receive secrets or configs")
 
 core = services.get("telos-core") or {}
-if names(core.get("networks")) != {"telos-ingress", "telos-backend", "telos-db"}:
-    problems.append("telos-core must join exactly telos-ingress, telos-backend and telos-db")
+if names(core.get("networks")) != {"telos-ingress", "telos-backend", "telos-db", "telos-observability"}:
+    problems.append("telos-core must join exactly telos-ingress, telos-backend, telos-db and telos-observability")
 if core.get("ports"):
     problems.append("telos-core must not publish host ports")
 build = core.get("build")

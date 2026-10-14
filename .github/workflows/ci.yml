@@ -235,3 +235,70 @@ jobs:
         run: bash scripts/check-release-truth.sh
       - name: Verify clean-checkout inventory
         run: bash scripts/verify-clean-checkout.sh --inventory-only
+
+  # Phase 4 operational-safety fixtures: backup and restore against fake runtimes (and a restore replayed on two
+  # real PostgreSQL clusters), the upgrade/rollback state machine, hardening and monitoring policy, capacity,
+  # exposure and egress judgement, and the supply-chain policy. Hermetic: nothing here touches a real node.
+  operations-fixtures:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Install fixture prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep python3-yaml postgresql-16 podman
+      - name: Verify the image lock and runtime hardening policy
+        run: |
+          bash tests/operations/image_lock_test.sh
+          bash tests/operations/runtime_hardening_test.sh
+      - name: Verify monitoring
+        run: bash tests/operations/monitoring_test.sh
+      - name: Verify backup
+        run: bash tests/operations/backup_fixtures_test.sh
+      - name: Verify restore
+        run: bash tests/operations/restore_fixtures_test.sh
+        env:
+          TELOS_PG_BIN: /usr/lib/postgresql/16/bin
+      - name: Verify upgrade and rollback
+        run: bash tests/operations/upgrade_rollback_fixtures_test.sh
+      - name: Verify capacity, exposure and egress
+        run: bash tests/operations/capacity_exposure_test.sh
+      - name: Verify the supply-chain policy
+        run: bash tests/operations/supply_chain_test.sh
+
+  # Source-level supply chain: the locked scanners are fetched and digest-verified, secrets are searched for in the
+  # whole history, Go and production npm dependencies are checked for known vulnerabilities. Artifact SBOMs and the
+  # candidate scan are release jobs: pull-request CI has no frozen artifacts.
+  supply-chain-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Validate the tool lock, license policy and risk acceptances
+        run: python3 scripts/lib/supply_chain.py policy
+      - name: Verify release pins
+        run: bash scripts/verify-release-pins.sh
+      - name: Scan the history for secrets with the locked gitleaks
+        run: |
+          GITLEAKS="$(python3 scripts/bootstrap-ci-tools.py --tool gitleaks --cache-dir "$RUNNER_TEMP/ci-tools")"
+          "$GITLEAKS" git . --no-banner --exit-code 1
+      - name: Check Go dependencies for known vulnerabilities
+        run: |
+          cd backend
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - name: Check production npm dependencies for known vulnerabilities
+        run: |
+          npm --prefix frontend ci
+          npm --prefix frontend audit --omit=dev --audit-level=moderate

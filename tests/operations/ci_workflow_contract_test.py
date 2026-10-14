@@ -119,6 +119,32 @@ EXPECTED_JOBS = {
              "env": {"GOOS": "${{ matrix.goos }}", "GOARCH": "${{ matrix.goarch }}"}},
         ],
     },
+    "operations-fixtures": {
+        "min_timeout_minutes": 30,
+        "steps": [
+            CHECKOUT, NODE,
+            run("sudo apt-get update", "sudo apt-get install -y ripgrep python3-yaml postgresql-16 podman"),
+            run("bash tests/operations/image_lock_test.sh", "bash tests/operations/runtime_hardening_test.sh"),
+            run("bash tests/operations/monitoring_test.sh"),
+            run("bash tests/operations/backup_fixtures_test.sh"),
+            {"run": ["bash tests/operations/restore_fixtures_test.sh"], "env": {"TELOS_PG_BIN": "/usr/lib/postgresql/16/bin"}},
+            run("bash tests/operations/upgrade_rollback_fixtures_test.sh"),
+            run("bash tests/operations/capacity_exposure_test.sh"),
+            run("bash tests/operations/supply_chain_test.sh"),
+        ],
+    },
+    "supply-chain-source": {
+        "min_timeout_minutes": 20,
+        "steps": [
+            {"uses": "actions/checkout@v4", "with": {"fetch-depth": 0}}, GO, NODE,
+            run("python3 scripts/lib/supply_chain.py policy"),
+            run("bash scripts/verify-release-pins.sh"),
+            run('GITLEAKS="$(python3 scripts/bootstrap-ci-tools.py --tool gitleaks --cache-dir "$RUNNER_TEMP/ci-tools")"',
+                '"$GITLEAKS" git . --no-banner --exit-code 1'),
+            run("cd backend", "go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./..."),
+            run("npm --prefix frontend ci", "npm --prefix frontend audit --omit=dev --audit-level=moderate"),
+        ],
+    },
     "truth-and-gates": {
         "steps": [
             CHECKOUT, NODE,
