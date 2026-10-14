@@ -246,6 +246,29 @@ def read_oci_archive(path):
             "refName": (descriptor.get("annotations") or {}).get("org.opencontainers.image.ref.name")}
 
 
+def normalize_archive(path, epoch):
+    """Rewrite an OCI archive with sorted members, fixed times/modes and no owner. The blobs, and so every digest, are untouched.
+
+    podman and skopeo stamp the tar headers with the current time, which would make the archive file's SHA-256 -- and with it
+    the artifact index and the candidate lock -- differ between two builds of identical content.
+    """
+    path = Path(path)
+    temporary = path.with_name(path.name + ".normalizing")
+    with tarfile.open(path) as source, tarfile.open(temporary, "w", format=tarfile.GNU_FORMAT) as target:
+        for member in sorted(source.getmembers(), key=lambda m: m.name):
+            if not (member.isfile() or member.isdir()):
+                fail(f"{path.name}: {member.name} is neither a file nor a directory")
+            info = tarfile.TarInfo(member.name)
+            info.mtime, info.uid, info.gid, info.uname, info.gname = epoch, 0, 0, "", ""
+            if member.isdir():
+                info.type, info.mode = tarfile.DIRTYPE, 0o755
+                target.addfile(info)
+            else:
+                info.size, info.mode = member.size, 0o644
+                target.addfile(info, source.extractfile(member))
+    os.replace(temporary, path)
+
+
 def build_images(tools, source, tree, lock_dir, no_cache, existing=None):
     """podman build + save for the images Telos owns. Returns {service: archive info}."""
     results = {}
@@ -264,6 +287,7 @@ def build_images(tools, source, tree, lock_dir, no_cache, existing=None):
         run(argv, cwd=tree, env=env, what=f"podman build {service}")
         archive = lock_dir / f"{service}.oci.tar"
         run([tools.podman, "save", "--format", "oci-archive", "-o", archive, tag], env=env, what=f"podman save {service}")
+        normalize_archive(archive, source.epoch)
         info = read_oci_archive(archive)
         labels = info["labels"]
         if labels.get("org.opencontainers.image.version") != source.version or labels.get("org.opencontainers.image.revision") != source.commit:
@@ -298,6 +322,7 @@ def archive_third_party(tools, source, wanted, lock_dir):
         reference = source_ref
         run([tools.skopeo, "copy", "--preserve-digests", "--override-os", "linux", "--override-arch", "amd64",
              f"docker://{repository}@{platform}", f"oci-archive:{archive}:{reference}"], env=env, what=f"skopeo copy {name}")
+        normalize_archive(archive, source.epoch)
         info = read_oci_archive(archive)
         if info["manifestDigest"] != platform:
             fail(f"{name}: the archived manifest {info['manifestDigest'][:19]} is not the locked platform digest {platform[:19]}")

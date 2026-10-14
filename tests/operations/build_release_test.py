@@ -50,7 +50,7 @@ def archive(path, ref, layer_seed, labels, epoch, arch="amd64", os_name="linux")
     with tarfile.open(path, "w") as tar:
         for name, blob in (("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'), ("index.json", index), ("blobs/sha256/" + sha(manifest), manifest),
                            ("blobs/sha256/" + sha(config), config), ("blobs/sha256/" + sha(layer_bytes), layer_bytes)):
-            info = tarfile.TarInfo(name); info.size = len(blob); info.mtime = 0; tar.addfile(info, io.BytesIO(blob))
+            info = tarfile.TarInfo(name); info.size = len(blob); info.mtime = int(os.environ.get("TELOS_BUILD_FAKE_MTIME", "0")); tar.addfile(info, io.BytesIO(blob))
     return "sha256:" + sha(manifest)
 
 def third_party_digest(repository):
@@ -663,6 +663,51 @@ class ManifestTypeTests(Fixture):
         for media_type in ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.docker.distribution.manifest.v1+json"):
             with self.subTest(media_type), self.assertRaisesRegex(br.BuildError, "not a single image manifest"):
                 br.read_oci_archive(self.archive_with(media_type))
+
+
+class NormalizationTests(Fixture):
+    def archive_at(self, name, mtime):
+        path = self.dir / name
+        self.fakeoci.archive(str(path), "x", "seed", {"a": "b"}, 0)
+        import tarfile as _tar
+        import io as _io
+        with _tar.open(path) as handle:
+            members = [(m, handle.extractfile(m).read()) for m in handle.getmembers() if m.isfile()]
+        with _tar.open(path, "w") as handle:
+            for member, data in reversed(members):   # a different order and different times, as another tool run would write
+                info = _tar.TarInfo(member.name)
+                info.size, info.mtime, info.uid, info.mode = len(data), mtime, 1000, 0o600
+                handle.addfile(info, _io.BytesIO(data))
+        return path
+
+    def test_two_archives_of_the_same_content_become_byte_identical(self):
+        a, b = self.archive_at("a.tar", 1_700_000_000), self.archive_at("b.tar", 1_800_000_000)
+        self.assertNotEqual(a.read_bytes(), b.read_bytes())
+        before = br.read_oci_archive(a)["manifestDigest"]
+        br.normalize_archive(a, 1_787_000_000)
+        br.normalize_archive(b, 1_787_000_000)
+        self.assertEqual(a.read_bytes(), b.read_bytes())
+        self.assertEqual(br.read_oci_archive(a)["manifestDigest"], before, "normalizing must not touch a single blob")
+
+    def test_a_link_or_special_member_is_refused(self):
+        import tarfile as _tar
+        path = self.dir / "linky.tar"
+        with _tar.open(path, "w") as handle:
+            info = _tar.TarInfo("evil")
+            info.type, info.linkname = _tar.SYMTYPE, "/etc/passwd"
+            handle.addfile(info)
+        with self.assertRaisesRegex(br.BuildError, "neither a file nor a directory"):
+            br.normalize_archive(path, 0)
+
+    def test_the_built_archives_of_two_environments_are_the_same_bytes(self):
+        # the stand-in tools stamp a different time into their archives on each run; only normalization makes these builds equal
+        os.environ["TELOS_BUILD_FAKE_MTIME"] = "1700000000"
+        self.addCleanup(os.environ.pop, "TELOS_BUILD_FAKE_MTIME", None)
+        first = self.build(out_dir=str(self.dir / "one"))
+        os.environ["TELOS_BUILD_FAKE_MTIME"] = "1800000000"
+        second = self.build(out_dir=str(self.dir / "two"))
+        self.assertEqual(first["candidateLockDigest"], second["candidateLockDigest"])
+        self.assertEqual(br.compare_candidates(self.dir / "one" / "candidate", self.dir / "two" / "candidate"), [])
 
 if __name__ == "__main__":
     unittest.main()
