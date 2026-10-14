@@ -7,14 +7,14 @@ useful automation but never replaces real Safari or real-device evidence.
 > **Status.** The tooling is implemented and tested with ephemeral keys: the guided recorder, the Playwright report
 > tool, the signed-record aggregation behind the `browser-matrix` and `desktop-linux` gates, and candidate-mode
 > Playwright projects. **No record exists yet.** No tester is enrolled in `release/evidence-signers`, no physical
-> iOS/Android device or macOS Safari has been used, and the automated journeys cover 8 of the 12 listed (below). Until
+> iOS/Android device or macOS Safari has been used, and the automated journeys cover 9 of the 13 listed (below). Until
 > real records exist both gates report `not_run`, and a rehearsal never satisfies them.
 
 ## The seven browser entries
 
 | Platform id | How | Question list |
 |---|---|---|
-| `chrome`, `edge`, `firefox`, `webkit` | automated: Playwright against the deployed candidate URL | `automatedAssertions` (12 journeys) |
+| `chrome`, `edge`, `firefox`, `webkit` | automated: Playwright against the deployed candidate URL | `automatedAssertions` (13 journeys) |
 | `safari-desktop`, `safari-ios`, `chrome-android` | guided: a person on the real browser/device | `assertions` (15 questions) |
 
 `release/guided-assertions.json` is the one list of questions. A record answers every question of its platform's list,
@@ -42,9 +42,9 @@ python3 scripts/lib/browser_report.py --platform chrome --playwright-json chrome
 ```
 
 A question with no test is `not_run`; a failing, timed-out, interrupted or flaky test is `fail`; the raw report is never
-attached (it can hold URLs and headers), only a derived per-test summary. Today eight questions have tests
+attached (it can hold URLs and headers), only a derived per-test summary. Today nine questions have tests
 (`trusted-https`, `member-auth`, `chat`, `files`, `commentary`, `stream-library-states`, `settings-admin`,
-`logout-login`); `owner-and-invite`, `upstream-degradation`, `offline-reconnect` and `responsive-layout` have no
+`logout-login`, and the axe-core audit `accessibility-axe`); `owner-and-invite`, `upstream-degradation`, `offline-reconnect` and `responsive-layout` have no
 candidate-bound test yet, so the automated records answer them `not_run` and the gate stays `not_run` — by design, not by omission.
 
 ## Guided platforms
