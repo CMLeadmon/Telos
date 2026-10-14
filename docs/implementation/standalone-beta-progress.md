@@ -444,3 +444,15 @@ Run 4 of the 30-minute capacity drill (`telos-review/beta-evidence/vm/*capacity-
 restart / OOM / health loss, CPU and memory inside bounds, storage kept, 25 live member sessions throughout, journey passes afterwards, fixture removed — and, unlike
 runs 1–3, an observed-runtime subject**: the node now has a generation receipt and every service runs a registry-pinned image. (The first attempt refused to start: the
 capacity target must name the exact candidate under test; it had `null`.) Limits: a rehearsal generation, one load host that is also a VM on the same machine as the node.
+
+## P5 (final) — the whole local gate catalog, run on the host and on the Podman reference VM at commit `c14e2e0`
+
+`scripts/run-gates.py --scope local` over `ci/phase-gates.json` with a source-only checkpoint (artifact `telos-review/beta-evidence/runner/local-2-{host,node-vm}`):
+
+| Run | Result |
+|---|---|
+| Host (no Podman) | 23 passed; the 22 Podman-dependent gates and everything behind them `not_run` (`backend-unit`: "tool version identity is unavailable for: podman") |
+| Node VM (Ubuntu 26.04, rootless Podman 5.7, Node 24, Rust) | **45 of 49 passed**, including `backend-unit/race/vet/integration/headless-build`, `api-contract-drift`, both operator CLIs, `compose-validation`, `standalone-compose`, the desktop gates (device registration, native auth, credential adapter, trusted TLS, token-safe media), `image-lock`, runtime-hardening/monitoring source checks, all four Phase 4 fixture suites, `supply-chain-policy` and `release-tooling` |
+| Not passed anywhere | `static-client-image` and `desktop-builds` (`not_run`: "a verified frozen candidate is required" — they verify a frozen artifact, which a source checkpoint cannot be), and, behind the first, `browser-node-fixtures` and `frontend-quality`. `check-frontend-quality.py quality` itself passes when run directly |
+
+Running the catalog on the VM exposed real defects, all fixed with tests: the Playwright gate's process-ownership check treated a transient `EACCES` during `exec`, and a zombie, as an uninspectable process (it passed on the fast host only by timing); the backup lock test left a `sleep 30` behind, which the supervisor rightly rejects; ESLint scanned the desktop build output in `src-tauri/target`. Environment, not product: the VM needed ripgrep, Playwright browsers, a PostgreSQL 16 tree and a higher descriptor limit (the supervising runner tracks every descendant of a process-heavy test run). Once, a Podman gate was failed for "leaving a descendant running" (rootless Podman's first-use helper); it passed on re-run, and I did **not** widen the grace period, because the catalog test deliberately allows only the Playwright gate one.
