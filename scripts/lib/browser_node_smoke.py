@@ -61,13 +61,14 @@ def fail_usage(message):
 class Session:
     """A minimal HTTPS client: no redirects followed, cookies in a private jar."""
 
-    def __init__(self, origin, context, jar_path):
+    def __init__(self, origin, context, jar_path, source_address=None):
         parsed = urllib.parse.urlsplit(origin)
         self.origin = f"{parsed.scheme}://{parsed.netloc}"
         self.host = parsed.hostname
         self.port = parsed.port or 443
         self.context = context
         self.jar_path = jar_path
+        self.source_address = source_address   # bind outgoing connections to this local address (load tests spread sign-ins across addresses)
         self.cookies = {}
         self.deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
 
@@ -98,7 +99,8 @@ class Session:
             send["Origin"] = self.origin
         if self.cookies:
             send["Cookie"] = "; ".join(f"{k}={v}" for k, v in self.cookies.items())
-        connection = http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self.context)
+        connection = http.client.HTTPSConnection(self.host, self.port, timeout=timeout, context=self.context,
+                                                 source_address=(self.source_address, 0) if self.source_address else None)
         try:
             connection.request(method, path, body=body, headers=send)
             response = connection.getresponse()

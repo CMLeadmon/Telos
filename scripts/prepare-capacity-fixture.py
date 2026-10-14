@@ -93,12 +93,17 @@ def read_owner(fd):
     return owner
 
 
-def session_factory(origin, directory):
+def session_factory(origin, directory, addresses=()):
+    """Sessions that cycle through the load host's source addresses: the edge allows 10 sign-ins a minute per address."""
     counter = [0]
+    lock = threading.Lock()
 
     def make():
-        counter[0] += 1
-        return smoke.Session(origin, ssl.create_default_context(), os.path.join(directory, f"jar-{counter[0]}.json"))
+        with lock:
+            counter[0] += 1
+            number = counter[0]
+        address = addresses[number % len(addresses)] if addresses else None
+        return smoke.Session(origin, ssl.create_default_context(), os.path.join(directory, f"jar-{number}.json"), source_address=address)
     return make
 
 
@@ -220,7 +225,7 @@ def cleanup(target, owner, out_dir, make_session, owner_session=None):
     return created
 
 
-def main(argv=None, make_session_factory=session_factory):
+def main(argv=None, make_session_factory=session_factory):   # factory(origin, directory, addresses) -> make()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=("prepare", "cleanup"))
     parser.add_argument("--target-file", required=True)
@@ -229,6 +234,7 @@ def main(argv=None, make_session_factory=session_factory):
     parser.add_argument("--owner-fd", type=int, required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--accounts", type=int, default=100)
+    parser.add_argument("--source-addresses", default="", help="comma-separated local IPv4 addresses to spread sign-ins across")
     args = parser.parse_args(argv)
     try:
         target = load_target(args.target_file, args.lock_digest)
@@ -239,7 +245,11 @@ def main(argv=None, make_session_factory=session_factory):
             raise Refused("--out-dir must be a directory you own with mode 0700")
         if Path(out_dir) == Path(__file__).resolve().parent.parent or Path(__file__).resolve().parent.parent in Path(out_dir).parents:
             raise Refused("--out-dir must be outside the repository so credentials can never be committed")
-        make_session = make_session_factory(target["origin"], out_dir)
+        addresses = [a for a in args.source_addresses.split(",") if a]
+        for address in addresses:
+            if not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", address):
+                raise Refused(f"{address!r} is not an IPv4 address")
+        make_session = make_session_factory(target["origin"], out_dir, addresses)
         if args.command == "prepare":
             if args.accounts < 100 or args.accounts > 500:
                 raise Refused("a capacity fixture needs at least 100 accounts (and no more than 500)")

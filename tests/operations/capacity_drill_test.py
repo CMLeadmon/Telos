@@ -342,7 +342,7 @@ class FixtureTests(unittest.TestCase):
         argv = [command, "--target-file", target or self.target, "--lock-digest", lock, "--owner-fd", str(read_fd), "--out-dir", str(self.out), *extra]
         if command == "prepare":
             argv += ["--fixture-manifest", str(self.manifest)]
-        factory = lambda origin, directory: (lambda: FakeSession(origin))  # noqa: E731
+        factory = lambda origin, directory, addresses=(): (lambda: FakeSession(origin))  # noqa: E731
         stderr = io.StringIO()
         old = sys.stderr
         sys.stderr = stderr
@@ -484,14 +484,14 @@ class RunTests(unittest.TestCase):
     def invoke(self, summary=None, samples=None, duration="30m", smoke_status="passed", prepare_fails=False, cleanup_fails=False, verifier=base.VERIFIER_HOST):
         steps = self.steps
 
-        def prepare(command, target, lock_digest, owner, manifest, out_dir):
+        def prepare(command, target, lock_digest, owner, manifest, out_dir, addresses):
             steps.append(command)
             if prepare_fails and command == "prepare":
                 raise dc.DrillError("the capacity fixture step 'prepare' failed")
             if cleanup_fails and command == "cleanup":
                 raise dc.DrillError("could not remove")
 
-        def k6(engine, image, data_path, origin, duration_text, out_dir, add_host, ca):
+        def k6(engine, image, data_path, origin, duration_text, out_dir, add_host, ca, addresses):
             steps.append("k6")
             path = os.path.join(out_dir, "k6-summary.json")
             if summary is not None:
@@ -509,7 +509,8 @@ class RunTests(unittest.TestCase):
         return drill.run(["--target-file", self.target_file, "--rehearsal", "--source-commit", base.COMMIT, "--duration", duration,
                           "--result-out", str(self.out / "result.json")], remote_factory=self.remote_factory(), verifier_identity=lambda: verifier,
                          runner=runner, k6=k6, prepare=prepare, smoke=smoke, resolver=lambda host: "192.0.2.10",
-                         journey_recorder=lambda origin, member, directory: steps.append("journey-member"))
+                         journey_recorder=lambda origin, member, directory: steps.append("journey-member"),
+                         addresses_for=lambda capacity_file: [f"192.0.2.{n}" for n in range(10, 35)])
 
     def result(self):
         return rg.verify_result_directory(self.out, "result.json")
@@ -572,6 +573,48 @@ class RunTests(unittest.TestCase):
         with self.assertRaisesRegex(dc.NotRun, "node itself"):
             self.invoke(summary=good_summary(), verifier=base.NODE_HOST)
         self.assertEqual(self.steps, [])
+
+
+class SourceAddressTests(unittest.TestCase):
+    def write(self, **changes):
+        handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+        self.addCleanup(os.unlink, handle.name)
+        json.dump(dict({"purpose": "capacity-test"}, **changes), handle)
+        handle.close()
+        return handle.name
+
+    ADDRESSES = [f"192.0.2.{n}" for n in range(10, 36)]
+
+    def test_enough_local_addresses_are_accepted(self):
+        got = drill.source_addresses(self.write(sourceAddresses=self.ADDRESSES), local=lambda: set(self.ADDRESSES) | {"127.0.0.1"})
+        self.assertEqual(got, sorted(self.ADDRESSES))
+
+    def test_too_few_missing_or_foreign_addresses_are_not_run(self):
+        local = lambda: set(self.ADDRESSES)  # noqa: E731
+        for label, document in (("none", {}), ("few", {"sourceAddresses": self.ADDRESSES[:24]}), ("duplicates", {"sourceAddresses": ["192.0.2.10"] * 30}),
+                                ("malformed", {"sourceAddresses": ["host.example"] * 30}), ("not a list", {"sourceAddresses": "192.0.2.10"})):
+            with self.assertRaises(dc.NotRun, msg=label):
+                drill.source_addresses(self.write(**document), local=local)
+        with self.assertRaisesRegex(dc.NotRun, "not assigned to this machine"):
+            drill.source_addresses(self.write(sourceAddresses=self.ADDRESSES), local=lambda: set(self.ADDRESSES[:20]))
+
+    def test_k6_gets_the_addresses_and_host_networking(self):
+        seen = []
+
+        class Result:
+            returncode, stderr = 0, b""
+
+        def runner(argv, **kwargs):
+            seen.append(argv)
+            return Result()
+        drill.run_k6(["podman"], "img@sha256:" + "a" * 64, "/d/data.json", "https://x.example", "30m", "/tmp/out", "x.example:192.0.2.1", "/ca.crt",
+                     self.ADDRESSES, runner=runner)
+        argv = seen[1]
+        self.assertIn("--local-ips", argv)
+        self.assertEqual(argv[argv.index("--local-ips") + 1], ",".join(self.ADDRESSES))
+        self.assertEqual(argv[argv.index("--network") + 1], "host")
+        for flag in ("--cap-drop=ALL", "--read-only"):
+            self.assertIn(flag, argv)
 
 
 class ShellTests(unittest.TestCase):

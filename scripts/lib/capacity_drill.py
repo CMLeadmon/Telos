@@ -9,7 +9,8 @@ Run from a LOAD HOST that is not the node:
 The drill
   1. checks the node (identity, reference platform) and the operator-owned capacity target, which must
      declare the node disposable and match the candidate, the origin and the machine;
-  2. creates 100 member accounts and a dedicated channel through the public API
+  2. creates 100 member accounts and a dedicated channel through the public API (spreading sign-ins across the load
+     host's declared source addresses: the edge allows 10 sign-ins a minute per address)
      (scripts/prepare-capacity-fixture.py), leaving the credentials in a private temp directory;
   3. samples the node every 5 seconds from its cgroups, Redis, the database and the gateway's saturation
      gauges (scripts/collect-runtime-stats.py, over SSH) while the LOCKED k6 image runs tests/load/telos.js
@@ -264,7 +265,29 @@ def check_capacity_target(target, lock_digest, capacity_file):
     return problems
 
 
-def run_k6(engine, image, data_path, origin, duration, out_dir, add_host, ca_bundle, runner=subprocess.run):
+def local_addresses(runner=subprocess.run):
+    completed = runner(["ip", "-j", "-4", "addr", "show"], capture_output=True, text=True, check=False)
+    try:
+        return {a["local"] for i in json.loads(completed.stdout) for a in i.get("addr_info", []) if a.get("local")}
+    except (ValueError, TypeError):
+        return set()
+
+
+def source_addresses(capacity_file, local=local_addresses):
+    """The load host's declared source addresses; the edge allows 10 sign-ins a minute per address, so a 100-member,
+    25-session test needs at least 25 of them, all really assigned to this machine."""
+    declared = json.loads(Path(capacity_file).read_text(encoding="utf-8")).get("sourceAddresses")
+    if not isinstance(declared, list) or any(not isinstance(a, str) or not re.fullmatch(r"(\d{1,3}\.){3}\d{1,3}", a) for a in declared):
+        raise dc.NotRun("the capacity target declares no sourceAddresses (a list of IPv4 addresses on the load host); the edge limits sign-ins to 10 a minute per address, so one address cannot carry 100 members")
+    if len(set(declared)) < SESSIONS:
+        raise dc.NotRun(f"the capacity target declares {len(set(declared))} source addresses; at least {SESSIONS} are needed (one per simultaneous session)")
+    missing = sorted(set(declared) - local())
+    if missing:
+        raise dc.NotRun(f"these declared source addresses are not assigned to this machine: {missing[:4]}")
+    return sorted(set(declared))
+
+
+def run_k6(engine, image, data_path, origin, duration, out_dir, add_host, ca_bundle, addresses, runner=subprocess.run):
     summary_path = os.path.join(out_dir, "k6-summary.json")
     pulled = runner([*engine, "pull", "--quiet", image], capture_output=True, timeout=600, check=False)   # by digest: the locked image or nothing
     if pulled.returncode != 0:
@@ -272,11 +295,11 @@ def run_k6(engine, image, data_path, origin, duration, out_dir, add_host, ca_bun
     # The container runs as the invoking user so it can read the 0600 credentials and write the 0700 output
     # directory; it keeps no capabilities and no writable root.
     argv = [*engine, "run", "--rm", "--pull=never", "--user", f"{os.geteuid()}:{os.getegid()}", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-            "--read-only", "--tmpfs", "/tmp", "--memory=2g", "--add-host", add_host,
+            "--read-only", "--tmpfs", "/tmp", "--memory=2g", "--network", "host", "--add-host", add_host,
             "-v", f"{ROOT / 'tests' / 'load'}:/scripts:ro", "-v", f"{data_path}:/data/load-data.json:ro", "-v", f"{out_dir}:/out",
             "-v", f"{ca_bundle}:/etc/ssl/certs/ca-certificates.crt:ro",
             "-e", f"TELOS_ORIGIN={origin}", "-e", "TELOS_LOAD_DATA=/data/load-data.json", "-e", f"TELOS_LOAD_DURATION={duration}",
-            image, "run", "--summary-export", "/out/k6-summary.json", "--quiet", "/scripts/telos.js"]
+            image, "run", "--local-ips", ",".join(addresses), "--summary-export", "/out/k6-summary.json", "--quiet", "/scripts/telos.js"]
     completed = runner(argv, capture_output=True, timeout=duration_seconds(duration) + 600, check=False)
     tail = completed.stderr.decode("utf-8", "replace").strip().splitlines()[-2:] if completed.stderr else []
     return completed.returncode, summary_path, " | ".join(tail)[:240]
@@ -288,7 +311,7 @@ def locked_k6():
 
 
 def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, runner=rp.run_program, k6=run_k6,
-        prepare=None, smoke=cid.run_smoke, resolver=None, journey_recorder=None):
+        prepare=None, smoke=cid.run_smoke, resolver=None, journey_recorder=None, addresses_for=source_addresses):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--target-file", required=True)
     parser.add_argument("--duration", default="30m")
@@ -307,6 +330,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
     dc.verify_node_identity(remote, target)
     if verifier_identity() == target["hostId"]:
         raise dc.NotRun("the load host is the node itself, so load from outside cannot be shown; run the drill from another machine")
+    addresses = addresses_for(target["capacityTargetFile"])
     facts = remote.collect("install", target["nodePath"])
     if facts["host"]["machineIdSha256"] != target["hostId"]:
         raise dc.DrillError("the node changed identity during the drill")
@@ -321,7 +345,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
     samples, stats_error = [], []
     try:
         prepare = prepare or prepare_fixture
-        prepare("prepare", target, lock_digest, credentials["owner"], manifest, fixture_dir)
+        prepare("prepare", target, lock_digest, credentials["owner"], manifest, fixture_dir, addresses)
         prepared = True
         assertions.append(assertion("capacity.fixture", "100 disposable members and a dedicated channel were created", "passed", f"{ACCOUNTS} accounts"))
 
@@ -335,7 +359,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         engine = [] if os.geteuid() == 0 or shutil.which("podman") is None else (["sudo", "-n", "podman"] if os.environ.get("TELOS_LOAD_SUDO", "1") == "1" else ["podman"])
         engine = engine or ["podman"]
         code, summary_path, k6_tail = k6(engine, locked_k6(), str(fixture_dir / "load-data.json"), target["origin"], args.duration, str(scratch),
-                                f"{host}:{address}", os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt"))
+                                f"{host}:{address}", os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt"), addresses)
         sampler.join(timeout=seconds + 900)
         summary = None
         try:
@@ -372,7 +396,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         cleaned = True
         if prepared:
             try:
-                prepare("cleanup", target, lock_digest, credentials["owner"], manifest, fixture_dir)
+                prepare("cleanup", target, lock_digest, credentials["owner"], manifest, fixture_dir, addresses)
             except dc.DrillError:
                 cleaned = False
         assertions.append(check("capacity.cleanup", "every disposable account and the channel were removed", prepared and cleaned,
@@ -408,14 +432,14 @@ def record_journey_member(origin, member, fixture_dir, make_session=None):
         return False
 
 
-def prepare_fixture(command, target, lock_digest, owner, manifest, out_dir):
+def prepare_fixture(command, target, lock_digest, owner, manifest, out_dir, addresses=()):
     """Run scripts/prepare-capacity-fixture.py with the owner's credentials on a private pipe."""
     read_fd, write_fd = os.pipe()
     os.write(write_fd, json.dumps(owner).encode("utf-8"))
     os.close(write_fd)
     capacity_file = target["capacityTargetFile"]
     argv = [sys.executable, "-I", str(ROOT / "scripts" / "prepare-capacity-fixture.py"), command, "--target-file", capacity_file,
-            "--lock-digest", lock_digest or "-", "--owner-fd", str(read_fd), "--out-dir", str(out_dir)]
+            "--lock-digest", lock_digest or "-", "--owner-fd", str(read_fd), "--out-dir", str(out_dir), "--source-addresses", ",".join(addresses)]
     if command == "prepare":
         argv += ["--fixture-manifest", manifest]
     try:
