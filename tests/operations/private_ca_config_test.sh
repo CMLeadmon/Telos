@@ -66,4 +66,38 @@ printf '%s\n' "$work/tls" >"$UNREADABLE_LIST"
 [[ "$(probe)" == "$work/tls" ]] || fail "an untraversable directory was not named"
 printf 'TELOS_PRIVATE_CA=\n' >"$work/node/node.env"
 ! probe >/dev/null || fail "a public-ACME node must not be checked"
+# 4. Key-sharing rules: root-only, or one group that is Traefik's, never anyone else.
+python3 -B - "$repo_root" <<'PY'
+import os, stat, sys, tempfile
+sys.path.insert(0, sys.argv[1] + "/cli/lib")
+import node_config as nc
+directory = tempfile.mkdtemp()
+for name in ("server.crt", "server.key"):
+    open(os.path.join(directory, name), "w").close()
+    os.chmod(os.path.join(directory, name), 0o644)
+values = {"TELOS_PRIVATE_CA": "1", "TELOS_TLS_PATH": directory}
+real_stat = os.stat
+def check(mode, gid):
+    key = os.path.join(directory, "server.key")
+    os.chmod(key, mode)
+    def fake(path, *a, **k):
+        info = real_stat(path, *a, **k)
+        if path == key:
+            return os.stat_result((info.st_mode, info.st_ino, info.st_dev, info.st_nlink, info.st_uid, gid, info.st_size,
+                                   int(info.st_atime), int(info.st_mtime), int(info.st_ctime)))
+        return info
+    nc.os.stat = fake
+    try:
+        return nc.validate_private_ca(values)
+    finally:
+        nc.os.stat = real_stat
+assert check(0o600, os.getgid()) == [], "0600 must be accepted"
+assert check(0o400, os.getgid()) == [], "0400 must be accepted"
+assert check(0o640, 65532) == [], "0640 for Traefik's group must be accepted"
+assert check(0o640, 0) == [], "0640 for root's group must be accepted"
+assert check(0o640, 1234), "0640 for an unrelated group must be rejected"
+assert check(0o644, 65532), "world-readable must be rejected"
+assert check(0o660, 65532), "group-writable must be rejected"
+assert check(0o604, 65532), "other access must be rejected"
+PY
 echo "private CA: static configuration parity, unreachable ACME directory, unreadable key/directory named before start"

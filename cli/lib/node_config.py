@@ -384,6 +384,9 @@ def validate_allowed_origins(raw, production):
     return problems
 
 
+TRAEFIK_GID = 65532
+
+
 def validate_private_ca(values):
     """TELOS_PRIVATE_CA=1 needs a readable certificate chain and a private key."""
     flag = values.get("TELOS_PRIVATE_CA", "")
@@ -404,8 +407,12 @@ def validate_private_ca(values):
             continue
         if not stat.S_ISREG(info.st_mode):
             problems.append(f"{path} must be a regular file")
-        elif strict and stat.S_IMODE(info.st_mode) & 0o077:
-            problems.append(f"{path} must not be readable by group or other (mode 0600)")
+        elif strict:
+            mode = stat.S_IMODE(info.st_mode)
+            # Traefik runs as UID 65532, so the owner (root) may share the key with that
+            # one group (mode 0640) but with nobody else, and no one may write it.
+            if mode & 0o027 or (mode & 0o040 and info.st_gid not in (0, TRAEFIK_GID)):
+                problems.append(f"{path} must be mode 0600, or 0640 with group {TRAEFIK_GID} (Traefik's unprivileged user); no other access")
     return problems
 
 
