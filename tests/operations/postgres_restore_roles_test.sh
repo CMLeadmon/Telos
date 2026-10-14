@@ -9,11 +9,11 @@ set -euo pipefail
 # live restore failed on "must be owner of extension pg_stat_statements".)
 #
 # Needs initdb/pg_ctl/pg_dump/pg_restore/psql; set TELOS_PG_BIN (and LD_LIBRARY_PATH for a
-# user-local install) or have them on PATH. Without them the test reports SKIPPED and exits 0.
+# user-local install) or have them on PATH. Without them the test reports not_run and exits 3.
 repo_root="$(git rev-parse --show-toplevel)"
 [[ -n "${TELOS_PG_BIN:-}" ]] && PATH="$TELOS_PG_BIN:$PATH"
 for tool in initdb pg_ctl pg_dump pg_restore psql; do
-  command -v "$tool" >/dev/null 2>&1 || { echo "postgres_restore_roles: SKIPPED (no $tool; set TELOS_PG_BIN)"; exit 0; }
+  command -v "$tool" >/dev/null 2>&1 || { echo "postgres_restore_roles: not_run (no $tool; set TELOS_PG_BIN)" >&2; exit 3; }
 done
 
 work="$(mktemp -d)"
