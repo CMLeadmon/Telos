@@ -343,3 +343,29 @@ real clean-host proof is the `clean-install` drill. Not repaired.
   (wrong password refused, `restic check`, dumped manifest, component sizes, no plaintext left, services up). 23 hermetic tests; not yet run live.
 - **Frontend gates** (A35): `frontend-accessibility`/`frontend-quality` are real source checks; the axe-core audit is a candidate journey; the unsupported
   "Certified, 0 known failures" accessibility claim was withdrawn.
+
+## P4-T6 (live) — upgrade, fast rollback, schema upgrade and restore on the reference node (rehearsal; not certification evidence)
+
+Run by hand on the reference node (Ubuntu 26.04, real Podman 5.7, 12 services) between rehearsal generations built by the real release builder:
+**P** (`cea1d765…`, schema 24), **T1''** (`5e05f583…`, docs-only change, schema 24, `rollbackCompatibleThrough` 24) and **T2''** (`b320584b…`, one additive
+migration, schema 25). None of these is a candidate; a rehearsal can never become one.
+
+| Step | Result |
+|---|---|
+| P → T1'' `upgrade.sh` (target generation's own scripts, no manual environment) | complete in 1m50s: verified encrypted snapshot, migration a no-op, atomic activation, receipt, markers and member journey intact |
+| T1'' → P `rollback.sh` (fast, compatible) | complete in 1m27s; all three markers (before, after, left on T1'') survive; journey passes |
+| P → T1'' again | complete in 1m48s |
+| T1'' → T2'' `upgrade.sh` (schema 24 → 25) | complete in 1m49s; snapshot `4cbe88cf` verified |
+| `rollback.sh` on the schema-25 node | **refused**, changed nothing, printed the restore command — as designed |
+| `restore.sh --mode rollback` on that node | **refused** ("the operation is complete") — a defect, below |
+
+**Defects found by these runs (all fixed, each with a regression test; see A36, A37, A39):** the upgrade lost the maintenance-lock descriptor its backup
+needs; upgrade/restore did not load the node's repository environment; a second candidate stole the first generation's image names so a rollback hung
+pulling a `localhost` image; `rollback.sh` named a restore that then refused the same operation (**A37**: a completed upgrade is now claimable by the
+restore only when the previous generation provably cannot run on the schema); and a rollback-mode restore would have started the *newer*
+generation's images and run its migrations on the restored data (**A39**: it now runs everything from the previous generation's verified tree, in
+release mode builds nothing, and refuses before stopping anything if that generation's images are not loaded). The last two were visible only because
+the live run exercised the incompatible-schema branch.
+
+The sequence is now codified as the real `upgrade-rollback` gate (`scripts/drills/upgrade-rollback.sh` → `scripts/lib/upgrade_drill.py`, fixed
+node-side program `upgrade_node.py`, A38); 28 hermetic tests cover both branches and every injected fault. Its live run is recorded next.
