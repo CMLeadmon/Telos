@@ -96,6 +96,9 @@ def derive_text(text, index, name):
         image = IMAGE_LINE.match(line)
         if service and image:
             line = image.group(1) + third_party_reference(image.group(2), index)
+            output.append(line)
+            output.append("    pull_policy: never")   # a missing image fails at once instead of hanging in a registry pull
+            continue
         output.append(line)
     result = "\n".join(output)
     if text.endswith("\n"):
@@ -165,6 +168,8 @@ def verify(directory, lock=None):
         if not isinstance(image, str):
             problems.append(f"{service}: no image")
             continue
+        if body.get("pull_policy") != "never":
+            problems.append(f"{service}: pull_policy must be never (a release never pulls)")
         variable = BUILT_SERVICES.get(service)
         if variable:
             if not re.fullmatch(r"\$\{" + variable + r":\?[^}]+\}", image):

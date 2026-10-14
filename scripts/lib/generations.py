@@ -20,6 +20,7 @@ guesses after a migration: an unexplained schema is `restore`.
     generations.py activate      --root R --id HEX
     generations.py check-upgrade --root R --from HEX --to HEX --schema N [--no-owner-check]
     generations.py fast-rollback --root R --leaving HEX --target HEX --schema N [--no-owner-check]
+    generations.py images        --root R --id HEX      (the digest-addressed images the generation runs, one per line)
     generations.py receipt       --root R --node N --id HEX
     generations.py check-receipt --root R --node N --id HEX
     generations.py journal begin   --node N --kind upgrade|rollback --from HEX|- --to HEX --schema N --host SHA256 [--supersede OPID]
@@ -161,6 +162,28 @@ def verify_generation(root, generation_id, require_root_owner=True):
             if rg.raw_sha256(handle.read()) != item["sha256"]:
                 fail(f"{item['path']} does not match its recorded digest")
     return manifest, rg.digest_bytes(data)
+
+
+IMAGE_REF = re.compile(r"^\s*image:\s*(\S+)\s*$", re.M)
+DIGEST_REF = re.compile(r"[a-z0-9./_-]+@sha256:[0-9a-f]{64}\Z")
+
+
+def image_refs(directory):
+    """Every digest-addressed image a generation (or an unpacked candidate's generation/ tree) runs: images.env plus the third-party references."""
+    refs = set()
+    with open(os.path.join(directory, "images.env"), encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                refs.add(line.strip().split("=", 1)[1])
+    for name in ("docker-compose.yml", "docker-compose.setup.yml"):
+        with open(os.path.join(directory, name), encoding="utf-8") as handle:
+            for ref in IMAGE_REF.findall(handle.read()):
+                if "${" not in ref:
+                    refs.add(ref)
+    for ref in refs:
+        if not DIGEST_REF.match(ref):
+            fail(f"{ref} is not a digest-addressed image reference")
+    return sorted(refs)
 
 
 def current_generation(root):
@@ -432,6 +455,7 @@ def build_parser():
     p = sub.add_parser("activate"); p.add_argument("--root", required=True); p.add_argument("--id", required=True)
     p = sub.add_parser("check-upgrade"); root_args(p, ("from", "to")); p.add_argument("--schema", type=int, required=True)
     p = sub.add_parser("fast-rollback"); root_args(p, ("leaving", "target")); p.add_argument("--schema", type=int, required=True)
+    root_args(sub.add_parser("images"))
     p = sub.add_parser("receipt"); root_args(p); p.add_argument("--node", required=True)
     p = sub.add_parser("check-receipt"); root_args(p); p.add_argument("--node", required=True)
     journal = sub.add_parser("journal").add_subparsers(dest="journal_command", required=True)
@@ -471,6 +495,9 @@ def run(args):
         leaving, _ = verify_generation(args.root, args.leaving, owner)
         target, _ = verify_generation(args.root, args.target, owner)
         return {"ok": fast_rollback_ok(leaving, target, args.schema)}
+    if args.command == "images":
+        verify_generation(args.root, args.id, owner)
+        return {"images": image_refs(generation_path(args.root, args.id))}
     if args.command == "receipt":
         return write_receipt(args.root, args.node, args.id, owner)
     if args.command == "check-receipt":

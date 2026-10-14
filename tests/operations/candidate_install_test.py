@@ -36,6 +36,9 @@ if args[0] == "load":
         index = json.load(tar.extractfile("index.json"))
     loaded.append(index["manifests"][0]["digest"])
     json.dump(loaded, open(state, "w"))
+elif args[0] == "tag":
+    with open(state + ".tags", "a") as handle:
+        handle.write(args[1] + " " + args[2] + "\\n")
 elif args[:2] == ["image", "exists"]:
     digest = args[2].split("@", 1)[1]
     sys.exit(0 if digest in loaded and not os.environ.get("FAKE_PODMAN_FORGET") else 1)
@@ -108,12 +111,20 @@ class InstallTests(InstallFixture):
         self.assertEqual(current_lock, (self.candidate / "candidate-lock.json").read_bytes())
         gen.check_receipt(str(self.base), str(self.node), self.lock_digest, require_root_owner=False)
 
-    def test_installing_twice_is_idempotent_and_loads_nothing_again(self):
+    def test_installing_twice_keeps_the_generation_and_reloads_the_images(self):
         self.install()
-        before = self.loaded.read_text()
+        first = json.loads(self.loaded.read_text())
         second = self.install()
         self.assertTrue(second["alreadyInstalled"])
-        self.assertEqual(self.loaded.read_text(), before)
+        self.assertEqual(len(json.loads(self.loaded.read_text())), 2 * len(first), "the images are loaded again: they may have been pruned or untagged")
+
+    def test_every_loaded_image_is_pinned_under_a_name_no_later_candidate_reuses(self):
+        self.install()
+        pins = [line.split() for line in Path(str(self.loaded) + ".tags").read_text().splitlines()]
+        self.assertEqual(len(pins), 4)
+        for source, pin in pins:
+            repository, digest = source.split("@")
+            self.assertEqual(pin, f"{repository}:telos-{digest.split(':')[1][:12]}")
 
     def test_a_second_activation_is_refused(self):
         self.install(activate=True)

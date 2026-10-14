@@ -137,6 +137,17 @@ class VerifyTests(Fixture):
         (self.out / rc.OVERLAY).write_text(text[: text.index(marker)], encoding="utf-8")
         self.assertTrue(any("telos-egress-proxy" in problem and "no image" in problem for problem in rc.verify(self.out)))
 
+    def test_a_release_never_pulls(self):
+        self.derive()
+        base = (self.out / "docker-compose.yml").read_text(encoding="utf-8")
+        self.assertEqual(base.count("pull_policy: never"), base.count("    image: "))
+        self.rewrite("docker-compose.yml", "    pull_policy: never\n", "")
+        self.assertTrue(any("pull_policy must be never" in problem for problem in rc.verify(self.out)))
+
+    def test_the_overlay_forbids_pulling_the_built_images_too(self):
+        self.rewrite(rc.OVERLAY, "    pull_policy: never\n", "")
+        self.assertTrue(any("pull_policy must be never" in problem for problem in rc.verify(self.out)))
+
     def test_a_missing_file_is_reported(self):
         (self.out / "docker-compose.setup.yml").unlink()
         self.assertTrue(rc.verify(self.out))

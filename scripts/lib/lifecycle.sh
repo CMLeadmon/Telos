@@ -30,6 +30,18 @@ cli() {   # GENERATION_ID args...
 
 db_schema() { cli "$1" migrate --status; }
 
+# check_images ID -- every image the generation runs resolves from local storage. Loading another candidate that reuses a
+# repository:tag moves the tag off an older generation's image, and Compose would then try to pull a localhost name; failing
+# here, before anything stops, leaves the node serving. install-candidate.sh loads (and pins) the images again.
+check_images() {
+  local ref refs
+  refs="$(gen images --root "$release_base" --id "$1" "${OWNER_FLAG[@]}" | python3 -I -c 'import json,sys; print("\n".join(json.load(sys.stdin)["images"]))')" || return 1
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    podman image exists "$ref" 9>&- || { log "image $ref of generation ${1:0:12} is not in local storage; run install-candidate.sh for that candidate again"; return 1; }
+  done <<<"$refs"
+}
+
 # Ready = every expected container healthy AND the gateway reports ok.
 node_ready() {   # GENERATION_ID
   local body

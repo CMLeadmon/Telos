@@ -18,6 +18,11 @@ mkdir -p "$work/bin"
 cat >"$work/bin/podman" <<'SH'
 #!/usr/bin/env bash
 echo "podman $*" >>"$STUB_STATE/calls.log"
+if [[ "$1 $2" == "image exists" ]]; then
+  # a marker names a repository whose images are "not in local storage"
+  [[ -e "$STUB_STATE/missing-image" ]] && grep -qF -- "$(cat "$STUB_STATE/missing-image")" <<<"$3" && exit 1
+  exit 0
+fi
 if [[ "$1" == stop ]]; then
   [[ "${CRASH_AT:-}" == stop-writers ]] && { kill -KILL "$PPID"; exit 137; }
   rm -f "$STUB_STATE"/running-*
@@ -35,7 +40,9 @@ make_generation() {
   id="$(sha256sum "$lock" | cut -d' ' -f1)"
   dir="$sb/srv/generations/$id"
   mkdir -p "$dir/scripts"
-  printf 'CORE=sha256:%064d\n' 5 >"$dir/images.env"
+  printf 'TELOS_CORE_IMAGE=localhost/core-%s@sha256:%064d\n' "$name" 5 >"$dir/images.env"
+  printf 'services:\n  redis:\n    image: docker.io/library/redis@sha256:%064d\n' 7 >"$dir/docker-compose.yml"
+  printf 'services: {}\n' >"$dir/docker-compose.setup.yml"
   cat >"$dir/telos" <<'SH'
 #!/usr/bin/env bash
 id8="$(basename "$(dirname "$0")")"; id8="${id8:0:8}"
@@ -176,6 +183,7 @@ if env -i PATH="$work/bin:/usr/bin:/bin" bash scripts/upgrade.sh --generation "$
 
 CASE="unlisted predecessor"; sandbox pred 24 no; refuses "not allowed from the installed generation"
 CASE="tampered generation"; sandbox tamper; echo tampered >>"$SB/srv/generations/$NEW/images.env"; refuses "target generation did not verify"
+CASE="target images missing"; sandbox images; echo "core-new" >"$STUB_STATE/missing-image"; refuses "images are not all loaded"
 CASE="group-writable file"; sandbox dirty; chmod 666 "$SB/srv/generations/$NEW/images.env"; refuses "target generation did not verify"
 CASE="symlink in generation"; sandbox link; ln -s /etc/passwd "$SB/srv/generations/$NEW/leak"; refuses "target generation did not verify"
 CASE="generation path escape"; sandbox escape; mkdir -p "$SB/elsewhere"; refuses "--generation must be" "$SB/elsewhere"
@@ -275,6 +283,14 @@ upgrade || fail "$CASE: upgrade"
 opid="$(journal_field operationId)"; : >"$STUB_STATE/calls.log"
 rollback "$opid" && fail "$CASE: rolled back onto a schema the old binaries cannot run"
 grep -q "RESTORE-RECORDED-ROLLBACK" "$SB/rollback-out" || fail "$CASE: no restore instruction"
+expect_active "$NEW"; expect_serving "$NEW"; expect_no "podman stop"; expect_no " stop"
+
+CASE="rollback, previous images missing"; sandbox rbi 24
+upgrade || fail "$CASE: upgrade"
+opid="$(journal_field operationId)"; : >"$STUB_STATE/calls.log"
+echo "core-old" >"$STUB_STATE/missing-image"
+rollback "$opid" && fail "$CASE: rolled back onto images that are not loaded"
+grep -q "images are not all loaded" "$SB/rollback-out" || fail "$CASE: wrong refusal: $(tail -2 "$SB/rollback-out")"
 expect_active "$NEW"; expect_serving "$NEW"; expect_no "podman stop"; expect_no " stop"
 
 CASE="rollback, wrong operation"; sandbox rbw 24

@@ -81,6 +81,7 @@ run_rollback() {
     return 1
   fi
   gen verify --root "$release_base" --id "$from" "${OWNER_FLAG[@]}" >/dev/null || die "the previous generation did not verify"
+  check_images "$from" || die "the previous generation's images are not all loaded; nothing was changed"
 
   local host; host="sha256:$(sha256sum "$machine_id_file" | cut -d' ' -f1)"
   gen journal begin --node "$node_path" --kind rollback --from "$to" --to "$from" --schema "$schema" --host "$host" --supersede "$operation_id" >/dev/null

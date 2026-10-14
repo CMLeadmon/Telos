@@ -90,6 +90,7 @@ run_upgrade() {
   active="$(gen current --root "$release_base" | json_get current)"
   [ "$active" = "$from" ] || die "the active generation (${active:-none}) is not the one named by --current-candidate-lock"
   gen verify --root "$release_base" --id "$to" "${OWNER_FLAG[@]}" >/dev/null || die "the target generation did not verify"
+  check_images "$to" || die "the target generation's images are not all loaded; nothing was changed"
   gen check-receipt --root "$release_base" --node "$node_path" --id "$from" "${OWNER_FLAG[@]}" >/dev/null || die "the installed generation's receipt does not verify"
   local schema host
   schema="$(db_schema "$from")" || die "could not read the database schema from the running node"

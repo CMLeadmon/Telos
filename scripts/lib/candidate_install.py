@@ -46,26 +46,27 @@ def fail(message):
 
 
 def required_image_refs(candidate):
-    """Every digest-addressed image the generation will run: images.env plus the third-party references in its Compose model."""
-    generation = os.path.join(candidate, "generation")
-    refs = set()
-    with open(os.path.join(generation, "images.env"), encoding="utf-8") as handle:
-        for line in handle:
-            if line.strip():
-                refs.add(line.strip().split("=", 1)[1])
-    for name in ("docker-compose.yml", "docker-compose.setup.yml"):
-        with open(os.path.join(generation, name), encoding="utf-8") as handle:
-            for ref in IMAGE_REF.findall(handle.read()):
-                if "${" not in ref:
-                    refs.add(ref)
-    for ref in refs:
-        if not DIGEST_REF.match(ref):
-            fail(f"{ref} is not a digest-addressed image reference")
-    return sorted(refs)
+    """Every digest-addressed image the generation will run (images.env plus its Compose model's third-party references)."""
+    try:
+        return gen.image_refs(os.path.join(candidate, "generation"))
+    except gen.GenerationError as error:
+        fail(str(error))
+
+
+def pinned_name(ref_name, digest):
+    """`localhost/telos-core:0.1.0-beta.1` + a manifest digest -> `localhost/telos-core:telos-<12 hex>`, a tag no later candidate reuses."""
+    repository = ref_name.rsplit(":", 1)[0] if ":" in ref_name.rsplit("/", 1)[-1] else ref_name
+    return f"{repository}:telos-{digest.split(':', 1)[1][:12]}", repository
 
 
 def load_images(candidate, index, podman, run=subprocess.run):
-    """podman load every indexed OCI archive after re-checking it against the index; prove the references resolve."""
+    """podman load every indexed OCI archive after re-checking it against the index, pin each image under a name of its own,
+    and prove every reference the generation uses resolves.
+
+    Loading moves a repository:tag onto the new image, so an older generation's image (same tag, other digest) would lose its
+    only name and stop resolving by digest. The pinned per-digest tag keeps every installed generation's images resolvable, and
+    reloading is always safe: it also restores images that were pruned since the generation was installed.
+    """
     for artifact in index["artifacts"]:
         if artifact["kind"] != "oci-image":
             continue
@@ -76,6 +77,12 @@ def load_images(candidate, index, podman, run=subprocess.run):
         loaded = run([podman, "load", "-i", path], capture_output=True, text=True, check=False)
         if loaded.returncode != 0:
             fail(f"podman could not load {artifact['path']}: {(loaded.stderr or loaded.stdout).strip()[-200:]}")
+        if not info.get("refName"):
+            fail(f"{artifact['path']}: the archive names no image to pin")
+        pin, repository = pinned_name(info["refName"], info["manifestDigest"])
+        tagged = run([podman, "tag", f"{repository}@{info['manifestDigest']}", pin], capture_output=True, text=True, check=False)
+        if tagged.returncode != 0:
+            fail(f"podman could not pin {artifact['path']} as {pin}: {(tagged.stderr or tagged.stdout).strip()[-200:]}")
     for ref in required_image_refs(candidate):
         exists = run([podman, "image", "exists", ref], capture_output=True, check=False)
         if exists.returncode != 0:
@@ -148,8 +155,8 @@ def install(candidate, release_base, node, activate, podman, owner_root, run=sub
     if manifest["sourceCommit"] != verified["sourceCommit"] or manifest["version"] != verified["version"]:
         fail("generation.json describes a different source or version than the candidate")
     already = os.path.isdir(os.path.join(release_base, "generations", generation_id))
+    load_images(candidate, index, podman, run)   # every time: it also restores images pruned or untagged since the first install
     if not already:
-        load_images(candidate, index, podman, run)
         copy_generation(candidate, release_base, generation_id, owner_root)
     gen.verify_generation(release_base, generation_id, require_root_owner=owner_root)
     keep_candidate_records(candidate, node, generation_id)

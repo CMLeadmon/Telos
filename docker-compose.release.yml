@@ -3,20 +3,28 @@
 # whenever the generation has an images.env. Every image comes from images.env -- the exact,
 # digest-addressed images of the candidate -- and Compose refuses to start a service whose
 # variable is unset. Nothing here builds; `telos start --build` is refused in a generation.
-# The source tree's docker-compose.yml still builds from source for development, and the CLI
+# `pull_policy: never` makes a missing image fail at once ("image not known") instead of hanging in a registry pull of
+# a localhost name. The source tree's docker-compose.yml still builds from source for development, and the CLI
 # never layers this file onto it.
 services:
   telos-core:
     image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+    pull_policy: never
   telos-migrate:
     image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+    pull_policy: never
   telos-sanitize-restore:
     image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+    pull_policy: never
   telos-audiobook-migrate:
     image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+    pull_policy: never
   telos-setup-proxy:
     image: ${TELOS_CORE_IMAGE:?the candidate core image is required (images.env)}
+    pull_policy: never
   telos-client:
     image: ${TELOS_CLIENT_IMAGE:?the candidate client image is required (images.env)}
+    pull_policy: never
   telos-egress-proxy:
     image: ${TELOS_EGRESS_PROXY_IMAGE:?the candidate egress proxy image is required (images.env)}
+    pull_policy: never
