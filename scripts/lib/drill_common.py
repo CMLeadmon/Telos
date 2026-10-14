@@ -213,13 +213,14 @@ def build_runtime_subject(facts, commit, lock_digest, containers=None):
 
 
 def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, hosts, tool_versions, observed_at, attachments=(), printer=print, label="drill",
-             runtime_facts=None):
+             runtime_facts=None, extra_files=()):
     """Write one gate-result record for an observing drill; return the shared exit code.
 
     ``assertions`` is a list of {id, description, status, detail}; the verdict is failed if any failed,
     not_run if any did not run, else passed. A passed drill also writes the observed-subject descriptor
     naming the hosts it observed and every attachment. The runner, not this function, writes the
-    evidence envelope. ``observation`` must already be free of secrets (it is checked again here).
+    evidence envelope. ``observation`` must already be free of secrets (it is checked again here). ``extra_files`` are
+    (relative path, bytes, kind) triples written beside the result and attached verbatim (signed records, say).
     """
     out_dir = Path(args.result_out).resolve().parent
     runtime_subject = None
@@ -240,6 +241,11 @@ def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, 
              write_json(out_dir, "assertions.json", {"schemaVersion": 1, "assertions": assertions}) | {"kind": "report"}]
     for name, document in attachments:
         files.append(write_json(out_dir, name, stringify_floats(document)) | {"kind": "report"})
+    for name, data, kind in extra_files:
+        target = out_dir / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        rg.write_atomic_exclusive(str(target), data)
+        files.append({"path": name, "sha256": rg.raw_sha256(data), "kind": kind})
     record = {
         "schemaVersion": 1, "recordKind": mode, "gateId": os.environ.get("TELOS_GATE_ID", gate_id), "sourceCommit": commit,
         "candidateLockDigest": lock_digest, "status": status, "reason": reason, "subjectFile": None,

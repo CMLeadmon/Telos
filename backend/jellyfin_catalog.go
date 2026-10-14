@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -86,18 +87,39 @@ var getJellyfinAuthToken = func(ctx context.Context) (string, string, error) {
 	return tok, userID, nil
 }
 
+// cancelOnClose keeps a request's deadline context alive until the caller has finished with the response
+// body and closes it. Cancelling the context when the function that issued the request returns would
+// abort the body read that follows -- "context canceled" for the occasional response whose body had not
+// arrived yet (about one in two hundred under load, seen as 500s from the playback-info endpoint).
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (body cancelOnClose) Close() error {
+	err := body.ReadCloser.Close()
+	body.cancel()
+	return err
+}
+
 func jellyfinGET(ctx context.Context, path string, token string) (*http.Response, error) {
 	requestCtx, cancel := upstreamRequestContext(ctx)
-	defer cancel()
 	fullURL := getJellyfinBaseURL() + path
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, fullURL, nil)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	if token != "" {
 		req.Header.Set("X-Emby-Token", token)
 	}
-	return upstreamHTTPClient.Do(req)
+	resp, err := upstreamHTTPClient.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
 }
 
 func getJellyfinUserViews(ctx context.Context) ([]MediaLibrary, error) {

@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "note": "The exact questions a record answers, in this order, with pass, fail or not_run. A record must answer every question of its platform's list; there is no way to add, drop or reorder one. Guided platforms answer `assertions` through the recorder; automated platforms answer `automatedAssertions` from Playwright test annotations (@assertion:<id>) run against the candidate URL. WebKit automation is its own platform and never stands in for either Safari; a desktop browser never stands in for a phone.",
+  "matrices": {
+    "browser": {
+      "platforms": {
+        "chrome": {
+          "mode": "automated",
+          "name": "Google Chrome (Stable)"
+        },
+        "firefox": {
+          "mode": "automated",
+          "name": "Mozilla Firefox (current stable)"
+        },
+        "edge": {
+          "mode": "automated",
+          "name": "Microsoft Edge (Stable)"
+        },
+        "webkit": {
+          "mode": "automated",
+          "name": "WebKit (Playwright automation)"
+        },
+        "safari-desktop": {
+          "mode": "guided",
+          "name": "Safari on macOS"
+        },
+        "safari-ios": {
+          "mode": "guided",
+          "name": "Safari on iOS (physical device)"
+        },
+        "chrome-android": {
+          "mode": "guided",
+          "name": "Chrome on Android (physical device)"
+        }
+      },
+      "artifact": "images/telos-client.oci.tar",
+      "assertions": [
+        {
+          "id": "trusted-https",
+          "text": "The page loads over HTTPS with no certificate warning, on a certificate this platform trusts."
+        },
+        {
+          "id": "owner-and-invite",
+          "text": "The owner signs in, creates an invite, and a new member joins with it."
+        },
+        {
+          "id": "member-auth",
+          "text": "A member signs in with a password; a wrong password is refused."
+        },
+        {
+          "id": "chat",
+          "text": "A chat message sends, shows for a second browser and survives a reload; a mention reaches its recipient."
+        },
+        {
+          "id": "stream-video",
+          "text": "HLS video plays and seeks."
+        },
+        {
+          "id": "stream-audio",
+          "text": "Direct audio plays and seeks."
+        },
+        {
+          "id": "library-ebook",
+          "text": "An EPUB opens, paginates and keeps its place, and a PDF opens."
+        },
+        {
+          "id": "library-audiobook",
+          "text": "A multi-track audiobook plays and carries on across tracks."
+        },
+        {
+          "id": "files",
+          "text": "A file uploads, downloads byte-identical and deletes."
+        },
+        {
+          "id": "commentary",
+          "text": "Commentary can be written, shared, replied to and removed."
+        },
+        {
+          "id": "settings-admin",
+          "text": "Settings opens, and an administrator manages members, invites and roles."
+        },
+        {
+          "id": "logout-login",
+          "text": "Signing out ends the session and signing back in works."
+        },
+        {
+          "id": "upstream-degradation",
+          "text": "With Jellyfin stopped only Stream degrades, with Grimmory stopped only Library degrades, and both recover."
+        },
+        {
+          "id": "offline-reconnect",
+          "text": "With the network dropped the app shows its offline state and reconnects without a reload."
+        },
+        {
+          "id": "responsive-accessible",
+          "text": "Keyboard-only navigation reaches every control with visible focus, the layout works at phone and desktop widths, and text zooms to 200% without loss."
+        }
+      ],
+      "automatedAssertions": [
+        {
+          "id": "trusted-https",
+          "text": "The origin is HTTPS on a certificate the browser trusts and the page comes from the static client."
+        },
+        {
+          "id": "owner-and-invite",
+          "text": "The owner signs in, creates an invite, and a new member joins with it."
+        },
+        {
+          "id": "member-auth",
+          "text": "A member signs in with a password; a wrong password is refused."
+        },
+        {
+          "id": "chat",
+          "text": "A chat message sends and survives a reload."
+        },
+        {
+          "id": "files",
+          "text": "A file uploads, downloads byte-identical and deletes."
+        },
+        {
+          "id": "commentary",
+          "text": "Commentary can be written on a file."
+        },
+        {
+          "id": "stream-library-states",
+          "text": "Stream and Library show real content or their own unavailable state."
+        },
+        {
+          "id": "settings-admin",
+          "text": "Settings opens, and an administrator reaches the administration sections."
+        },
+        {
+          "id": "logout-login",
+          "text": "Signing out ends the session and signing back in works."
+        },
+        {
+          "id": "upstream-degradation",
+          "text": "With Jellyfin stopped only Stream degrades, with Grimmory stopped only Library degrades, and both recover."
+        },
+        {
+          "id": "offline-reconnect",
+          "text": "With the network dropped the app shows its offline state and reconnects without a reload."
+        },
+        {
+          "id": "responsive-layout",
+          "text": "The shell lays out at phone and desktop widths with every module reachable."
+        }
+      ]
+    },
+    "desktop": {
+      "platforms": {
+        "linux-appimage": {
+          "mode": "guided",
+          "name": "Telos AppImage on Ubuntu Linux x86-64"
+        }
+      },
+      "artifact": "kind:desktop",
+      "assertions": [
+        {
+          "id": "install-checksum",
+          "text": "The exact AppImage is installed and its SHA-256 equals the identity sidecar's."
+        },
+        {
+          "id": "untrusted-certificate-refused",
+          "text": "Connecting to a node with an untrusted certificate is refused with no override."
+        },
+        {
+          "id": "connect-trusted-https",
+          "text": "Connecting to the trusted HTTPS node shows no certificate prompt."
+        },
+        {
+          "id": "sign-in-device-listed",
+          "text": "Signing in works and the device appears in Settings, Devices in the hosted browser."
+        },
+        {
+          "id": "modules-open",
+          "text": "Chat, Stream, Library and Files open; covers and avatars render; an ebook reads."
+        },
+        {
+          "id": "playback",
+          "text": "HLS video, direct audio and a multi-track audiobook play and seek (record whether native HLS or hls.js played)."
+        },
+        {
+          "id": "commentary",
+          "text": "Commentary can be created and read."
+        },
+        {
+          "id": "restart-signed-in",
+          "text": "After quitting fully and relaunching, the user is signed in without typing the password."
+        },
+        {
+          "id": "token-refresh",
+          "text": "Past the access-token lifetime with chat and playback active, nothing drops and no second device appears."
+        },
+        {
+          "id": "revocation",
+          "text": "Revoking the device in the browser makes the next request, media segment and socket fail."
+        },
+        {
+          "id": "sign-out-clears-keyring",
+          "text": "After signing out, quitting and relaunching, no credential remains in the keyring."
+        }
+      ]
+    }
+  }
+}

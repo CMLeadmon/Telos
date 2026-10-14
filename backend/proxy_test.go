@@ -386,3 +386,66 @@ func TestAnyRequestToJellyfinIsGatedWhicheverClientSendsIt(t *testing.T) {
 		t.Fatalf("%d Jellyfin requests were in flight at once; the gate allows 2", p)
 	}
 }
+
+// A caller reads the body AFTER jellyfinGET has returned, so the request's deadline context must stay alive until the
+// body is closed. Cancelling it on return aborted the read with "context canceled" whenever the body arrived after the
+// headers -- the intermittent 500 from the playback-info endpoint under load.
+func TestJellyfinGETBodyIsReadableAfterTheHelperReturns(t *testing.T) {
+	flushed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(flushed)
+		time.Sleep(150 * time.Millisecond) // the body trails the headers
+		w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	oldBase := getJellyfinBaseURL
+	getJellyfinBaseURL = func() string { return server.URL }
+	defer func() { getJellyfinBaseURL = oldBase }()
+
+	resp, err := jellyfinGET(context.Background(), "/Items/x/PlaybackInfo", "")
+	if err != nil {
+		t.Fatalf("jellyfinGET: %v", err)
+	}
+	<-flushed
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the body after the helper returned: %v", err)
+	}
+	if string(body) != `{"ok":true}` {
+		t.Fatalf("body = %q", body)
+	}
+	if err := resp.Body.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+}
+
+func TestJellyfinGETCancelsItsContextOnceTheBodyIsClosed(t *testing.T) {
+	done := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done(): // the gateway closed the connection after Close
+			close(done)
+		case <-time.After(5 * time.Second):
+		}
+	}))
+	defer server.Close()
+	oldBase := getJellyfinBaseURL
+	getJellyfinBaseURL = func() string { return server.URL }
+	defer func() { getJellyfinBaseURL = oldBase }()
+
+	resp, err := jellyfinGET(context.Background(), "/x", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the request was not cancelled after its body was closed")
+	}
+}
