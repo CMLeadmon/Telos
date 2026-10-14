@@ -341,5 +341,30 @@ class RealInspectCapture(unittest.TestCase):
         self.assertEqual(remaining, [], "a live, hardened redis must satisfy the policy")
 
 
+class RemoteProgram(unittest.TestCase):
+    """The program piped to a node projects observations and never ships raw inspect records."""
+
+    def test_the_generated_program_runs_standalone_and_reports_absent_containers(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("verify_runtime_hardening", ROOT / "scripts" / "verify-runtime-hardening.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        program = module.remote_program(POLICY)
+        completed = subprocess.run([sys.executable, "-I", "-"], input=program, capture_output=True, env={"PATH": "/nonexistent"})
+        self.assertEqual(completed.returncode, 0, completed.stderr.decode()[-300:])
+        observed = json.loads(completed.stdout)
+        self.assertEqual(set(observed), set(POLICY["services"]))
+        self.assertEqual(set(map(type, observed.values())), {type(None)})
+
+    def test_projection_drops_environment_and_commands(self):
+        capture = {"State": {"Status": "running", "ExitCode": 0, "Pid": 7, "Health": {"Status": "healthy"}},
+                   "Image": "sha256:" + "a" * 64, "ImageDigest": "sha256:" + "b" * 64,
+                   "Config": {"Env": ["DATABASE_URL=postgres://u:hunter2@db/x"], "Cmd": ["--password", "hunter2"]},
+                   "HostConfig": {"Privileged": False, "ReadonlyRootfs": True}, "Mounts": [], "NetworkSettings": {"Networks": {}, "Ports": {}}}
+        projected = json.dumps(rh.project_inspect(capture, None, None))
+        self.assertNotIn("hunter2", projected)
+        self.assertNotIn("DATABASE_URL", projected)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -255,9 +255,9 @@ run_inventory() {
 	while IFS=' ' read -r service port; do
 		[ -n "$service" ] || continue
 		case "$service:$port" in
-		traefik:80:80 | traefik:443:443 | \
-			traefik:\${TRAEFIK_HTTP_PORT:-80}:80 | \
-			traefik:\${TRAEFIK_HTTPS_PORT:-443}:443) ;;
+		traefik:80:8080 | traefik:443:8443 | \
+			traefik:\${TRAEFIK_HTTP_PORT:-80}:8080 | \
+			traefik:\${TRAEFIK_HTTPS_PORT:-443}:8443) ;;
 		*) fail_inventory "unreviewed published port in production compose: service=$service port=$port" ;;
 		esac
 	done <<<"$port_report"

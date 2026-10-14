@@ -78,22 +78,23 @@ make_fixture "$ports_fixture"
 
 expect_exit 0 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '80:80' '443:443'
+set_traefik_ports "$ports_fixture" '80:8080' '443:8443'
 expect_exit 0 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '${WRONG_HTTP_PORT:-80}:80' '${TRAEFIK_HTTPS_PORT:-443}:443'
+set_traefik_ports "$ports_fixture" '${WRONG_HTTP_PORT:-80}:8080' '${TRAEFIK_HTTPS_PORT:-443}:8443'
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-80}:8080' '${TRAEFIK_HTTPS_PORT:-443}:443'
+# Traefik is unprivileged: the container side is 8080/8443, never the old 80/443.
+set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-80}:80' '${TRAEFIK_HTTPS_PORT:-443}:8443'
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-8080}:80' '${TRAEFIK_HTTPS_PORT:-443}:443'
+set_traefik_ports "$ports_fixture" '${TRAEFIK_HTTP_PORT:-8080}:8080' '${TRAEFIK_HTTPS_PORT:-443}:8443'
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '8080:80' '8443:443'
+set_traefik_ports "$ports_fixture" '8080:8080' '8443:8443'
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only
 
-set_traefik_ports "$ports_fixture" '80:80' '443:443'
+set_traefik_ports "$ports_fixture" '80:8080' '443:8443'
 sed -i '/^  redis:$/a\    ports:\n      - "6379:6379"' \
 	"$ports_fixture/docker-compose.yml"
 expect_exit 10 env -C "$ports_fixture" bash scripts/verify-clean-checkout.sh --inventory-only

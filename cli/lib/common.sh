@@ -111,7 +111,15 @@ compose() {
 expected_containers() {
   local file="$REPO_ROOT/docker-compose.yml"
   [ -f "$file" ] || die "cannot find $file"
-  sed -n 's/^[[:space:]]*container_name:[[:space:]]*\([^[:space:]]*\).*/\1/p' "$file"
+  # Profile-gated services (the audiobook migration) only exist while an operator runs
+  # them, so their absence is not a defect and they are not counted as "up".
+  awk '
+    /^  [a-z][a-z0-9-]*:[[:space:]]*$/ { if (name != "" && !profiled) print name; name = ""; profiled = 0; next }
+    /^[^ #]/                          { if (name != "" && !profiled) print name; name = ""; profiled = 0 }
+    /^    profiles:/                  { profiled = 1 }
+    /^    container_name:/            { name = $2 }
+    END                               { if (name != "" && !profiled) print name }
+  ' "$file"
 }
 
 # Services that run once and exit; a clean exit 0 is success, not failure.

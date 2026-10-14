@@ -2,7 +2,7 @@
 """Verify container hardening: the rendered Compose model, or the running containers.
 
     verify-runtime-hardening.sh --compose FILE --env-file FILE --policy FILE
-    verify-runtime-hardening.sh --runtime --policy FILE
+    verify-runtime-hardening.sh --runtime --policy FILE [--target-file FILE]
         [--candidate-lock FILE --generation-receipt FILE --result-out FILE]
 
 Static mode renders the model with the host's Podman Compose provider (nothing is
@@ -30,6 +30,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 import runtime_hardening as rh  # noqa: E402
+import drill_common as dc  # noqa: E402
 
 try:
     import yaml
@@ -72,6 +73,62 @@ def read_proc(pid, name):
         return None
 
 
+REMOTE_DRIVER = '''
+import json, subprocess
+
+POLICY = json.loads(POLICY_JSON)
+
+
+def inspect_container(name):
+    try:
+        result = subprocess.run(["podman", "inspect", "--type", "container", name], capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    return json.loads(result.stdout)[0] if result.returncode == 0 else None
+
+
+def read_proc(pid, name):
+    try:
+        with open("/proc/%d/%s" % (int(pid), name), encoding="utf-8") as handle:
+            return handle.read()
+    except OSError:
+        return None
+
+
+print(json.dumps(collect_runtime(POLICY, inspect_container, read_proc)))
+'''
+
+
+def remote_program(policy):
+    """The fixed program run on the node: the projection code plus a tiny driver.
+
+    Only the *projection* leaves the node (identity, limits, mounts, exposure): the raw
+    ``podman inspect`` record carries each container's environment, secrets included.
+    """
+    module = (HERE / "lib" / "runtime_hardening.py").read_text(encoding="utf-8")
+    return (module + "\nPOLICY_JSON = " + repr(json.dumps(policy)) + "\n" + REMOTE_DRIVER).encode("utf-8")
+
+
+def remote_observations(policy, target_file):
+    target = dc.load_target(target_file)
+    remote = dc.Remote(target)
+    dc.verify_node_identity(remote, target)  # refuse to act on a machine the descriptor does not name
+    import subprocess as sp
+    try:
+        completed = sp.run(remote.command([]), input=remote_program(policy), capture_output=True, timeout=180, check=False)
+    except FileNotFoundError:
+        raise dc.NotRun("ssh is not installed on the machine running the check")
+    except sp.TimeoutExpired:
+        raise dc.DrillError("the node inspection timed out")
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no diagnostic"]
+        raise dc.DrillError(f"the node inspection failed ({completed.returncode}): {detail[0][:200]}")
+    try:
+        return json.loads(completed.stdout.decode("utf-8"))
+    except ValueError:
+        raise dc.DrillError("the node inspection returned malformed output")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--policy", required=True)
@@ -81,6 +138,7 @@ def main(argv=None):
     parser.add_argument("--candidate-lock")
     parser.add_argument("--generation-receipt")
     parser.add_argument("--result-out")
+    parser.add_argument("--target-file", help="drill target descriptor: inspect that node over SSH instead of this machine")
     parser.add_argument("--evidence-out")
     parser.add_argument("--root", default=str(HERE.parent))
     parser.add_argument("--today")
@@ -115,14 +173,24 @@ def main(argv=None):
         findings = rh.check_static(policy, model, lock, today)
         return report(findings, f"static: {len(model.get('services') or {})} services in the rendered model")
 
-    if shutil.which("podman") is None:
-        print("verify-runtime-hardening: not_run: podman is required to inspect running containers", file=sys.stderr)
-        return EXIT_NOT_RUN
     candidate_images = None
     if args.candidate_lock:
         candidate = json.loads(Path(args.candidate_lock).read_text(encoding="utf-8"))
         candidate_images = {value for key, value in candidate.get("artifacts", {}).items() if key.startswith("images/")}
-    observations = rh.collect_runtime(policy, podman_inspect, read_proc)
+    if args.target_file:
+        try:
+            observations = remote_observations(policy, args.target_file)
+        except dc.NotRun as error:
+            print(f"verify-runtime-hardening: not_run: {error}", file=sys.stderr)
+            return EXIT_NOT_RUN
+        except dc.DrillError as error:
+            print(f"verify-runtime-hardening: {error}", file=sys.stderr)
+            return EXIT_FAILED
+    else:
+        if shutil.which("podman") is None:
+            print("verify-runtime-hardening: not_run: podman is required to inspect running containers", file=sys.stderr)
+            return EXIT_NOT_RUN
+        observations = rh.collect_runtime(policy, podman_inspect, read_proc)
     findings = rh.check_runtime(policy, observations, lock, candidate_images, today)
     code = report(findings, f"runtime: {sum(1 for v in observations.values() if v)} containers inspected")
     if args.result_out:
