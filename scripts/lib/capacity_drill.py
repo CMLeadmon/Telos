@@ -264,6 +264,9 @@ def check_capacity_target(target, lock_digest, capacity_file):
 
 def run_k6(engine, image, data_path, origin, duration, out_dir, add_host, ca_bundle, runner=subprocess.run):
     summary_path = os.path.join(out_dir, "k6-summary.json")
+    pulled = runner([*engine, "pull", "--quiet", image], capture_output=True, timeout=600, check=False)   # by digest: the locked image or nothing
+    if pulled.returncode != 0:
+        raise dc.NotRun("the locked k6 image could not be pulled on the load host")
     argv = [*engine, "run", "--rm", "--pull=never", "--memory=2g", "--add-host", add_host,
             "-v", f"{ROOT / 'tests' / 'load'}:/scripts:ro", "-v", f"{data_path}:/data/load-data.json:ro", "-v", f"{out_dir}:/out",
             "-v", f"{ca_bundle}:/etc/ssl/certs/ca-certificates.crt:ro",
