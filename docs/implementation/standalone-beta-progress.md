@@ -369,3 +369,31 @@ the live run exercised the incompatible-schema branch.
 
 The sequence is now codified as the real `upgrade-rollback` gate (`scripts/drills/upgrade-rollback.sh` → `scripts/lib/upgrade_drill.py`, fixed
 node-side program `upgrade_node.py`, A38); 28 hermetic tests cover both branches and every injected fault. Its live run is recorded next.
+
+## P4-T6 (live drill) — `upgrade-rollback` gate run against rehearsal generations (rehearsal; not certification evidence)
+
+The codified drill (`scripts/drills/upgrade-rollback.sh`, from the verifier machine, as `--rehearsal` with each target generation's lock) ran twice on the
+final tooling. Generations were rebuilt by the real builder from the same commit as the tooling: **T1''** `5e05f583…` (predecessor of run A), **T1c**
+`2eb453db…` (docs-only change, schema 24, `rollbackCompatibleThrough` 24) and **T2c** `2f69eec6…` (one additive migration, schema 25). Artifacts:
+`telos-review/beta-evidence/vm/*upgrade-rollback-drill-rehearsal-{a,b}`.
+
+| Run | Pair | Branch (computed from the manifests) | Result |
+|---|---|---|---|
+| A | T1'' → T1c | schema 24 within the window → binary rollback | **passed**, 36 assertions, 5m29s: upgrade 110 s, `rollback.sh` 88 s with both markers kept, re-upgrade 109 s, three member journeys, runtime subject over 11 services |
+| B | T1c → T2c | schema 25 outside the window → refuse, then restore | **passed**, 37 assertions, 5m37s: `rollback.sh` refused in 0.5 s with the journal, schema and active generation unchanged; `restore.sh --mode rollback` 94 s brought back schema 24, kept the marker left before the snapshot, dropped the one left after, kept the failed state under `telos-rollback/`; re-upgrade; three journeys |
+
+**What running it live found** (all fixed with tests; the first drill attempt failed on the first and the node had to be recovered by the documented restore):
+- The node-side program ran the lifecycle scripts with a clean environment and dropped `PODMAN_COMPOSE_PROVIDER`, which an operator's `sudo` shell gets from
+  `/etc/environment`; the upgrade stopped the writers, could not start Compose, aborted, could not restart the old generation either, and left a `failed`
+  journal and a stopped node. The drill correctly recorded `upgrade.exit` failed and stopped. The program now passes that one variable through and reports
+  whether the provider is usable, so a missing provider fails at `start.provider` before anything changes.
+- **A37/A39**: see the previous section — a completed schema upgrade could not be restored, and the restore would have started the newer generation.
+- **A40**: after a restore (databases first) the open ingress bridge came up with forwarding off — loopback and `telos status` fine, no other host could connect.
+  Root cause traced to netavark's leftover `/run/sysctl.d/10-netavark-<bridge>.conf` re-applied by `systemd-sysctl`; `telos start` now repairs it. In run B the
+  repair fired twice (during the restore and during the re-upgrade) and the journeys, which cross the network, passed.
+- A `failed` journal (the abort could not restart the old generation) can only be cleared by a restore of the recorded snapshot, even when no data changed. That is
+  the conservative design and it is documented; there is no acknowledge-and-continue command, and I did not add one.
+
+**Limits of this evidence:** rehearsal generations on two virtual machines, not a frozen candidate against an exact signed predecessor; each run exercised only
+the branch its generation pair selects (the candidate-bound claim is limited to that branch, see A38); the observer was a rehearsal machine; `candidate` mode of the
+drill (restore bound to the predecessor's lock) is covered by hermetic tests only. `upgrade-rollback` stays `not_run` for certification.
