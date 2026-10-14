@@ -186,6 +186,8 @@ run_restore() {
   step="configuration"
   journal_event "$step" begin
   [ "${TELOS_BACKUP_REQUIRE_ROOT:-1}" = 0 ] || [ "$(id -u)" -eq 0 ] || die "run as root (rootful Podman)"
+  # A same-host rollback restores from the node's own repository, whose environment the backup unit already carries.
+  if [ "$mode" = rollback ] && [ -z "${RESTIC_REPOSITORY:-}" ]; then load_backup_env || die "the repository environment could not be loaded"; fi
   : "${RESTIC_REPOSITORY:?RESTIC_REPOSITORY must name the off-node repository}"
   : "${RESTIC_PASSWORD_FILE:?RESTIC_PASSWORD_FILE must name a mode-0600 password file}"
   case "$RESTIC_REPOSITORY" in

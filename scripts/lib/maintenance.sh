@@ -53,3 +53,20 @@ with_maintenance_lock() {
   export TELOS_MAINTENANCE_LOCK_CLAIM=1
   "$@"
 }
+
+# load_backup_env -- export the repository environment of the node's own backups (RESTIC_REPOSITORY, RESTIC_PASSWORD_FILE, ...).
+# The backup timer gets it from systemd's EnvironmentFile; an operator-run upgrade or rollback, which takes a snapshot first,
+# gets it here from the same file. The file is trusted like an EnvironmentFile: it must be root-owned and mode 0600. A missing
+# file is left for backup.sh to refuse by name. TELOS_BACKUP_ENV and TELOS_LIFECYCLE_REQUIRE_ROOT=0 are test seams.
+load_backup_env() {
+  local file="${TELOS_BACKUP_ENV:-/etc/telos/backup.env}"
+  [ -f "$file" ] || return 0
+  if [ "${TELOS_LIFECYCLE_REQUIRE_ROOT:-1}" != 0 ] && [ "$(stat -c '%u:%a' "$file")" != "0:600" ]; then
+    echo "maintenance: $file must be owned by root with mode 0600" >&2
+    return 1
+  fi
+  set -a
+  # shellcheck disable=SC1090
+  . "$file"
+  set +a
+}

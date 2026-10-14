@@ -63,7 +63,7 @@ esac
 SH
   cat >"$dir/scripts/backup.sh" <<'SH'
 #!/usr/bin/env bash
-echo "backup $*" >>"$STUB_STATE/calls.log"
+echo "backup $* repo=${RESTIC_REPOSITORY:-unset}" >>"$STUB_STATE/calls.log"
 [[ "${CRASH_AT:-}" == backup ]] && { kill -KILL "$PPID"; exit 137; }
 [[ -e "$STUB_STATE/fail-backup" ]] && exit 1
 result=""
@@ -100,6 +100,7 @@ sandbox() {
   chmod 0700 "$SB/node/state"
   export STUB_STATE="$SB/state-stub" TELOS_RELEASE_BASE="$SB/srv" TELOS_NODE_PATH="$SB/node" TELOS_MACHINE_ID_FILE="$SB/machine-id"
   echo "machine-$1" >"$SB/machine-id"
+  printf 'RESTIC_REPOSITORY=sftp:test@vault.invalid:/repo\n' >"$SB/backup.env"; chmod 0600 "$SB/backup.env"
   OLD="$(make_generation "$SB" old "$OLD_SCHEMA" "$OLD_SCHEMA" 1)"
   if [[ "$listed" == yes ]]; then NEW="$(make_generation "$SB" new "$NEW_SCHEMA" "$compat" 10 "$OLD")"; else NEW="$(make_generation "$SB" new "$NEW_SCHEMA" "$compat" 10)"; fi
   echo "$OLD_SCHEMA" >"$STUB_STATE/schema"
@@ -113,7 +114,7 @@ generation_arg() { if [[ "$1" == /* ]]; then printf '%s' "$1"; else printf '%s/g
 upgrade() {   # runs the real script; output in $SB/out; returns its status
   env -i HOME="$SB" PATH="$work/bin:/usr/bin:/bin" STUB_STATE="$STUB_STATE" TELOS_RELEASE_BASE="$TELOS_RELEASE_BASE" TELOS_NODE_PATH="$TELOS_NODE_PATH" \
     TELOS_MACHINE_ID_FILE="$TELOS_MACHINE_ID_FILE" TELOS_LIFECYCLE_REQUIRE_ROOT=0 TELOS_GENERATION_OWNER_CHECK=0 TELOS_LIFECYCLE_READY_SECONDS=1 \
-    TELOS_LIFECYCLE_POLL_SECONDS=0 CRASH_AT="${CRASH_AT:-}" \
+    TELOS_LIFECYCLE_POLL_SECONDS=0 CRASH_AT="${CRASH_AT:-}" TELOS_BACKUP_ENV="$SB/backup.env" \
     bash scripts/upgrade.sh --generation "$(generation_arg "${1:-$NEW}")" --candidate-lock "$SB/locks/${2:-new}.lock" \
       --current-candidate-lock "$SB/locks/${3:-old}.lock" --result-out "$SB/result.json" --confirm UPGRADE-THIS-NODE >"$SB/out" 2>&1
 }
@@ -147,11 +148,17 @@ upgrade || fail "$CASE: $(tail -5 "$SB/out")"
 expect_state complete; expect_active "$NEW"; expect_serving "$NEW"
 [[ "$(journal_field snapshotId)" == abcdef0123456789 && "$(journal_field postSchema)" == "$NEW_SCHEMA" && "$(journal_field preSchema)" == "$OLD_SCHEMA" ]] || fail "$CASE: journal facts wrong"
 # The order is the safety argument: snapshot, writers down, migrate, then stop-and-start on the target.
+grep -q "backup --candidate-lock .* repo=sftp:test@vault.invalid:/repo" "$STUB_STATE/calls.log" || fail "$CASE: the backup did not receive the node's repository environment"
 expect_calls_in_order "backup --candidate-lock" "podman stop" "${NEW:0:8} migrate$" "${NEW:0:8} stop" "${NEW:0:8} start"
 python3 -I scripts/lib/generations.py check-receipt --root "$TELOS_RELEASE_BASE" --node "$TELOS_NODE_PATH" --id "$NEW" --no-owner-check >/dev/null || fail "$CASE: the receipt does not name the new generation"
 python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["status"]=="complete" and r["snapshotId"] and r["postSchema"]==24' "$SB/result.json" || fail "$CASE: result record"
 [[ -d "$TELOS_RELEASE_BASE/generations/$OLD" ]] || fail "$CASE: the previous generation was removed"
 [[ "$(stat -c %a "$TELOS_NODE_PATH/state/operation.json")" == 600 ]] || fail "$CASE: journal mode"
+
+# load_backup_env trusts the file like an EnvironmentFile: root-owned and 0600, else it refuses
+bad_env="$work/bad-backup.env"; printf 'RESTIC_REPOSITORY=sftp:x@y:/r\n' >"$bad_env"; chmod 0644 "$bad_env"
+if env -i PATH="/usr/bin:/bin" TELOS_BACKUP_ENV="$bad_env" bash -c '. scripts/lib/maintenance.sh; load_backup_env' 2>/dev/null; then fail "load_backup_env accepted a file that is not root-owned mode 0600"; fi
+env -i PATH="/usr/bin:/bin" TELOS_BACKUP_ENV="$work/no-such.env" bash -c '. scripts/lib/maintenance.sh; load_backup_env' || fail "a missing backup.env must be left for backup.sh to refuse, not fail here"
 
 # ------------------------------------------------------------------------ refusals change nothing
 refuses() {   # CASE message-pattern [upgrade args...]

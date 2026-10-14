@@ -104,6 +104,7 @@ run_upgrade() {
   # 1. A verified snapshot, taken by the generation that is running now.
   local backup_result="$state_dir/upgrade-backup.result.json" snapshot
   rm -f "$backup_result"
+  load_backup_env || die "the repository environment could not be loaded"
   if ! "$(generation_dir "$from")/scripts/backup.sh" --candidate-lock "$current_lock" --result-out "$backup_result" 9>&-; then
     apply_plan abort "the pre-upgrade backup failed" || true
     write_result "$(json_get state <<<"$(journal_show)")" "the pre-upgrade backup failed; nothing changed"
