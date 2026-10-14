@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "githubRepository": null,
+  "allowedLogins": [],
+  "note": "Not yet reviewed. scripts/stage-release.sh and scripts/promote-release.sh report not_run until a reviewer names the exact owner/name repository and the GitHub logins allowed to publish (a pull request that changes this file is the review). Tests use fixture values."
+}

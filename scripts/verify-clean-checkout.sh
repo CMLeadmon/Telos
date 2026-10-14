@@ -199,6 +199,9 @@ scripts/lib/build_release.py
 scripts/lib/release_compose.py
 scripts/lib/candidate_install.py
 scripts/lib/evidence_bundle.py
+scripts/lib/stage_release.py
+scripts/promote-release.sh
+release/publisher-policy.json
 scripts/import-evidence.py
 scripts/lib/runtime_hardening.py
 scripts/lib/monitoring_check.py
@@ -236,6 +239,7 @@ tests/operations/release_compose_test.py
 tests/operations/candidate_install_test.py
 tests/operations/candidate_workflow_contract_test.py
 tests/operations/evidence_bundle_test.py
+tests/operations/stage_release_test.py
 tests/operations/release_cli_test.sh
 tests/operations/generations_test.py
 tests/operations/recovery_drill_test.py
