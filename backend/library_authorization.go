@@ -116,8 +116,21 @@ func authorizeBookHTTP(w http.ResponseWriter, r *http.Request, bookID string, ac
 	}
 	user, _ := r.Context().Value(userContextKey).(*UserContext)
 	if _, err := grimmoryAuthorizer.AuthorizeBook(r.Context(), user, bookID, action); err != nil {
-		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		writeBookResolutionError(w, r, err)
 		return false
 	}
 	return true
+}
+
+// writeBookResolutionError answers for a book that could not be resolved. Grimmory
+// being unreachable is a 503 the client can retry; a book that is not there, not
+// exposed or not permitted stays an indistinguishable 404. Reporting an outage as
+// "not found" would send members to report missing books that are merely
+// unreachable (and breaks the "an outage degrades only its own module" contract).
+func writeBookResolutionError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, errLibraryProviderUnavailable) {
+		writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_unavailable", "Library is temporarily unavailable.")
+		return
+	}
+	writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
 }

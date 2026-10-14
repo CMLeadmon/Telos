@@ -349,7 +349,7 @@ class Journey:
 
         def comment():
             marker = f"note-{uuid.uuid4().hex[:8]}"
-            self.member.json("POST", f"/api/v1/files/{state['id']}/comments", expected=(200, 201), json_body={"body": marker, "visibility": "private"})
+            self.member.json("POST", f"/api/v1/files/{state['id']}/comments", expected=(200, 201), json_body={"note": marker, "visibility": "private"})
             listing = self.member.json("GET", f"/api/v1/files/{state['id']}/comments")
             if marker not in json.dumps(listing):
                 raise Assertion("the comment is not readable after being written")

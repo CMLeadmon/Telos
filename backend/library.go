@@ -1212,6 +1212,9 @@ func currentGrimmoryBook(ctx context.Context, resolution CatalogResolution) (Cat
 	defer cancel()
 	book, err := fetchGrimmoryBook(requestCtx, resolution.UpstreamID)
 	if err != nil {
+		if errors.Is(err, errLibraryProviderUnavailable) {
+			return CatalogResolution{}, LibraryBook{}, err
+		}
 		return CatalogResolution{}, LibraryBook{}, errBookNotAuthorized
 	}
 	return validateCurrentGrimmoryBook(ctx, resolution, book)
@@ -1273,7 +1276,7 @@ func resolveGrimmoryBookHTTP(w http.ResponseWriter, r *http.Request, rawID strin
 	}
 	resolution, book, err := currentGrimmoryBook(r.Context(), resolution)
 	if err != nil {
-		writeAPIError(w, r, http.StatusNotFound, "not_found", "Not found.")
+		writeBookResolutionError(w, r, err)
 		return CatalogResolution{}, LibraryBook{}, false
 	}
 	if !authorizeBookHTTP(w, r, resolution.UpstreamID, action) {

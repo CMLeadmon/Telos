@@ -233,9 +233,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, state.files[file_id], "application/octet-stream")
             if method == "POST":
                 body = json.loads(self.read_body() or b"{}")
-                state.comments.setdefault(file_id, []).append(body["body"])
+                state.comments.setdefault(file_id, []).append(body["note"])
                 return self.send(201, {"ok": True})
-            return self.send(200, [{"body": c} for c in state.comments.get(file_id, [])] if "comment-lost" not in faults else [])
+            return self.send(200, {"annotations": [{"note": c} for c in state.comments.get(file_id, [])]} if "comment-lost" not in faults else {"annotations": []})
         match = re.fullmatch(r"/api/v1/files/([0-9a-f]+)", path)
         if match and method == "DELETE":
             if "delete-ignored" not in faults:
