@@ -2,6 +2,15 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# certify-beta.sh --candidate DIR --evidence-bundle DIR --catalog ci/phase-gates.json --out-dir ABSOLUTE_PATH [--signers FILE] [--repo DIR]
+# needs TELOS_EVIDENCE_SIGNING_KEY and TELOS_EVIDENCE_SIGNING_PRINCIPAL; writes certification.json + .sig only when every check passes.
+# Without those options it is the gate-runner placeholder and reports not_run.
+for argument in "$@"; do
+  case "$argument" in
+    --candidate|--evidence-bundle)
+      exec python3 -I "$script_dir/lib/evidence_bundle.py" certify "$@" ;;
+  esac
+done
 original_argv=("$0" "$@")
 candidate_lock=""
 evidence_out=""

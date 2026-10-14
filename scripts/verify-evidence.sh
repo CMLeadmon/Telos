@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Two shapes:
+#   verify-evidence.sh --candidate-lock PATH --evidence-dir PATH       raw runner output (envelopes, logs, results)
+#   verify-evidence.sh --candidate-lock PATH --catalog PATH --bundle-dir PATH --principal NAME [--signers FILE]
+#                                                                      an imported, SIGNED bundle: the exact required gate set,
+#                                                                      every indexed file, freshness, dependency order and the
+#                                                                      OpenSSH signature against release/evidence-signers
+bundle_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for bundle_argument in "$@"; do
+  if [[ "$bundle_argument" == --bundle-dir ]]; then
+    exec python3 -I "$bundle_script_dir/lib/evidence_bundle.py" verify "$@"
+  fi
+done
+
 usage() {
   echo "usage: $0 --candidate-lock PATH --evidence-dir PATH" >&2
   exit 2

@@ -2,6 +2,15 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# With --bundle-dir this signs an imported evidence bundle (TELOS_EVIDENCE_SIGNING_KEY, TELOS_EVIDENCE_SIGNING_PRINCIPAL):
+#   sign-evidence.sh --candidate-lock PATH --catalog PATH --bundle-dir DIR [--signers FILE]
+# Without them it is the gate-runner placeholder and reports not_run.
+for argument in "$@"; do
+  case "$argument" in
+    --bundle-dir)
+      exec python3 -I "$script_dir/lib/evidence_bundle.py" sign "$@" ;;
+  esac
+done
 original_argv=("$0" "$@")
 candidate_lock=""
 evidence_out=""
