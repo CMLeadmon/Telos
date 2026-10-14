@@ -228,3 +228,40 @@ delete, Jellyfin-only and Grimmory-only outages degrade only their module, both 
 - JSON bodies without a content type (login, bootstrap, invites, uploads, deletes, folders, comments, admin) — structural guard test;
 - a 36-character base64 file id was taken for a channel UUID → 500 for members; Jellyfin/Grimmory outages surfaced as 404 instead of 503.
 **Not covered by the rehearsal:** public DNS / Let's Encrypt, real Safari/iOS/Android, signing keys, a bare-metal host, 24.04.
+
+## P4-T2 — runtime hardening (live-verified on the VM)
+
+`config/runtime-hardening.json` (14 services, two profile-gated), `scripts/lib/runtime_hardening.py`, `scripts/verify-runtime-hardening.{py,sh}`
+(static against the rendered Compose, `--runtime` against live containers through host `/proc`, `--target-file` over SSH), 28 mutation
+tests plus a recorded real `inspect` fixture. Compose is hardened throughout: non-root users, `cap_drop: ALL`, read-only roots, tmpfs,
+limits, bounded logs, Traefik on 8080/8443, Grimmory's JVM run directly (A19), ClamAV unprivileged, volumes created with their owner.
+**Live:** 12/12 containers pass on real Podman 5.7. Documented limit: podman-compose 1.6.0 applies `stop_grace_period` only at `down`.
+Exceptions: A16 (postgres/mariadb `no-new-privileges`, expires 2027-04-30). Gates `runtime-hardening-static` and `runtime-hardening` wired.
+
+## P4-T3 — monitoring (live-verified on the VM)
+
+Separate `:9090` listener (`GET /metrics` only, CIDR allowlist), request/dependency/outbox/socket/auth-throttle/backup metrics, the
+`telos-observability` network, a hardened Prometheus v3.15.0 (no published port, 15 d / 1 GB), alert rules with runbook anchors,
+`scripts/verify-monitoring.{py,sh}` (`--source` uses `promtool` extracted from the locked image; `--runtime` queries Prometheus).
+**Live:** the runtime check passed on the node. Gates `monitoring-source` and `monitoring` wired.
+
+## P4-T4 — encrypted off-node backups (live-verified on the VM)
+
+`scripts/backup.sh` (restic to an off-node repository only; journaled stage; `SIGKILL` recovery; retention 14 d / 8 w; atomic status
+textfile read by the gateway), `scripts/prune-backups.sh`, `scripts/lib/{maintenance.sh,backup_manifest.py}`, `release/backup-manifest.schema.json`,
+systemd units. A fault-injection test (`tests/operations/backup_restore_test.sh`, mutation-checked) covers every step failing, signals,
+contention and secret hygiene. **Live:** timer-driven backups verified a snapshot on the second VM through a restricted SFTP key.
+Found live: the release capsule was 11 GB (A24); the writers died with the one-shot unit (A22).
+
+## P4-T5 — separate-host restore and recovery drill (live-verified on the VM)
+
+`backend/restore_sanitize.go` + `telos-core sanitize-restore` (one transaction, idempotent, refuses unmigrated/newer/drifted databases),
+`scripts/restore.sh`, `scripts/lib/restore_check.py`, `scripts/lib/recovery_drill.py` (+ `node_observe.py restore`), `verify-restore.sh`,
+`verify-restored-node.sh`, `restore-drill.sh --live`, `drills/recovery.sh`. **Live rehearsal (snapshot `80a6798a`, restored onto the
+second VM, observed from the first):** 29 assertions passed — install contract, journal in order with sanitize before start, zero
+pre-restore credentials live, the sanitizer's audit row, four stale credentials (cookie, device access/refresh, invite) found in the
+restored database and refused over HTTPS (401/401/401/400), the owner's password still works, DNS and platform-trusted TLS, the
+member journey on restored content, **RPO 33 s, RTO 223 s**. Artifacts: `telos-review/beta-evidence/vm/*separate-host-recovery*`.
+Found live: restore as `telos_owner` failed on the extension (A23); a failed restore leaves a non-empty host that must be reset by hand.
+**External status:** `separate-host-restore` is **not_run** for certification — needs a candidate, a real third observer machine (A25),
+public DNS/certificate cutover and the stage controller for outages (A26). **Remaining in Task 5:** operator docs, gate wiring.
