@@ -387,6 +387,28 @@ def predecessor_ids(tree, override):
     return [predecessor["candidateLockDigest"]] if predecessor else []
 
 
+def service_images(derived_dir, images):
+    """{compose service: manifest digest} for every long-running service -- the identities a runtime observation is compared to."""
+    import yaml
+    document = yaml.safe_load((derived_dir / "docker-compose.yml").read_text(encoding="utf-8"))
+    built = {service: info["manifestDigest"] for service, info in images.items() if service in BUILD_PLAN}
+    resolved = {}
+    for service, body in sorted(document["services"].items()):
+        if body.get("profiles") or body.get("restart") in (None, "no"):
+            continue   # one-shot jobs and profile-gated helpers are not observed running
+        image = body.get("image")
+        if image is None:
+            if service not in built:
+                fail(f"{service} runs an image the builder does not know")
+            resolved[service] = built[service]
+        else:
+            resolved[service] = image.split("@", 1)[1]
+    for service in built:
+        if service not in resolved:
+            fail(f"the built image for {service} is not used by a long-running service")
+    return resolved
+
+
 def assemble_generation(tree, root, source, images, derived_dir, rollback_through, predecessors, compat):
     """Write <root>/generation/** and return the generation.json document."""
     generation = root / "generation"
@@ -420,7 +442,7 @@ def assemble_generation(tree, root, source, images, derived_dir, rollback_throug
     current, checksum_digest, _ = migrations_of(tree)
     document = {
         "schemaVersion": 1, "version": source.version, "sourceCommit": source.commit,
-        "images": {name: info["manifestDigest"] for name, info in sorted(images.items())},
+        "images": service_images(derived_dir, images),
         "migrations": {"min": min(compat["minSchema"], current), "current": current, "max": current, "checksumSetDigest": checksum_digest},
         "predecessorIds": sorted(set(predecessors)),
         "rollbackCompatibleThrough": rollback_through if rollback_through is not None else compat["rollbackCompatibleThrough"],

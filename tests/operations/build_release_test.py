@@ -121,36 +121,43 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: telos-migrate
+    restart: "no"
   telos-sanitize-restore:
     profiles: ["restore"]
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: telos-sanitize-restore
+    restart: "no"
   telos-audiobook-migrate:
     profiles: ["migration"]
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: telos-audiobook-migrate
+    restart: "no"
   telos-core:
     build:
       context: .
       dockerfile: backend/Dockerfile
     container_name: telos-core
+    restart: unless-stopped
   telos-client:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     container_name: telos-client
+    restart: unless-stopped
   telos-egress-proxy:
     build:
       context: .
       dockerfile: deploy/egress-proxy/Dockerfile
     container_name: telos-egress-proxy
+    restart: unless-stopped
   redis:
     image: docker.io/library/redis:7-alpine@sha256:%(redis_index)s
     container_name: telos-redis
+    restart: unless-stopped
 """
 SETUP = """\
 services:
@@ -159,6 +166,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     container_name: telos-setup-proxy
+    restart: "no"
 """
 
 
@@ -326,6 +334,9 @@ class BuildTests(Fixture):
         self.assertNotIn(record["candidateLockDigest"].split(":")[1], (generation / "generation.json").read_text())
         self.assertEqual(document["migrations"], {"min": 0, "current": 2, "max": 2, "checksumSetDigest": document["migrations"]["checksumSetDigest"]})
         self.assertEqual(document["rollbackCompatibleThrough"], 0)
+        self.assertEqual(sorted(document["images"]), ["redis", "telos-client", "telos-core", "telos-egress-proxy"])
+        for service, digest in document["images"].items():
+            self.assertRegex(digest, r"^sha256:[0-9a-f]{64}$", service)
         listed = {item["path"] for item in document["artifactIndexSubset"]}
         actual = {p.relative_to(generation).as_posix() for p in generation.rglob("*") if p.is_file()} - {"generation.json"}
         self.assertEqual(listed, actual)
