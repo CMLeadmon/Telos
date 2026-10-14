@@ -178,3 +178,53 @@ a second (verifier) machine, legal media fixtures. **Candidate status:** none.
   `frontend-quality` cannot pass until an owner decides (Phase 5 guided-record validator is the candidate home).
 **Next task and first command:** Phase 3 — read `docs/superpowers/plans/2026-08-20-standalone-beta-phase-3-desktop-client.md`; first
 red test: device registration reachable without a prior session (`bash scripts/test-backend.sh auth`).
+
+---
+
+## P3 — native desktop client (Tasks 1–7)
+
+**Task/subpart:** P3-T1 route table + public device registration + exact-origin CORS, T2 device-token auth lifecycle, T3 OS credential
+adapter, T4 platform TLS trust (pinning removed), T5 revocable media capabilities, T6 unsigned Linux AppImage build + verifier,
+T7 catalog wiring of the five Phase 3 gates. Implemented and verified; the AppImage and the five gates were built/run **inside the
+Ubuntu 26.04 VM** (they need Podman and the WebKitGTK/Secret Service runtime).
+**Baseline commits:** `0a7775e` → `79806c8` (+ `c180503`, `cf1405c`) → `987bf61` → `8a19f94` → `5158d0d`.
+**Implemented files and interface:** `backend/routes.go` (`registerRoutes`/`gatewayHandler`), `POST /api/v1/auth/devices/register`,
+`corsMiddleware` + `TELOS_ALLOWED_ORIGINS` (`tauri://localhost`, `http://tauri.localhost`), `frontend/src/lib/{deviceAuth,secureStorage,
+connectionProfile,mediaLocator}.ts`, `frontend/src-tauri/src/credentials.rs` (keyring 4.1.6), `backend/media_authority.go`
+(`playback-locator` / `stream-ticket`, 12 h capabilities, per-family keys, `no-store`), `scripts/{verify-desktop-artifact,
+write-artifact-identity}.py`, `.github/workflows/desktop.yml`, `scripts/ci/desktop-gate.sh`; version `0.1.0-beta.1`.
+**Checks:** backend unit + integration suites, 257+ frontend unit tests, `tsc`, lint, build, bundle budget, product-truth,
+desktop artifact/workflow contract tests; the five Phase 3 gates (`device-registration-boundary`, `native-auth-state`,
+`os-credential-adapter`, `platform-trusted-tls`, `token-safe-media`) **passed in the VM**; on this host they report `not_run`.
+**External status:** `desktop-linux` certification **not_run** — needs a real Secret Service session outside the VM, a signed-off
+artifact and a frozen candidate. **Candidate status:** none.
+**Known gaps:** no native window rehearsal (`scripts/rehearse-desktop.sh` is referenced by the desktop-beta runbook and not written);
+no signing/updater (explicitly out of scope for the unsigned beta).
+
+## P4-T1 — image lock
+
+`release/images.lock` schema v2 with real manifest and linux/amd64 digests resolved through skopeo on the reference VM; every Dockerfile
+`FROM` and Compose image pinned `source@sha256:…`; `scripts/{refresh,verify}-image-lock.py`; `tests/operations/image_lock_test.sh`
+(mutation-checked). Commit `ac6aff5`. The catalog gate `image-lock` runs `verify-image-lock.py --source`.
+
+## VM-HOSTED REHEARSAL — real Podman 5.7 on Ubuntu 26.04 (not candidate evidence)
+
+Two KVM VMs (node + verifier on a private link), rehearsal private CA trusted in the verifier's OS store, synthetic media. Everything
+below is **rehearsal**; none of it is certification evidence.
+**Passed live:** `install.sh`, `telos init`, `telos doctor`, guided `telos configure integrations --setup` against the pinned Jellyfin
+10.11.11 / Grimmory v3.5.0 (driven through a PTY; the product command is unchanged), `telos start` of all 12 services, platform-trusted
+HTTPS from the second machine, and the **hosted-browser member journey with both outage stages** (19 assertions: edge routes, owner
+bootstrap/login/invite, member join, chat, HLS video + 197 KB segment through Jellyfin, ranged audio, EPUB, upload/download/comment/
+delete, Jellyfin-only and Grimmory-only outages degrade only their module, both recover). Report archived under
+`telos-review/beta-evidence/vm/`.
+**Defects found only by running it, fixed with regression tests (commits `cac2044` … `27d5e46`):**
+- guided-setup relay for `internal` networks, `--project-directory`, tmpfs ownership options, short image names (A3–A5, A13–A15);
+- Postgres cannot start under `no-new-privileges` on 26.04 (AppArmor label split) — A16;
+- Jellyfin Base URL never set, so the gateway reported Jellyfin degraded — A17 (read-only validation + final-step save,
+  `jellyfin_restart_pending`);
+- Jellyfin 10.11 ancestors omit the library, so the catalog authorized nothing — A18;
+- `telos status`/`doctor` probed a loopback port production never publishes; doctor now also detects an ingress bridge with
+  forwarding off (seen once after a restart: healthy containers, loopback fine, other machines time out);
+- JSON bodies without a content type (login, bootstrap, invites, uploads, deletes, folders, comments, admin) — structural guard test;
+- a 36-character base64 file id was taken for a channel UUID → 500 for members; Jellyfin/Grimmory outages surfaced as 404 instead of 503.
+**Not covered by the rehearsal:** public DNS / Let's Encrypt, real Safari/iOS/Android, signing keys, a bare-metal host, 24.04.
