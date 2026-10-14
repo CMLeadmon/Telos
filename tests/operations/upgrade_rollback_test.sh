@@ -64,6 +64,9 @@ SH
   cat >"$dir/scripts/backup.sh" <<'SH'
 #!/usr/bin/env bash
 echo "backup $* repo=${RESTIC_REPOSITORY:-unset}" >>"$STUB_STATE/calls.log"
+# The real backup.sh adopts the maintenance lock its caller holds (TELOS_MAINTENANCE_LOCK_CLAIM) and checks that the
+# lock's file descriptor really arrived; a caller that closed it makes the backup refuse (found by the live rehearsal).
+if [[ -n "${TELOS_MAINTENANCE_LOCK_CLAIM:-}" && ! -e /proc/self/fd/9 ]]; then echo "stub backup: the inherited maintenance lock is gone" >&2; exit 77; fi
 [[ "${CRASH_AT:-}" == backup ]] && { kill -KILL "$PPID"; exit 137; }
 [[ -e "$STUB_STATE/fail-backup" ]] && exit 1
 result=""

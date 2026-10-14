@@ -105,7 +105,9 @@ run_upgrade() {
   local backup_result="$state_dir/upgrade-backup.result.json" snapshot
   rm -f "$backup_result"
   load_backup_env || die "the repository environment could not be loaded"
-  if ! "$(generation_dir "$from")/scripts/backup.sh" --candidate-lock "$current_lock" --result-out "$backup_result" 9>&-; then
+  # fd 9 (the maintenance lock) is deliberately inherited: backup.sh adopts the lock this process holds and refuses to run
+  # when the descriptor did not arrive. It closes the descriptor for its own long-lived children.
+  if ! "$(generation_dir "$from")/scripts/backup.sh" --candidate-lock "$current_lock" --result-out "$backup_result"; then
     apply_plan abort "the pre-upgrade backup failed" || true
     write_result "$(json_get state <<<"$(journal_show)")" "the pre-upgrade backup failed; nothing changed"
     die "the pre-upgrade backup failed; the node was left on the installed generation"
