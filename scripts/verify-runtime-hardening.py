@@ -43,14 +43,15 @@ def load_lock(root):
     return json.loads((root / "release" / "images.lock").read_text(encoding="utf-8"))
 
 
-def render_model(compose, env_file):
+def render_model(compose, env_file, profiles=()):
     podman = shutil.which("podman")
     if podman is None:
         raise LookupError("podman is required to render the Compose model")
     probe = subprocess.run([podman, "compose", "version"], capture_output=True, text=True, check=False)
     if probe.returncode != 0:
         raise LookupError("a podman compose provider (podman-compose) is required")
-    rendered = subprocess.run([podman, "compose", "--env-file", env_file, "-f", compose, "config"],
+    profile_args = [item for profile in sorted(set(profiles)) for item in ("--profile", profile)]
+    rendered = subprocess.run([podman, "compose", "--env-file", env_file, *profile_args, "-f", compose, "config"],
                               capture_output=True, text=True, check=False)
     if rendered.returncode != 0:
         raise ValueError("the Compose model failed to render")
@@ -102,7 +103,9 @@ def main(argv=None):
 
     if args.compose:
         try:
-            model = render_model(args.compose, args.env_file)
+            # Profile-gated services (the audiobook migration) are only in the model when
+            # their profile is on, and they are judged like every other service.
+            model = render_model(args.compose, args.env_file, [r["profile"] for r in policy["services"].values() if r.get("profile")])
         except LookupError as error:
             print(f"verify-runtime-hardening: not_run: {error}", file=sys.stderr)
             return EXIT_NOT_RUN

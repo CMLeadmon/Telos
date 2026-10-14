@@ -13,7 +13,8 @@
 # wrong and what the operator must provide; this file never invents a package recipe.
 #
 # Test seams (tests/operations/install_test.sh): TELOS_OS_RELEASE_FILE, TELOS_HOST_ARCH,
-# TELOS_KERNEL_RELEASE and TELOS_PROC_VERSION replace the host probes. Tools are probed
+# TELOS_KERNEL_RELEASE, TELOS_PROC_VERSION, TELOS_HOST_CPUS, TELOS_HOST_MEMORY_KIB and
+# TELOS_STORAGE_FREE_KIB replace the host probes. Tools are probed
 # through PATH, so a test supplies stubs.
 
 TELOS_UBUNTU_MIN="24.04"
@@ -21,6 +22,11 @@ TELOS_UBUNTU_REFERENCE="26.04"   # the release the live checks are run on (see p
 TELOS_PODMAN_MIN="5.0.0"
 TELOS_COMPOSE_PIN="1.6.0"
 TELOS_KERNEL_MIN="5.6"   # openat2(2), which the storage layer's confinement requires
+# The full profile runs 11 containers whose memory limits sum to about 14 GiB (see
+# config/runtime-hardening.json); a smaller host is unsupported rather than overcommitted.
+TELOS_MIN_CPUS=4
+TELOS_MIN_MEMORY_GIB=16
+TELOS_MIN_STORAGE_GIB=20
 
 PREFLIGHT_FAILURES=0
 PREFLIGHT_WARNINGS=0
@@ -192,6 +198,31 @@ check_public_ports() {
   done
 }
 
+# Production sizing: at least 4 CPU cores, 16 GiB of memory and 20 GiB free where the
+# shared storage lives. TELOS_ALLOW_UNDERSIZED_HOST=1 turns the failure into a warning
+# so a rehearsal VM smaller than the product minimum can still run the install; it is
+# never set by the installer and a node that needs it is not a supported node.
+check_host_resources() {
+  preflight_is_production || return 0
+  local cpus mem_kib path free_kib problems=()
+  cpus="${TELOS_HOST_CPUS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 0)}"
+  mem_kib="${TELOS_HOST_MEMORY_KIB:-$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)}"
+  path="${STORAGE_PATH:-/mnt/storage/shared}"
+  while [ ! -d "$path" ] && [ "$path" != "/" ]; do path="$(dirname "$path")"; done
+  free_kib="${TELOS_STORAGE_FREE_KIB:-$(df -Pk "$path" 2>/dev/null | awk 'NR==2 {print $4}')}"
+  [ "${cpus:-0}" -ge "$TELOS_MIN_CPUS" ] 2>/dev/null || problems+=("$cpus CPU core(s), need $TELOS_MIN_CPUS")
+  [ "${mem_kib:-0}" -ge $((TELOS_MIN_MEMORY_GIB * 1000000)) ] 2>/dev/null || problems+=("$((${mem_kib:-0} / 1048576)) GiB of memory, need $TELOS_MIN_MEMORY_GIB")
+  [ "${free_kib:-0}" -ge $((TELOS_MIN_STORAGE_GIB * 1048576)) ] 2>/dev/null || problems+=("$((${free_kib:-0} / 1048576)) GiB free for shared storage, need $TELOS_MIN_STORAGE_GIB")
+  if [ "${#problems[@]}" -eq 0 ]; then
+    pf_ok "resources: $cpus CPU cores, $((mem_kib / 1048576)) GiB memory, $((free_kib / 1048576)) GiB free storage"
+  elif [ "${TELOS_ALLOW_UNDERSIZED_HOST:-0}" = "1" ]; then
+    pf_warn "undersized host (rehearsal only): ${problems[*]}"
+  else
+    pf_fail "host too small for the full profile: ${problems[*]}" \
+            "use a host with at least $TELOS_MIN_CPUS cores, $TELOS_MIN_MEMORY_GIB GiB of memory and $TELOS_MIN_STORAGE_GIB GiB free at the storage path; smaller hosts are unsupported rather than overcommitted"
+  fi
+}
+
 # --- rootless development extras ---------------------------------------------------
 # Rootless podman on ext4/xfs cannot use kernel overlay and needs fuse-overlayfs.
 check_overlay_driver() {
@@ -263,6 +294,7 @@ run_preflight() {
   check_container_runtime
   check_compose
   check_public_ports
+  check_host_resources
   if ! preflight_is_production; then
     check_overlay_driver
     check_tun_module

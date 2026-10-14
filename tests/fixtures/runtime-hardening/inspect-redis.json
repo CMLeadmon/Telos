@@ -1,0 +1,72 @@
+{
+ "note": "Captured from the VM-hosted rehearsal node (Podman 5.7.0, Ubuntu 26.04), trimmed to the fields the projection reads; Pid replaced.",
+ "inspect": {
+  "State": {
+   "Status": "running",
+   "ExitCode": 0,
+   "Pid": 4242,
+   "Health": {
+    "Status": "healthy"
+   }
+  },
+  "Image": "f84b0c4678011602b9b98c227a4dcd5468bf8b088b02fdd4165cb7758bad8058",
+  "ImageDigest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
+  "HostConfig": {
+   "Privileged": false,
+   "PidMode": "private",
+   "IpcMode": "shareable",
+   "NetworkMode": "bridge",
+   "Devices": [],
+   "ReadonlyRootfs": true,
+   "Memory": 536870912,
+   "NanoCpus": 500000000,
+   "CpuQuota": 50000,
+   "CpuPeriod": 100000,
+   "PidsLimit": 128,
+   "Ulimits": [
+    {
+     "Name": "RLIMIT_NOFILE",
+     "Soft": 8192,
+     "Hard": 8192
+    },
+    {
+     "Name": "RLIMIT_NPROC",
+     "Soft": 1048576,
+     "Hard": 1048576
+    }
+   ],
+   "LogConfig": {
+    "Type": "k8s-file",
+    "Config": null,
+    "Path": "/var/lib/containers/storage/overlay-containers/9a4e4035154484c8b9f6b9b33b0a7852de47ed27cc06be6e251fffac70e66950/userdata/ctr.log",
+    "Tag": "",
+    "Size": "10MB"
+   },
+   "RestartPolicy": {
+    "Name": "unless-stopped",
+    "MaximumRetryCount": 0
+   }
+  },
+  "Config": {
+   "StopTimeout": 10
+  },
+  "Mounts": [
+   {
+    "Type": "volume",
+    "Source": "/var/lib/containers/storage/volumes/telos_redis_data/_data",
+    "Destination": "/data",
+    "RW": true
+   }
+  ],
+  "NetworkSettings": {
+   "Networks": {
+    "telos-backend": {}
+   },
+   "Ports": {
+    "6379/tcp": null
+   }
+  }
+ },
+ "procStatus": "Name:\tredis-server\nUmask:\t0077\nState:\tS (sleeping)\nTgid:\t415890\nNgid:\t0\nPid:\t415890\nPPid:\t415886\nTracerPid:\t0\nUid:\t999\t999\t999\t999\nGid:\t1000\t1000\t1000\t1000\nFDSize:\t64\nGroups:\t1000 \nNStgid:\t415890\t1\nNSpid:\t415890\t1\nNSpgid:\t415890\t1\nNSsid:\t415890\t1\nKthread:\t0\nVmPeak:\t   37332 kB\nVmSize:\t   37328 kB\nVmLck:\t       0 kB\nVmPin:\t       0 kB\nVmHWM:\t    9044 kB\nVmRSS:\t    9044 kB\nRssAnon:\t    2728 kB\nRssFile:\t    6316 kB\nRssShmem:\t       0 kB\nVmData:\t   27736 kB\nVmStk:\t     132 kB\nVmExe:\t    2428 kB\nVmLib:\t    3660 kB\nVmPTE:\t     100 kB\nVmSwap:\t       0 kB\nHugetlbPages:\t       0 kB\nCoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffffff\nThreads:\t6\nSigQ:\t0/41643\nSigPnd:\t0000000000000000\nShdPnd:\t0000000000000000\nSigBlk:\t0000000000000000\nSigIgn:\t0000000000001001\nSigCgt:\t0000000000006cea\nCapInh:\t0000000000000000\nCapPrm:\t0000000000000000\nCapEff:\t0000000000000000\nCapBnd:\t0000000000000000\nCapAmb:\t0000000000000000\nNoNewPrivs:\t1\nSeccomp:\t2\nSeccomp_filters:\t1\nSpeculation_Store_Bypass:\tthread vulnerable\nSpeculationIndirectBranch:\tconditional enabled\nCpus_allowed:\tff\nCpus_allowed_list:\t0-7\nMems_allowed:\t00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000000,00000001\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t1087\nnonvoluntary_ctxt_switches:\t6\nx86_Thread_features:\t\nx86_Thread_features_locked:\t\n",
+ "tcp": "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                     \n   0: 00000000:18EB 00000000:0000 0A 00000000:00000000 00:00000000 00000000   999        0 1413266 1 ffff8b7c1103cc00 100 0 0 10 0                   \n   1: 0100007F:E168 0100007F:18EB 06 00000000:00000000 03:000009E4 00000000     0        0 0 3 ffff8b7c0b6e55e0                                      \n   2: 0100007F:E178 0100007F:18EB 06 00000000:00000000 03:00000C37 00000000     0        0 0 3 ffff8b7b611a6e38                                      \n   3: 0100007F:ED78 0100007F:18EB 06 00000000:00000000 03:00000E33 00000000     0        0 0 3 ffff8b7c028c56f8                                      \n   4: 0100007F:ED88 0100007F:18EB 06 00000000:00000000 03:00001082 00000000     0        0 0 3 ffff8b7b65e613b0                                      \n   5: 0201590A:18EB 0701590A:CF04 01 00000000:00000000 02:000052D7 00000000   999        0 1416804 2 ffff8b7ddb15d580 20 4 31 10 -1                  \n   6: 0100007F:80A8 0100007F:18EB 06 00000000:00000000 03:0000014D 00000000     0        0 0 3 ffff8b7b611a7180                                      \n   7: 0100007F:8538 0100007F:18EB 06 00000000:00000000 03:0000127C 00000000     0        0 0 3 ffff8b7c08f46af0                                      \n   8: 0100007F:8546 0100007F:18EB 06 00000000:00000000 03:000014CE 00000000     0        0 0 3 ffff8b7ca9770c08                                      \n   9: 0100007F:BC58 0100007F:18EB 06 00000000:00000000 03:000016CC 00000000     0        0 0 3 ffff8b7b0611c348                                      \n  10: 0100007F:C270 0100007F:18EB 06 00000000:00000000 03:000007EB 00000000     0        0 0 3 ffff8b7c028c5180                                      \n  11: 0100007F:CD7A 0100007F:18EB 06 00000000:00000000 03:000003A0 00000000     0        0 0 3 ffff8b7c028c4af0                                      \n  12: 0100007F:CD86 0100007F:18EB 06 00000000:00000000 03:0000059B 00000000     0        0 0 3 ffff8b7c1c589180                                      \n\n  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 00000000000000000000000000000000:18EB 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000   999        0 1413267 1 ffff8b7c11716e00 100 0 0 10 0\n"
+}

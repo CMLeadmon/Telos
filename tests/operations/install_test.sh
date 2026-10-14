@@ -62,6 +62,7 @@ run_preflight() { # BIN_DIR [VAR=value ...] -> prints output, returns the prefli
     REPO_ROOT="$repo_root" CLI_DIR="$repo_root/cli" \
     TELOS_OS_RELEASE_FILE="$(os_release "Ubuntu 26.04.1 LTS" ubuntu 26.04 debian)" TELOS_HOST_ARCH=x86_64 \
     TELOS_KERNEL_RELEASE=6.8.0-31-generic TELOS_PROC_VERSION="$work/proc-version" \
+    TELOS_HOST_CPUS=8 TELOS_HOST_MEMORY_KIB=16777216 TELOS_STORAGE_FREE_KIB=104857600 \
     PODMAN_COMPOSE_PROVIDER="$provider" "$@" \
     "$(type -P bash)" -c '. "$CLI_DIR/lib/common.sh"; . "$CLI_DIR/lib/preflight.sh"; run_preflight'
 }
@@ -130,6 +131,13 @@ echo "Linux version 5.15.0-microsoft-standard-WSL2" >"$work/wsl-version"
 expect_fail "WSL" "WSL is not a supported server host" "$good_bin" "TELOS_PROC_VERSION=$work/wsl-version"
 expect_fail "ARM (aarch64)" "unsupported architecture: aarch64" "$good_bin" TELOS_HOST_ARCH=aarch64
 expect_fail "ARM (arm64)" "unsupported architecture: arm64" "$good_bin" TELOS_HOST_ARCH=arm64
+expect_fail "too few CPU cores" "1 CPU core(s), need 4" "$good_bin" TELOS_HOST_CPUS=1
+expect_fail "too little memory" "need 16" "$good_bin" TELOS_HOST_MEMORY_KIB=8388608
+expect_fail "too little storage" "need 20" "$good_bin" TELOS_STORAGE_FREE_KIB=1048576
+expect_fail "a host that is small in every way" "host too small for the full profile" "$good_bin" TELOS_HOST_CPUS=2 TELOS_HOST_MEMORY_KIB=4194304 TELOS_STORAGE_FREE_KIB=1048576
+expect_pass "exactly the minimum" "$good_bin" TELOS_HOST_CPUS=4 TELOS_HOST_MEMORY_KIB=16000000 TELOS_STORAGE_FREE_KIB=20971520
+expect_pass "an undersized rehearsal host with the explicit override" "$good_bin" TELOS_HOST_MEMORY_KIB=12582912 TELOS_ALLOW_UNDERSIZED_HOST=1
+last_has 'undersized host (rehearsal only)' || fail "the override did not say the host is undersized"
 expect_fail "an old kernel" "too old for openat2" "$good_bin" TELOS_KERNEL_RELEASE=5.4.0-100-generic
 expect_pass "kernel 5.6" "$good_bin" TELOS_KERNEL_RELEASE=5.6.0-generic
 
@@ -199,6 +207,7 @@ installer() { # os-release-file [args...]
   env -i HOME="$work" PATH="$good_bin" NO_COLOR=1 \
     TELOS_OS_RELEASE_FILE="$osfile" TELOS_HOST_ARCH=x86_64 TELOS_KERNEL_RELEASE=6.8.0 \
     TELOS_PROC_VERSION="$work/proc-version" PODMAN_COMPOSE_PROVIDER="$provider" \
+    TELOS_HOST_CPUS=8 TELOS_HOST_MEMORY_KIB=16777216 TELOS_STORAGE_FREE_KIB=104857600 \
     "$(type -P bash)" "$repo_root/install.sh" "$@"
 }
 set +e
