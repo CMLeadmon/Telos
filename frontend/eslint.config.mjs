@@ -5,5 +5,6 @@ import nextTs from "eslint-config-next/typescript";
 export default defineConfig([
   ...nextVitals,
   ...nextTs,
-  globalIgnores([".next/**", "out/**", "node_modules/**", "next-env.d.ts"]),
+  // src-tauri/target holds the desktop build's generated assets (including minified JavaScript); it is output, not source.
+  globalIgnores([".next/**", "out/**", "node_modules/**", "next-env.d.ts", "src-tauri/target/**"]),
 ]);
