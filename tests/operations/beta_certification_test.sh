@@ -28,7 +28,7 @@ scripts=(
   audit-host-exposure.sh certify-browser-matrix.sh build-release.sh
   build-predecessor.sh stage-release.sh sign-evidence.sh
   provision-jellyfin.sh provision-grimmory.sh ci/run-local.sh
-  ci/validate-sbom.sh drills/upgrade-rollback.sh
+  ci/validate-sbom.sh scan-candidate.sh drills/upgrade-rollback.sh
 )
 
 assert_not_run() {

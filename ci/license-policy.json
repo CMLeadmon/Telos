@@ -1,17 +1,31 @@
 {
-  "allowedLicenses": [
-    "Apache-2.0",
-    "MIT",
-    "BSD-2-Clause",
-    "BSD-3-Clause",
-    "ISC",
-    "CC0-1.0",
-    "Unlicense"
-  ],
-  "forbiddenLicenses": [
-    "GPL-1.0",
-    "GPL-2.0",
-    "GPL-3.0",
-    "AGPL-3.0"
-  ]
+  "schemaVersion": 2,
+  "linkedArtifacts": {
+    "go-core": {
+      "ecosystem": "golang",
+      "allowed": ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "CC0-1.0", "Unlicense", "0BSD"]
+    },
+    "browser-js": {
+      "ecosystem": "npm",
+      "allowed": ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "CC0-1.0", "Unlicense", "0BSD", "BlueOak-1.0.0", "Python-2.0", "CC-BY-4.0", "MPL-2.0"]
+    },
+    "desktop-rust": {
+      "ecosystem": "cargo",
+      "allowed": ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "ISC", "MPL-2.0", "CC0-1.0", "Unlicense", "Zlib", "Unicode-3.0", "Unicode-DFS-2016", "BSL-1.0", "0BSD"]
+    }
+  },
+  "isolatedServices": {
+    "jellyfin": {"why": "its own container, reached over HTTP; GPL-2.0 code never enters the gateway"},
+    "grimmory": {"why": "its own container, reached over HTTP; AGPL code never enters the gateway"},
+    "mariadb": {"why": "its own container; GPL-2.0 server reached over the database protocol"},
+    "postgres": {"why": "its own container; PostgreSQL License server reached over the database protocol"},
+    "redis": {"why": "its own container reached over the Redis protocol"},
+    "traefik": {"why": "its own container; MIT edge proxy"},
+    "clamav": {"why": "its own container; GPL-2.0 scanner reached over its socket protocol"},
+    "squid": {"why": "its own container; GPL-2.0 proxy reached over the proxy protocol"},
+    "prometheus": {"why": "its own container; Apache-2.0 monitor that scrapes metrics"},
+    "nginx": {"why": "its own container serving the static client"},
+    "alpine": {"why": "a base image layer shipped beside Telos code, not linked into it"}
+  },
+  "forbiddenLinked": ["GPL-1.0", "GPL-2.0", "GPL-3.0", "AGPL-3.0", "LGPL-2.0", "LGPL-2.1", "LGPL-3.0", "SSPL-1.0", "BUSL-1.1", "LicenseRef-proprietary"]
 }
