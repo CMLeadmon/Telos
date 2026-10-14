@@ -185,6 +185,17 @@ func (r *sessionRegistry) RegisterDevice(sessionHash, userID, deviceID string, c
 	}, true
 }
 
+// Total is the number of live registered sockets across all users.
+func (r *sessionRegistry) Total() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	total := 0
+	for _, count := range r.perUser {
+		total += count
+	}
+	return total
+}
+
 func (r *sessionRegistry) removeLocked(rc *registeredConn) {
 	if set := r.bySess[rc.sessionHash]; set != nil {
 		if _, ok := set[rc]; ok {

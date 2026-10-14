@@ -130,11 +130,13 @@
       "networks": [
         "telos-backend",
         "telos-db",
-        "telos-ingress"
+        "telos-ingress",
+        "telos-observability"
       ],
       "publishedPorts": [],
       "listeners": [
-        8080
+        8080,
+        9090
       ],
       "writable": {
         "volumes": [
@@ -468,6 +470,42 @@
         "memoryMiB": 2048,
         "pids": 512,
         "nofile": 16384
+      },
+      "restart": "unless-stopped",
+      "stopGraceSeconds": 30,
+      "health": true,
+      "capAdd": [],
+      "exceptions": []
+    },
+    "prometheus": {
+      "container": "telos-prometheus",
+      "oneShot": false,
+      "image": {
+        "kind": "locked",
+        "key": "prometheus"
+      },
+      "uid": 65534,
+      "user": "65534:65534",
+      "networks": [
+        "telos-observability"
+      ],
+      "publishedPorts": [],
+      "listeners": [
+        9090
+      ],
+      "writable": {
+        "volumes": [
+          "/prometheus"
+        ],
+        "tmpfs": {
+          "/tmp": 16
+        }
+      },
+      "limits": {
+        "cpus": 1,
+        "memoryMiB": 1024,
+        "pids": 128,
+        "nofile": 8192
       },
       "restart": "unless-stopped",
       "stopGraceSeconds": 30,

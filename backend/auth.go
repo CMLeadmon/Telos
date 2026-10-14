@@ -525,6 +525,7 @@ func handleRegisterDevice(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			switch {
 			case errors.Is(err, errLoginThrottled):
+				AuthThrottledCount.Inc()
 				writeAPIError(w, r, http.StatusTooManyRequests, "too_many_attempts", "Too many attempts; try again later.")
 			case errors.Is(err, errAuthThrottleUnavailable):
 				writeAPIError(w, r, http.StatusServiceUnavailable, "auth_throttle_unavailable", "Service temporarily unavailable.")

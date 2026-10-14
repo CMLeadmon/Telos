@@ -191,7 +191,7 @@ func registerRoutes(mux *http.ServeMux) {
 // main and the route tests both build the handler here, so a test exercises the
 // same chain production serves.
 func gatewayHandler(mux http.Handler, cfg SecurityConfig) http.Handler {
-	return requestIDMiddleware(
+	return metricsMiddleware(requestIDMiddleware(
 		securityHeaders(
 			shuttingDownMiddleware(
 				admissionMiddleware(
@@ -199,5 +199,5 @@ func gatewayHandler(mux http.Handler, cfg SecurityConfig) http.Handler {
 						requireTrustedOrigin(mux, cfg),
 						cfg),
 					cfg.MaxInFlightHTTP)),
-			cfg))
+			cfg)))
 }

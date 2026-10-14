@@ -81,6 +81,15 @@
       "resolvedAt": "2026-10-13T19:46:41Z",
       "source": "docker.io/library/postgres:16.14-alpine"
     },
+    "prometheus": {
+      "manifestDigest": "sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e",
+      "platforms": {
+        "linux/amd64": "sha256:86b17a25c2db1d16a61b16b3c8f336679eb19e26333d03e808da387206e40faa"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-14T00:52:41Z",
+      "source": "docker.io/prom/prometheus:v3.15.0"
+    },
     "redis": {
       "manifestDigest": "sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499",
       "platforms": {

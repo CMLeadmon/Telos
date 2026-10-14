@@ -1,11 +1,16 @@
+# Internal Prometheus for one Telos node. It scrapes only the gateway's metrics listener
+# on the telos-observability network and publishes no port. Retention is set by the
+# service's flags in docker-compose.yml (15 days or 1 GB).
 global:
   scrape_interval: 15s
+  scrape_timeout: 10s
   evaluation_interval: 15s
 
 rule_files:
-  - "alerts.yml"
+  - alerts.yml
 
 scrape_configs:
-  - job_name: "telos-core"
+  - job_name: telos-core
+    metrics_path: /metrics
     static_configs:
       - targets: ["telos-core:9090"]

@@ -15,6 +15,16 @@ networks:
     name: telos-db
     driver: bridge
     internal: true
+  # Metrics only: joined by the gateway and Prometheus and nothing else. The gateway's
+  # metrics listener answers only peers on this subnet (METRICS_ALLOW_CIDRS), and the
+  # network has no host port, no route and no Internet.
+  telos-observability:
+    name: telos-observability
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.202.0.0/24
   # The ONLY non-internal egress network besides ingress. Only the controlled
   # egress proxy joins it; ClamAV/Jellyfin/Grimmory reach the Internet solely
   # through that proxy from the internal telos-backend network.
@@ -54,6 +64,7 @@ volumes:
     driver_opts:
       o: "uid=${APP_UID},gid=${APP_GID}"
   grimmory_db_data:
+  prometheus_data:
 
 services:
   traefik:
@@ -216,7 +227,13 @@ services:
       - telos-ingress
       - telos-backend
       - telos-db
+      - telos-observability
     environment:
+      # Internal-only metrics listener (backend/metrics_server.go); it answers just the
+      # observability subnet. Backup status is a textfile the backup command writes into
+      # the read-only operations directory mounted below.
+      - METRICS_ADDR=:9090
+      - TELOS_OPS_STATE_PATH=/run/telos-ops
       # Least-privilege runtime role — no DDL, ownership, grants, or migration
       # writes. The one-shot telos-migrate service owns schema changes.
       - DATABASE_URL=postgres://telos_runtime:${TELOS_RUNTIME_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
@@ -251,6 +268,7 @@ services:
       # Signing roots (cursor keyring + HLS key), read-only and mounted nowhere
       # else: not Traefik, the client, databases, Jellyfin, Grimmory or ClamAV.
       - ${TELOS_CONFIG_PATH:?Run telos init first}:/run/telos:ro,z
+      - ${TELOS_NODE_PATH:?Run telos init first}/ops:/run/telos-ops:ro,z
     healthcheck:
       # Readiness reflects every required dependency; a failing dep returns 503.
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/api/v1/health/ready"]
@@ -588,3 +606,44 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # Internal-only metrics store. No host port and no route: the operator reads it through
+  # `telos status` and scripts/verify-monitoring.sh, never a public UI. Retention is
+  # bounded by time and size.
+  prometheus:
+    image: docker.io/prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+    container_name: telos-prometheus
+    restart: unless-stopped
+    stop_grace_period: 30s
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cpus: 1
+    mem_limit: 1g
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=1GB
+      - --web.listen-address=:9090
+      - --web.enable-lifecycle=false
+      - --web.enable-admin-api=false
+    networks:
+      - telos-observability
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro,z
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

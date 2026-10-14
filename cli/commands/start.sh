@@ -51,6 +51,7 @@ run() {
 
   [ "${TELOS_DEV:-0}" = "1" ] && note "using docker-compose.dev.yml"
   prepare_volume_ownership
+  prepare_ops_state || { warn "could not prepare the operations directory under the node state path"; return 1; }
   local unreadable
   if unreadable="$(private_ca_unreadable)"; then
     warn "refusing to start: Traefik runs as UID 65532 and cannot read $unreadable"

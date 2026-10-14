@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/prometheus/client_golang/prometheus"
 	"io"
 	"log"
 	"net"
@@ -450,6 +451,19 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// The internal metrics listener starts after the dependencies above are initialized
+	// and is never part of the public mux. A node that cannot bind or parse its
+	// settings refuses to start rather than run unobserved.
+	metricsAllow, err := parseMetricsAllowlist(metricsAllowFromEnv())
+	if err != nil {
+		log.Fatalf("Invalid metrics configuration: %v", err)
+	}
+	if bound, err := startMetricsServer(metricsAddrFromEnv(), prometheus.DefaultGatherer, metricsAllow); err != nil {
+		log.Fatalf("Cannot start the metrics listener: %v", err)
+	} else {
+		log.Printf("Metrics listening on %s (internal only)", bound)
+	}
+
 	runServer(server)
 }
 
@@ -873,6 +887,7 @@ func handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, errLoginThrottled):
+			AuthThrottledCount.Inc()
 			writeAPIError(w, r, http.StatusTooManyRequests, "too_many_attempts", "Too many login attempts; try again later.")
 		case errors.Is(err, errAuthThrottleUnavailable):
 			writeAPIError(w, r, http.StatusServiceUnavailable, "auth_throttle_unavailable", "Login is temporarily unavailable; try again shortly.")

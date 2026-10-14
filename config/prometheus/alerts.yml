@@ -1,11 +1,90 @@
+# Alert rules for one Telos node. Every alert has a severity (warning or critical) and a
+# runbook anchor in documentation/operations/incidents.md; scripts/verify-monitoring.sh
+# checks both. Only series the gateway really exports are used. A critical alert that is
+# firing fails the monitoring gate.
 groups:
-  - name: telos_alerts
+  - name: telos
     rules:
-      - alert: TelosDependencyDown
-        expr: telos_active_sockets < 0
+      - alert: TelosScrapeDown
+        expr: up{job="telos-core"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Telos dependency or core service down"
-          runbook_url: "documentation/operations/incidents.md"
+          summary: "Prometheus cannot scrape the Telos gateway"
+          runbook_url: "documentation/operations/incidents.md#telosscrapedown"
+
+      - alert: TelosDependencyDown
+        expr: telos_dependency_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Readiness dependency {{ $labels.service }} is failing"
+          runbook_url: "documentation/operations/incidents.md#telosdependencydown"
+
+      - alert: TelosHighServerErrorRatio
+        expr: |
+          sum(rate(telos_http_requests_total{code_class="5xx"}[5m]))
+            / sum(rate(telos_http_requests_total[5m])) > 0.05
+          and sum(rate(telos_http_requests_total[5m])) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5% of requests are failing with a server error"
+          runbook_url: "documentation/operations/incidents.md#telos-high-server-error-ratio"
+
+      - alert: TelosOutboxBacklog
+        expr: telos_outbox_queue_size > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The transactional outbox is backing up"
+          runbook_url: "documentation/operations/incidents.md#telos-outbox-backlog"
+
+      - alert: TelosOutboxBacklogCritical
+        expr: telos_outbox_queue_size > 1000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The transactional outbox has stopped draining"
+          runbook_url: "documentation/operations/incidents.md#telos-outbox-backlog"
+
+      - alert: TelosAuthThrottleSurge
+        expr: sum(rate(telos_auth_throttled_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sign-in attempts are being throttled at an unusual rate"
+          runbook_url: "documentation/operations/incidents.md#telos-auth-throttle-surge"
+
+      - alert: TelosBackupFailed
+        expr: telos_backup_status_valid == 1 and telos_backup_last_result == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The last backup run failed"
+          runbook_url: "documentation/operations/incidents.md#telos-backup-failed"
+
+      - alert: TelosBackupStale
+        expr: telos_backup_status_valid == 1 and (time() - telos_backup_last_success_timestamp_seconds) > 86400
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No successful backup in the last 24 hours"
+          runbook_url: "documentation/operations/incidents.md#telos-backup-stale"
+
+      - alert: TelosBackupStatusMissing
+        expr: telos_backup_status_valid == 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No readable backup status has been recorded"
+          runbook_url: "documentation/operations/incidents.md#telos-backup-status-missing"

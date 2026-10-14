@@ -266,7 +266,7 @@ class RuntimeInspection(unittest.TestCase):
 
     def test_exposure_listeners_and_networks(self):
         self.expect("telos-core", lambda o: o.update(listeners=[8080, 9999]), "unexpected ports [9999]")
-        self.expect("telos-core", lambda o: o.update(listeners=[]), "does not listen on expected ports [8080]")
+        self.expect("telos-core", lambda o: o.update(listeners=[]), "does not listen on expected ports [8080, 9090]")
         self.expect("redis", lambda o: o.update(networks=["telos-backend", "telos-ingress"]), "attached to networks")
         self.expect("postgres", lambda o: o.update(publishedPorts=[{"hostPort": "5432", "containerPort": "5432"}]), "published ports")
 

@@ -181,3 +181,19 @@ private_ca_unreadable() {
   done
   return 1
 }
+
+# prepare_ops_state — the operations directory the backup command writes its Prometheus
+# textfile into and the gateway reads, read-only (<node>/ops). It must exist before
+# Compose binds it. It is its own directory, shared with the gateway's group (10001), so
+# the node's state directory stays root-only.
+prepare_ops_state() {
+  local node dir
+  node="$(node_path)" || return 1
+  dir="$node/ops"
+  mkdir -p "$dir" || return 1
+  if [ "$(id -u)" -eq 0 ] && [ "${TELOS_DEV:-0}" != "1" ]; then
+    chown root:10001 "$dir" && chmod 0750 "$dir"
+  else
+    chmod 0755 "$dir" 2>/dev/null || true
+  fi
+}

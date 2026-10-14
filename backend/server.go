@@ -102,8 +102,14 @@ func runServer(server *http.Server) {
 	}
 	cancelOutbox()
 
-	// 5. Upstream bodies/pools are closed by main's deferred dbPool/redis
-	// Close on return.
+	// 5. Stop the internal metrics listener, then let main's deferred dbPool/redis
+	// Close release the upstream pools on return.
+	metricsCtx, cancelMetrics := context.WithTimeout(context.Background(), metricsShutdownWait)
+	if err := metricsServerStop(metricsCtx); err != nil {
+		log.Printf("shutdown: metrics listener: %v", err)
+		overran = true
+	}
+	cancelMetrics()
 
 	if overran {
 		log.Printf("shutdown: completed with at least one stage over deadline")

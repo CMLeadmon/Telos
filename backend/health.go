@@ -160,6 +160,9 @@ func (s *HealthService) runProbe(done chan struct{}) {
 	}
 	wg.Wait()
 
+	for _, check := range checks {
+		recordDependencyStatus(check.Name, check.Status == HealthOK)
+	}
 	report := HealthReport{Status: worstStatus(checks), Checks: checks, generatedAt: s.now()}
 	s.mu.Lock()
 	s.cached = &report
@@ -289,6 +292,7 @@ func outboxChecker() HealthChecker {
 		if pending >= outboxFailPending || oldest >= outboxFailAge {
 			status = HealthFail
 		}
+		OutboxQueueSize.Set(float64(pending))
 		return HealthCheck{Name: "outbox", Status: status, Metric: int64(pending)}
 	})
 }

@@ -31,6 +31,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lib"))
 import runtime_hardening as rh  # noqa: E402
 import drill_common as dc  # noqa: E402
+import remote_program as rp  # noqa: E402
 
 try:
     import yaml
@@ -110,23 +111,7 @@ def remote_program(policy):
 
 
 def remote_observations(policy, target_file):
-    target = dc.load_target(target_file)
-    remote = dc.Remote(target)
-    dc.verify_node_identity(remote, target)  # refuse to act on a machine the descriptor does not name
-    import subprocess as sp
-    try:
-        completed = sp.run(remote.command([]), input=remote_program(policy), capture_output=True, timeout=180, check=False)
-    except FileNotFoundError:
-        raise dc.NotRun("ssh is not installed on the machine running the check")
-    except sp.TimeoutExpired:
-        raise dc.DrillError("the node inspection timed out")
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip().splitlines()[-1:] or ["no diagnostic"]
-        raise dc.DrillError(f"the node inspection failed ({completed.returncode}): {detail[0][:200]}")
-    try:
-        return json.loads(completed.stdout.decode("utf-8"))
-    except ValueError:
-        raise dc.DrillError("the node inspection returned malformed output")
+    return rp.run_program(target_file, remote_program(policy))
 
 
 def main(argv=None):
