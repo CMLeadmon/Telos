@@ -94,7 +94,7 @@ Run the gates that match what you touched. Go is not installed on the host — b
 podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go test ./...
 podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go vet ./...
 
-# Backend — integration suite (spins up disposable PG 16.14 + Redis 7, isolated network)
+# Backend — integration suite (spins up disposable PG 16.15 + Redis 7, isolated network)
 bash scripts/test-backend.sh                 # all
 bash scripts/test-backend.sh db              # auth|realtime|security|db|storage|product
 

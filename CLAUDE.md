@@ -62,7 +62,7 @@ Raw compose still works as a fallback: `podman-compose up -d --build` (requires 
 podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go test ./...
 podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go vet ./...
 
-# Backend integration suite — spins up disposable PG 16.14 + Redis 7 on an isolated
+# Backend integration suite — spins up disposable PG 16.15 + Redis 7 on an isolated
 # network and sets TELOS_TEST_DATABASE_URL / TELOS_TEST_REDIS_URL. Integration tests
 # self-skip without those, so plain `go test ./...` remains the unit suite.
 bash scripts/test-backend.sh                    # everything

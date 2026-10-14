@@ -41,13 +41,13 @@ All internal ports are container-internal (the port the process listens on insid
 
 | Service | Image | Role | Networks | Internal port |
 | --- | --- | --- | --- | --- |
-| `traefik` | `traefik:v3.3` | Edge router / reverse proxy | ingress | 80, 443 |
+| `traefik` | `traefik:v3.7.14` | Edge router / reverse proxy | ingress | 80, 443 |
 | `telos-core` | custom Go (or Rust) build | Gateway, auth, chat/presence backend | ingress, backend, db | 8080 |
 | `postgres` | `postgres:16-alpine` | Chat + metadata persistence | db | 5432 |
-| `redis` | `redis:7-alpine` | Presence/state/cache | backend | 6379 |
+| `redis` | `redis:7.4.11-alpine` | Presence/state/cache | backend | 6379 |
 | `jellyfin` | `jellyfin/jellyfin:latest` | Headless transcoding + HLS streaming | backend | 8096 |
 | `grimmory` | `grimmory/grimmory:latest` | Headless publication catalog | backend, db | 6060 |
-| `grimmory-db` | `mariadb:10.11` | Grimmory's dedicated database | db | 3306 |
+| `grimmory-db` | `mariadb:10.11.19` | Grimmory's dedicated database | db | 3306 |
 | `livekit` | `livekit/livekit-server:v1.10` | WebRTC SFU (voice/video) | ingress, backend | 7880 + published media ports |
 
 Three Docker networks partition the stack by trust boundary:

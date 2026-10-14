@@ -54,17 +54,17 @@ d = lock(); d["images"]["redis"]["manifestDigest"] = "sha256:" + "4" * 64; save(
 expect_rejected "fabricated-two-character-digest" "fabricated placeholder digest" "$(case_py '
 d = lock(); d["images"]["redis"]["platforms"]["linux/amd64"] = "sha256:" + "ab" * 32; save(d)')"
 expect_rejected "tag-only-compose-image" "is not pinned by digest" "$(case_py '
-edit("docker-compose.yml", "docker.io/library/redis:7-alpine@sha256:", "docker.io/library/redis:7-alpine#", 1)
+edit("docker-compose.yml", "docker.io/library/redis:7.4.11-alpine@sha256:", "docker.io/library/redis:7.4.11-alpine#", 1)
 text = open(root + "/docker-compose.yml").read()
-text = re.sub(r"redis:7-alpine#[0-9a-f]{64}", "redis:7-alpine", text)
+text = re.sub(r"redis:7.4.11-alpine#[0-9a-f]{64}", "redis:7.4.11-alpine", text)
 open(root + "/docker-compose.yml", "w").write(text)')"
 expect_rejected "tag-only-dockerfile-from" "is not pinned by digest" "$(case_py '
 text = open(root + "/frontend/Dockerfile").read()
-text = re.sub(r"(nginx-unprivileged:1.27-alpine)@sha256:[0-9a-f]{64}", r"\1", text)
+text = re.sub(r"(nginx-unprivileged:1.31.7-alpine)@sha256:[0-9a-f]{64}", r"\1", text)
 open(root + "/frontend/Dockerfile", "w").write(text)')"
 expect_rejected "digest-differs-from-lock" "digest differs from the lock" "$(case_py '
 text = open(root + "/docker-compose.yml").read()
-text = re.sub(r"(traefik:v3.3@sha256:)[0-9a-f]{64}", r"\g<1>" + "0123456789abcdef" * 4, text)
+text = re.sub(r"(traefik:v3.7.14@sha256:)[0-9a-f]{64}", r"\g<1>" + "0123456789abcdef" * 4, text)
 open(root + "/docker-compose.yml", "w").write(text)')"
 expect_rejected "unreviewed-extra-image" "is not in the reviewed lock" "$(case_py '
 edit("docker-compose.yml", "    container_name: telos-redis\n", "    container_name: telos-redis\n", 1)
@@ -94,7 +94,7 @@ text = open(root + "/docker-compose.yml").read()
 text = text.replace("services:\n", "services:\n  empty:\n    restart: no\n", 1)
 open(root + "/docker-compose.yml", "w").write(text)')"
 expect_rejected "dynamic-compose-image" "is dynamic" "$(case_py '
-edit("docker-compose.yml", "image: docker.io/library/redis:7-alpine@sha256:", "image: ${REDIS_IMAGE:-docker.io/library/redis:7-alpine}@sha256:", 1)')"
+edit("docker-compose.yml", "image: docker.io/library/redis:7.4.11-alpine@sha256:", "image: ${REDIS_IMAGE:-docker.io/library/redis:7.4.11-alpine}@sha256:", 1)')"
 
 # The accepted shapes: local stage aliases and declared ARG selection are not registry references.
 grep -q 'FROM builder-base AS builder-false' "$clean/backend/Dockerfile" || fail "the fixture lost its local stage alias"

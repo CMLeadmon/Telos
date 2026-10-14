@@ -16,7 +16,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Shared Go build context for both variants.
-FROM docker.io/library/golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder-base
+FROM docker.io/library/golang:1.26.9-alpine@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade AS builder-base
 WORKDIR /app
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
@@ -38,7 +38,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -tags embedfrontend -trimpath -o telos-cor
 FROM builder-${EMBED_FRONTEND} AS builder
 
 # Final Image
-FROM docker.io/library/alpine:3.22.2@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412
+FROM docker.io/library/alpine:3.22.6@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 # Fixed, unprivileged identity shared with the Compose `user:` setting.
 RUN addgroup -g 10001 -S telos && adduser -S -u 10001 -G telos -H -h /app telos
 WORKDIR /app

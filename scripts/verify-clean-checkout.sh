@@ -414,10 +414,10 @@ run_inventory() {
 		fail_inventory ".nvmrc does not pin Node.js 24.18.0"
 	tree_file backend/Dockerfile | grep -q 'FROM docker\.io/library/node:24\.18\.0-alpine' ||
 		fail_inventory "backend/Dockerfile does not pin node:24.18.0-alpine"
-	tree_file backend/Dockerfile | grep -q 'FROM docker\.io/library/golang:1\.26\.5-alpine' ||
-		fail_inventory "backend/Dockerfile does not pin golang:1.26.5-alpine"
-	tree_file docker-compose.yml | grep -q 'image: docker\.io/library/postgres:16\.14-alpine' ||
-		fail_inventory "docker-compose.yml does not pin postgres:16.14-alpine"
+	tree_file backend/Dockerfile | grep -q 'FROM docker\.io/library/golang:1\.26\.9-alpine' ||
+		fail_inventory "backend/Dockerfile does not pin golang:1.26.9-alpine"
+	tree_file docker-compose.yml | grep -q 'image: docker\.io/library/postgres:16\.15-alpine' ||
+		fail_inventory "docker-compose.yml does not pin postgres:16.15-alpine"
 	tree_file frontend/package.json | grep -q '"next": "16\.2\.10"' ||
 		fail_inventory "frontend/package.json does not pin next 16.2.10 exactly"
 	tree_file frontend/package.json | grep -q '"postcss": "8\.5\.10"' ||

@@ -70,7 +70,7 @@ class DeriveTests(Fixture):
             self.assertNotIn(lock["images"][name]["manifestDigest"], base, name)
 
     def test_an_unlocked_third_party_image_is_refused(self):
-        self.edit("docker-compose.yml", "docker.io/library/redis:7-alpine@", "docker.io/library/redis:8-alpine@")
+        self.edit("docker-compose.yml", "docker.io/library/redis:7.4.11-alpine@", "docker.io/library/redis:8-alpine@")
         with self.assertRaisesRegex(rc.ComposeError, "not in release/images.lock"):
             self.derive()
 
@@ -81,7 +81,7 @@ class DeriveTests(Fixture):
 
     def test_an_overlay_entry_for_a_service_that_no_longer_builds_is_refused(self):
         self.edit("docker-compose.yml", "  telos-client:\n    build:\n      context: ./frontend\n      dockerfile: Dockerfile\n",
-                  "  telos-client:\n    image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\n")
+                  "  telos-client:\n    image: docker.io/library/redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499\n")
         with self.assertRaisesRegex(rc.ComposeError, "release overlay covers"):
             self.derive()
 
@@ -115,7 +115,7 @@ class VerifyTests(Fixture):
     def test_a_mutable_tag_fails(self):
         lock = json.loads((ROOT / "release" / "images.lock").read_text(encoding="utf-8"))
         digest = lock["images"]["redis"]["platforms"]["linux/amd64"]
-        self.rewrite("docker-compose.yml", "docker.io/library/redis@" + digest, "docker.io/library/redis:7-alpine")
+        self.rewrite("docker-compose.yml", "docker.io/library/redis@" + digest, "docker.io/library/redis:7.4.11-alpine")
         self.assertTrue(rc.verify(self.out))
 
     def test_an_overlay_that_hardcodes_an_image_fails(self):
