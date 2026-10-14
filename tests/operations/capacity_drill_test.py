@@ -303,6 +303,9 @@ class FakeSession:
             return 200, {}, b""
         if (method, path) == ("GET", "/api/v1/channels"):
             return 200, {}, json.dumps(FakeSession.channels).encode()
+        if method == "GET" and path.startswith("/api/v1/admin/users"):
+            users = [{"id": uid, "username": name} for name, uid in sorted(FakeSession.users.items())]
+            return 200, {}, json.dumps({"items": users}).encode()
         if method == "DELETE" and path.startswith("/api/v1/admin/users/"):
             FakeSession.users = {k: v for k, v in FakeSession.users.items() if v != path.rsplit("/", 1)[1]}
             return 200, {}, b"{}"
@@ -368,6 +371,16 @@ class FixtureTests(unittest.TestCase):
 
     def test_the_load_hosts_source_addresses_are_tolerated_but_other_keys_are_not(self):
         self.assertEqual(self.main("prepare", target=self.write_target(sourceAddresses=["192.0.2.10"]))[0], 0)
+
+    def test_accounts_a_crashed_run_never_recorded_are_swept_before_and_after(self):
+        FakeSession.users["capacity-007"] = "id-capacity-007"   # an orphan: accepted but never recorded
+        FakeSession.users["someone-else"] = "id-someone-else"
+        self.assertEqual(self.main("prepare")[0], 0)
+        self.assertIn("someone-else", FakeSession.users, "only the capacity-* namespace is swept")
+        self.assertEqual(len([u for u in FakeSession.users if u.startswith("capacity-")]), 100)
+        FakeSession.users["capacity-500"] = "id-capacity-500"   # another orphan, left after the run
+        self.assertEqual(self.main("cleanup")[0], 0)
+        self.assertEqual(sorted(FakeSession.users), ["someone-else"])
 
     def test_cleanup_removes_every_account_and_the_channel(self):
         self.main("prepare")

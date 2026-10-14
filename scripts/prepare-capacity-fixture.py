@@ -124,10 +124,33 @@ def call(session, method, path, expected, **kwargs):
     raise Refused(f"{method} {path.split('?')[0]} was rate limited repeatedly")
 
 
+def orphaned_accounts(session):
+    """Ids of every ``capacity-*`` account on the node: an earlier run that died between accepting an invite and
+    recording the new account's id leaves one, and its name would make the next run's accept answer 409."""
+    ids, cursor = [], ""
+    for _ in range(200):
+        query = "limit=100" + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else "")
+        page = call(session, "GET", f"/api/v1/admin/users?{query}", (200,)) or {}
+        ids += [u.get("id") or u.get("ID") for u in page.get("items") or [] if str(u.get("username") or "").startswith(ACCOUNT_PREFIX)]
+        cursor = page.get("nextCursor") or ""
+        if not cursor:
+            break
+    return [i for i in ids if i]
+
+
+def sweep_orphans(session):
+    swept = 0
+    for user_id in orphaned_accounts(session):
+        call(session, "DELETE", f"/api/v1/admin/users/{user_id}", (200, 204, 404))
+        swept += 1
+    return swept
+
+
 def prepare(target, owner, manifest, out_dir, accounts, make_session, sleep=time.sleep):
     origin = target["origin"]
     owner_session = make_session()
     call(owner_session, "POST", "/api/v1/auth/login", (200,), json_body={"username": owner["username"], "password": owner["password"]})
+    sweep_orphans(owner_session)   # this namespace belongs to the fixture; start from a clean slate
     channel_name = f"capacity-{secrets.token_hex(4)}"
     channel = call(owner_session, "POST", "/api/v1/admin/channels", (200, 201), json_body={"name": channel_name}) or {}
     channel_id = channel.get("id") or channel.get("ID")
@@ -206,6 +229,10 @@ def cleanup(target, owner, out_dir, make_session, owner_session=None):
         session = make_session()
         call(session, "POST", "/api/v1/auth/login", (200,), json_body={"username": owner["username"], "password": owner["password"]})
     failures = 0
+    try:
+        sweep_orphans(session)   # accounts a crashed run never recorded
+    except Refused:
+        failures += 1
     for user_id in created.get("userIds", []):
         try:
             call(session, "DELETE", f"/api/v1/admin/users/{user_id}", (200, 204, 404))
