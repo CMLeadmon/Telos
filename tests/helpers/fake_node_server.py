@@ -160,7 +160,7 @@ class Handler(BaseHTTPRequestHandler):
             self.read_body()
             token = uuid.uuid4().hex
             state.invites.add(token)
-            return self.send(201, {"token": token})
+            return self.send(201, {"invite_token": token, "role_id": "Member"})
         if path == "/api/v1/auth/invites/accept" and method == "POST":
             body = json.loads(self.read_body() or b"{}")
             if body.get("token") not in state.invites:

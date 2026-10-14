@@ -635,3 +635,29 @@ func TestCrossUserWSTicketIsolation(t *testing.T) {
 		t.Fatalf("unexpected ticket resolution: got user=%s dev=%s, want userA=%s devA=%s", claimedUser, claimedDev, userA, devA)
 	}
 }
+
+// Every JSON body must say so. The login success body went out without a
+// Content-Type, so Go sniffed text/plain, and a client (or the node smoke) that
+// checks the type before parsing rejected a valid sign-in.
+func TestLoginAnswersJSONWithItsContentType(t *testing.T) {
+	withFixture(t)
+	t.Setenv("TELOS_BOOTSTRAP_TOKEN", "test-bootstrap-token-1234567890")
+	if rec := bootstrapReq(t, "typeowner"); rec.Code != http.StatusCreated {
+		t.Fatalf("bootstrap: %d %s", rec.Code, rec.Body.String())
+	}
+	r := httptest.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(`{"username":"typeowner","password":"a-valid-long-password"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.RemoteAddr = "192.0.2.10:44000"
+	rec := httptest.NewRecorder()
+	handleLogin(rec, r)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login: %d %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.HasPrefix(got, "application/json") {
+		t.Errorf("login success Content-Type = %q, want application/json", got)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["status"] != "success" {
+		t.Errorf("login body = %q (%v)", rec.Body.String(), err)
+	}
+}

@@ -222,7 +222,7 @@ class Journey:
 
         def create_invite():
             created = self.owner.json("POST", "/api/v1/auth/invites", expected=(200, 201), json_body={"roleId": "Member"})
-            token = created.get("token") or created.get("Token")
+            token = created.get("invite_token")
             if not token:
                 raise Assertion("the invite response carried no token")
             invite["token"] = token

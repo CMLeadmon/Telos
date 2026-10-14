@@ -72,7 +72,7 @@ def main():
         """Walk a library's folders (artist -> album -> track) to the item named `wanted`."""
         def walk(parent_param, parent, depth):
             for item in call("GET", f"/api/v1/media/items?{parent_param}={urllib.parse.quote(parent)}") or []:
-                label = str(item.get("name") or item.get("Name") or "")
+                label = str(item.get("title") or item.get("name") or item.get("Name") or "")
                 if wanted.lower() in label.lower() and not item.get("isFolder") and not item.get("folder"):
                     return item
                 if depth < 3 and (item.get("isFolder") or item.get("folder") or item.get("type") in ("folder", "MusicArtist", "MusicAlbum")):
@@ -102,7 +102,7 @@ def main():
         print(json.dumps({"video": bool(video), "audio": bool(audio), "book": bool(book)}), file=sys.stderr)
         raise SystemExit("a rehearsal fixture is missing from the catalog: Jellyfin or Grimmory has not indexed it")
     channels = call("GET", "/api/v1/channels")
-    channel = channels[0]
+    channel = next((c for c in channels if (c.get("name") or c.get("Name")) == "general"), channels[0])
     manifest = {
         "schemaVersion": 1,
         "chatChannel": channel.get("name") or channel.get("Name"),
