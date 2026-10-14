@@ -137,6 +137,38 @@ services:
     environment:
       - DATABASE_OWNER_URL=postgres://telos_owner:${TELOS_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
 
+  # Restore only (profile "restore"): after a database is restored and migrated, revokes every
+  # session, device, refresh token and unused invite the backup carried, in one transaction,
+  # BEFORE any traffic is served. It sees only the database network and the schema-owner role.
+  telos-sanitize-restore:
+    profiles: ["restore"]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: telos-sanitize-restore
+    command: ["./telos-core", "sanitize-restore"]
+    restart: "no"
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - telos-db
+    environment:
+      - DATABASE_OWNER_URL=postgres://telos_owner:${TELOS_OWNER_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+
   telos-audiobook-migrate:
     profiles: ["migration"]
     build:

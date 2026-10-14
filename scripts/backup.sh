@@ -90,6 +90,22 @@ podman()  { run_interruptible command podman "$@"; }
 restic()  { run_interruptible command restic "$@"; }
 tar()     { run_interruptible command tar "$@"; }
 
+# Starting a container from inside a systemd service leaves its conmon in the SERVICE's
+# cgroup (Podman splits cgroups when it runs under a unit), so when the one-shot backup
+# unit finishes, systemd would kill conmon and with it the gateway, Traefik and the media
+# servers this very run just restarted. A transient scope of its own keeps them alive.
+start_container() {
+  local scoped=0
+  if [ "${TELOS_START_IN_SCOPE:-auto}" = 1 ]; then scoped=1
+  elif [ "${TELOS_START_IN_SCOPE:-auto}" = auto ] && [ "$(id -u)" -eq 0 ] && [ -d /run/systemd/system ] && command -v systemd-run >/dev/null 2>&1; then scoped=1
+  fi
+  if [ "$scoped" -eq 1 ]; then
+    run_interruptible systemd-run --scope --quiet --collect "$(type -P podman)" start "$1" >/dev/null
+  else
+    podman start "$1" >/dev/null
+  fi
+}
+
 log() { printf 'backup: %s\n' "$*" >&2; }
 die() { log "$*"; exit "${2:-1}"; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -141,7 +157,7 @@ recover_orphan_stage() {
   for name in ${names//,/ }; do
     for writer in "${WRITERS_START_ORDER[@]}"; do
       if [ "$name" = "$writer" ] && [ "$(podman inspect --type container --format '{{.State.Running}}' "$writer" 2>/dev/null || echo false)" != true ]; then
-        podman start "$writer" >/dev/null 2>&1 && log "restarted $writer, which an earlier run left stopped" || log "could not restart $writer"
+        start_container "$writer" 2>/dev/null && log "restarted $writer, which an earlier run left stopped" || log "could not restart $writer"
       fi
     done
   done
@@ -196,7 +212,7 @@ cleanup() {
   # 1. Restart what we stopped, each independently, whatever else fails.
   for name in "${WRITERS_START_ORDER[@]}"; do
     if printf '%s\n' "${stopped[@]:-}" | grep -qx -- "$name"; then
-      if podman start "$name" >/dev/null 2>&1; then
+      if start_container "$name" 2>/dev/null; then
         :
       else
         restart_failed=1
@@ -334,7 +350,7 @@ SQL
   step="restart writers"
   for container in "${WRITERS_START_ORDER[@]}"; do
     if printf '%s\n' "${stopped[@]:-}" | grep -qx -- "$container"; then
-      podman start "$container" >/dev/null || die "could not restart $container"
+      start_container "$container" || die "could not restart $container"
       unmark_stopped "$container"
     fi
   done

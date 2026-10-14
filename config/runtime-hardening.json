@@ -512,6 +512,39 @@
       "health": true,
       "capAdd": [],
       "exceptions": []
+    },
+    "telos-sanitize-restore": {
+      "container": "telos-sanitize-restore",
+      "oneShot": true,
+      "image": {
+        "kind": "built",
+        "artifact": "images/gateway"
+      },
+      "uid": 10001,
+      "user": "10001:10001",
+      "networks": [
+        "telos-db"
+      ],
+      "publishedPorts": [],
+      "listeners": [],
+      "writable": {
+        "volumes": [],
+        "tmpfs": {
+          "/tmp": 16
+        }
+      },
+      "limits": {
+        "cpus": 1,
+        "memoryMiB": 256,
+        "pids": 128,
+        "nofile": 4096
+      },
+      "restart": "no",
+      "stopGraceSeconds": 0,
+      "health": false,
+      "capAdd": [],
+      "exceptions": [],
+      "profile": "restore"
     }
   }
 }

@@ -98,7 +98,14 @@ PY
 esac
 exit 0
 SH
-chmod +x "$bin/podman" "$bin/restic"
+# systemd-run --scope [options] PROGRAM ARGS: records that a scope was used, then runs the program.
+cat >"$bin/systemd-run" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STUB_STATE/scope.log"
+while [[ "${1:-}" == --* ]]; do shift; done
+exec "$@"
+SH
+chmod +x "$bin/podman" "$bin/restic" "$bin/systemd-run"
 
 # ------------------------------------------------------------------ the node
 make_node() {  # prints the node directory
@@ -119,7 +126,7 @@ run_backup() {  # CASE [VAR=value ...] -> runs the script; output in $work/out-C
   local case_id="$1"; shift
   env -i HOME="$work" PATH="$bin:/usr/bin:/bin" \
     STUB_STATE="$work/stub-$case_id" TELOS_NODE_PATH="$work/node-$case_id" TELOS_BACKUP_TMP_ROOT="$work/tmp-$case_id" \
-    TELOS_RELEASE_ROOT="$work/release-$case_id" TELOS_BACKUP_REQUIRE_ROOT=0 \
+    TELOS_RELEASE_ROOT="$work/release-$case_id" TELOS_BACKUP_REQUIRE_ROOT=0 TELOS_START_IN_SCOPE=1 \
     RESTIC_REPOSITORY="sftp:backup@offsite.example:/srv/telos" RESTIC_PASSWORD_FILE="$work/pw-$case_id" \
     RESTIC_CREDENTIALS_FILE="$work/cred-$case_id" RESTIC_CACHE_DIR="$work/cache" "$@" \
     bash scripts/backup.sh >"$work/out-$case_id" 2>&1
@@ -153,6 +160,10 @@ for file in postgres.dump grimmory.sql node.env node-config.tar traefik-acme.tar
   [[ -f "$snap/$file" ]] || fail "snapshot lacks $file"
 done
 grep -qx 'scheduled' "$snap.tags" && grep -qx 'telos' "$snap.tags" && grep -q '^release:' "$snap.tags" && grep -q '^candidate:' "$snap.tags" || fail "snapshot tags are wrong: $(cat "$snap.tags")"
+# Restarted services run in a scope of their own: conmon left in the one-shot unit's cgroup
+# would be killed, and the services with it, when the unit ends.
+grep -q 'podman start telos-traefik' "$work/stub-ok/scope.log" && grep -q 'podman start telos-core' "$work/stub-ok/scope.log" \
+  || fail "restarts did not go through a transient scope: $(cat "$work/stub-ok/scope.log" 2>/dev/null)"
 # Order matters: writers are restarted BEFORE the upload begins.
 restart_line="$(grep -n '^start telos-traefik' "$work/stub-ok/podman.log" | head -1 | cut -d: -f1)"
 [[ -n "$restart_line" ]] || fail "writers were never restarted"
