@@ -42,6 +42,51 @@ detect_runtime() {
   printf 'podman'
 }
 
+# --- bridge forwarding ------------------------------------------------------
+# The OPEN Telos networks must forward IPv4: the ingress bridge carries published ports in (Traefik), the egress bridge carries
+# the egress proxy out. netavark 1.16 keeps each bridge's sysctls in /run/sysctl.d/10-netavark-<bridge>.conf and does not remove
+# the file when the bridge goes away; systemd-sysctl re-applies it when udev adds a later bridge of the same name. An open
+# network that lands on a name an internal network once used therefore comes up with forwarding OFF and cannot be reached from
+# another host, while loopback probes (which never cross the bridge) still pass. Found by a live rollback restore, whose
+# databases-first start gives the networks different bridge names. The internal networks must stay off, so they are never touched.
+OPEN_NETWORKS=(telos-ingress telos-egress)
+
+# open_network_forwarding — one "<network> <bridge> <on|off|unknown>" line per open network that exists on this host.
+open_network_forwarding() {
+  local runtime name bridge value state
+  runtime="$(detect_runtime)"
+  for name in "${OPEN_NETWORKS[@]}"; do
+    bridge="$($runtime network inspect "$name" --format '{{.NetworkInterface}}' 2>/dev/null)" || continue
+    [[ "$bridge" =~ ^[A-Za-z0-9_.-]+$ ]] || continue
+    value="$(cat "${TELOS_PROC_SYS:-/proc/sys}/net/ipv4/conf/$bridge/forwarding" 2>/dev/null)" || value=""
+    case "$value" in 1) state=on ;; 0) state=off ;; *) state=unknown ;; esac
+    printf '%s %s %s\n' "$name" "$bridge" "$state"
+  done
+}
+
+# bridge_forwarding_applies — a rootful production host. Rootless development has no host bridge to forward. (TELOS_PROC_SYS, a
+# directory standing in for /proc/sys, is the test seam; it also stands in for root.)
+bridge_forwarding_applies() { [ "${TELOS_DEV:-0}" != 1 ] && { [ "$(id -u)" -eq 0 ] || [ -n "${TELOS_PROC_SYS:-}" ]; }; }
+
+# ensure_open_network_forwarding — switch forwarding on for an open Telos bridge that has it off; 1 if that is impossible.
+ensure_open_network_forwarding() {
+  bridge_forwarding_applies || return 0
+  local name bridge state file rc=0
+  while read -r name bridge state; do
+    [ "$state" = off ] || continue
+    file="${TELOS_PROC_SYS:-/proc/sys}/net/ipv4/conf/$bridge/forwarding"
+    if printf '1' >"$file" 2>/dev/null && [ "$(cat "$file" 2>/dev/null)" = 1 ]; then
+      warn "IPv4 forwarding was off on $bridge ($name), so no other host could reach the node; it is on now"
+      note "netavark had re-applied a stale /run/sysctl.d/10-netavark-$bridge.conf; telos start checks this every time."
+    else
+      warn "IPv4 forwarding is off on $bridge ($name) and could not be turned on; published ports are unreachable from other hosts"
+      note "as root: sysctl -w net.ipv4.conf.$bridge.forwarding=1"
+      rc=1
+    fi
+  done < <(open_network_forwarding)
+  return "$rc"
+}
+
 # compose_prepare — verify the runtime contract and set COMPOSE_CMD.
 #   * production runs rootful (`sudo telos ...`); development may be rootless;
 #   * the Compose provider is an absolute, operator-verified podman-compose

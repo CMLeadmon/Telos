@@ -100,6 +100,12 @@ never from the newer tree the script belongs to, and restores the databases, vol
 [`backup-and-restore.md`](./backup-and-restore.md), sanitizing sessions, devices and invites. The journal then reads
 `restored`. A same-host restore never satisfies the `separate-host-restore` gate.
 
+**After any stop and start (a restore included)** `telos start` checks that the open networks' bridges (`telos-ingress`, `telos-egress`) forward IPv4
+and turns forwarding on if a stale netavark file switched it off (`/run/sysctl.d/10-netavark-<bridge>.conf` is re-applied by `systemd-sysctl` to a later
+bridge of the same name); the internal networks are never touched. `telos status` shows a "Host network" section and fails while an open bridge forwards
+nothing, and an upgrade, rollback or restore does not call the node ready until it does. Without this a node can report 12/12 healthy on loopback while no
+other host can reach it.
+
 Neither command deletes a generation or a journal. Operators remove old generations deliberately, once the retention
 they want has passed.
 

@@ -106,6 +106,17 @@ run() {
     fi
   done <<< "$names"
 
+  # The open bridges must forward IPv4 or no other host can reach the node (see common.sh). Read-only here; `telos start` repairs.
+  local net_rows="" net_json="" nname nbridge nstate
+  if bridge_forwarding_applies; then
+    while read -r nname nbridge nstate; do
+      [ -n "$nname" ] || continue
+      net_rows="${net_rows}${nname} ${nbridge} ${nstate}"$'\n'
+      net_json="${net_json}${net_json:+,}{\"name\":\"$nname\",\"bridge\":\"$nbridge\",\"forwarding\":\"$nstate\"}"
+      [ "$nstate" = off ] && problems=$((problems + 1))
+    done <<< "$(open_network_forwarding)"
+  fi
+
   local health_raw="" health_parsed="" overall=""
   health_raw="$(gateway_health)"
   if [ -n "$health_raw" ]; then
@@ -114,9 +125,9 @@ run() {
   fi
 
   if [ "$json_out" -eq 1 ]; then
-    printf '{"runtime":"%s","containers":[%s],"gateway":%s}\n' \
-      "$runtime" "$rows" "${health_raw:-null}"
-    [ "$healthy" -eq "$total" ] || return 1
+    printf '{"runtime":"%s","containers":[%s],"gateway":%s,"network":[%s]}\n' \
+      "$runtime" "$rows" "${health_raw:-null}" "$net_json"
+    [ "$healthy" -eq "$total" ] && [ "$problems" -eq 0 ] || return 1
     return 0
   fi
 
@@ -130,6 +141,18 @@ run() {
   else
     printf '\n%sGateway dependencies%s  %sunreachable — telos-core is not serving%s\n' \
       "$C_BOLD" "$C_OFF" "$C_DIM" "$C_OFF"
+  fi
+
+  if [ -n "$net_rows" ]; then
+    printf '\n%sHost network%s  %s(bridge forwarding)%s\n\n' "$C_BOLD" "$C_OFF" "$C_DIM" "$C_OFF"
+    while read -r nname nbridge nstate; do
+      [ -n "$nname" ] || continue
+      case "$nstate" in
+        on)  printf '  %s  %-22s %s%s forwarding on%s\n' "$(paint ok)" "$nname" "$C_DIM" "$nbridge" "$C_OFF" ;;
+        off) printf '  %s  %-22s %s forwarding OFF: other hosts cannot reach this node; telos start repairs it\n' "$(paint bad)" "$nname" "$nbridge" ;;
+        *)   printf '  %s  %-22s %s%s forwarding unknown%s\n' "$(paint warn)" "$nname" "$C_DIM" "$nbridge" "$C_OFF" ;;
+      esac
+    done <<< "$net_rows"
   fi
 
   printf '\n%s%d/%d services up%s' "$C_BOLD" "$healthy" "$total" "$C_OFF"

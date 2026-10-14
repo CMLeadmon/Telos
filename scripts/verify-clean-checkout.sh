@@ -261,6 +261,7 @@ tests/operations/exposure_audit_test.py
 tests/operations/egress_drill_test.py
 tests/operations/capacity_drill_test.py
 tests/operations/upgrade_drill_test.py
+tests/operations/network_forwarding_test.sh
 tests/operations/edge_policy_test.py
 tests/operations/postgres_restore_roles_test.sh
 tests/operations/backup_restore_test.sh

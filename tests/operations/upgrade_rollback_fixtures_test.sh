@@ -13,4 +13,5 @@ python3 -I tests/operations/generations_test.py
 python3 -I tests/operations/predecessor_test.py
 python3 -I tests/operations/upgrade_drill_test.py
 bash tests/operations/upgrade_rollback_test.sh
+bash tests/operations/network_forwarding_test.sh
 echo "upgrade/rollback fixtures: records, generations, journal, recovery planning, predecessor policy and orchestration and the live-drill judgement verified"

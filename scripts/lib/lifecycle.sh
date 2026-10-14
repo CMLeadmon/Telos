@@ -42,11 +42,11 @@ check_images() {
   done <<<"$refs"
 }
 
-# Ready = every expected container healthy AND the gateway reports ok.
+# Ready = every expected container healthy AND the gateway reports ok AND no open bridge has forwarding off.
 node_ready() {   # GENERATION_ID
   local body
   body="$(cli "$1" status --json 2>/dev/null)" || return 1
-  python3 -I -c 'import json,sys; d = json.loads(sys.argv[1]); sys.exit(0 if (d.get("gateway") or {}).get("status") == "ok" else 1)' "$body" 2>/dev/null
+  python3 -I -c 'import json,sys; d = json.loads(sys.argv[1]); sys.exit(0 if (d.get("gateway") or {}).get("status") == "ok" and all(n.get("forwarding") != "off" for n in d.get("network") or []) else 1)' "$body" 2>/dev/null
 }
 
 wait_ready() {   # GENERATION_ID

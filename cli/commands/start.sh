@@ -85,6 +85,12 @@ run() {
     sleep 3
   done
 
+  # A started stack that no other host can reach is not started: the bridge check repairs what it can and fails otherwise.
+  if ! ensure_open_network_forwarding; then
+    warn "the stack is up but its published ports are unreachable from other hosts"
+    return 1
+  fi
+
   printf '\n'
   # Delegate the report so start and status can never disagree.
   . "$COMMAND_DIR/status.sh"
