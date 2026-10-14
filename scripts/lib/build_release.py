@@ -253,7 +253,7 @@ def build_images(tools, source, tree, lock_dir, no_cache, existing=None):
                 "--label", f"org.opencontainers.image.revision={source.commit}",
                 "--label", f"org.opencontainers.image.source=telos-{source.version}-source.tar",
                 "-f", str(tree / context / dockerfile)]
-        if no_cache:
+        if no_cache or os.environ.get("TELOS_BUILD_NO_CACHE") == "1":
             argv.append("--no-cache")
         argv.append(str(tree / context))
         run(argv, cwd=tree, env=env, what=f"podman build {service}")

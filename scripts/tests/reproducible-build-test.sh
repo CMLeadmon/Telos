@@ -1,65 +1,33 @@
 #!/usr/bin/env bash
-# reproducible-build-test.sh — prove two builds of unchanged source agree.
+# reproducible-build-test.sh -- prove the release builder is reproducible: the same commit, built twice in different
+# directories, time zones, locales and umasks (the second time without a build cache), yields byte-identical candidates
+# (every file, so the graph documents, the lock and the SBOMs too).
 #
-# Builds the telos-core image twice (the second with --no-cache so every
-# layer re-runs), then requires:
-#   - identical image configuration (env, cmd, workdir, ports) — the image
-#     Created timestamp is the explicitly normalized exception;
-#   - identical Go dependency manifests (go version -m);
-#   - identical embedded frontend inventory, proven by identical binary
-#     checksums (the export is //go:embed'ed into telos-core).
+# It runs the real builder (scripts/build-release.sh --rehearsal ... --verify-reproducible is the in-build form of this
+# check; this is the cross-environment form) and so needs Podman, skopeo, zstd, network access for the locked base images
+# and the locked Syft. Without them it exits 3 (not_run) -- it never passes by skipping.
 set -euo pipefail
-
 cd "$(git rev-parse --show-toplevel)"
 
-tmp="$(mktemp -d)"
-cleanup() {
-	rm -rf "$tmp"
-	podman rmi -f telos-repro-a telos-repro-b >/dev/null 2>&1 || true
-}
+for tool in podman skopeo zstd git python3; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "reproducible-build: not_run: $tool is not installed" >&2; exit 3; }
+done
+commit="$(git rev-parse HEAD)"
+version="$(python3 -c 'import json; print(json.load(open("frontend/package.json"))["version"])')"
+work="$(mktemp -d)"
+cleanup() { rm -rf "${work:?}"; }
 trap cleanup EXIT
 
-echo "repro: building image A"
-podman build -q -f backend/Dockerfile -t telos-repro-a . >/dev/null
-echo "repro: building image B (--no-cache)"
-podman build -q --no-cache -f backend/Dockerfile -t telos-repro-b . >/dev/null
+echo "reproducible-build: building $version at ${commit:0:12} (first build)"
+( umask 022; TZ=UTC LC_ALL=C bash scripts/build-release.sh --rehearsal --source-commit "$commit" --version "$version" --out-dir "$work/one" ) >"$work/one.log" 2>&1 \
+  || { tail -20 "$work/one.log" >&2; echo "reproducible-build: the first build failed" >&2; exit 1; }
 
-fail=0
+echo "reproducible-build: building again elsewhere, in another time zone, locale and umask, with no cache"
+( umask 077; TZ=Pacific/Auckland LC_ALL=C.UTF-8 TELOS_BUILD_NO_CACHE=1 bash scripts/build-release.sh --rehearsal --source-commit "$commit" --version "$version" --out-dir "$work/two/deeper" ) >"$work/two.log" 2>&1 \
+  || { tail -20 "$work/two.log" >&2; echo "reproducible-build: the second build failed" >&2; exit 1; }
 
-config_a="$(podman image inspect --format '{{json .Config}}' telos-repro-a)"
-config_b="$(podman image inspect --format '{{json .Config}}' telos-repro-b)"
-if [ "$config_a" != "$config_b" ]; then
-	echo "repro: image configurations differ" >&2
-	diff <(printf '%s' "$config_a") <(printf '%s' "$config_b") >&2 || true
-	fail=1
+if ! python3 scripts/lib/build_release.py compare --a "$work/one/candidate" --b "$work/two/deeper/candidate"; then
+  echo "reproducible-build: FAIL -- the two builds differ" >&2
+  exit 1
 fi
-
-for img in a b; do
-	ctr="$(podman create "telos-repro-$img")"
-	podman cp "$ctr:/app/telos-core" "$tmp/telos-core-$img"
-	podman rm "$ctr" >/dev/null
-done
-
-sum_a="$(sha256sum "$tmp/telos-core-a" | awk '{print $1}')"
-sum_b="$(sha256sum "$tmp/telos-core-b" | awk '{print $1}')"
-
-go_image="docker.io/library/golang:1.26.5"
-for img in a b; do
-	podman run --rm -v "$tmp:/x:z" "$go_image" \
-		go version -m "/x/telos-core-$img" | sed '1d' >"$tmp/modules-$img.txt"
-done
-if ! diff -u "$tmp/modules-a.txt" "$tmp/modules-b.txt"; then
-	echo "repro: Go dependency manifests differ" >&2
-	fail=1
-fi
-
-if [ "$sum_a" != "$sum_b" ]; then
-	echo "repro: telos-core binaries differ ($sum_a vs $sum_b) — embedded" \
-		"frontend inventory or build inputs are not reproducible" >&2
-	fail=1
-fi
-
-if [ "$fail" -ne 0 ]; then
-	exit 1
-fi
-echo "repro: PASS — identical config, dependency manifest, and embedded inventory ($sum_a)"
+echo "reproducible-build: PASS -- $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["candidateLockDigest"])' "$work/one/build-record.json") built identically twice"
