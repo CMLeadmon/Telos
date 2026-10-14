@@ -254,6 +254,11 @@ func main() {
 		runMigrateCommand()
 		return
 	}
+	if mode == "sanitize-restore" {
+		// After a restore, before any traffic: revoke every credential the backup carried.
+		// Dispatched ahead of secret, key and Redis initialization, which it does not need.
+		os.Exit(runSanitizeRestoreCommand(os.Args[2:]))
+	}
 	if mode == "audiobook-migrate" {
 		runAudiobookMigrateCommand(os.Args[2:])
 		return

@@ -1,16 +1,40 @@
 [Unit]
 Description=Telos encrypted off-node backup
-After=network-online.target
+Documentation=file:///opt/telos/documentation/operations/backup-and-restore.md
+After=network-online.target podman.service
 Wants=network-online.target
+# A node with no repository configured is not backed up and says so; nothing here
+# initializes a repository (that is a deliberate, one-time operator action).
+ConditionPathExists=/etc/telos/backup.env
+StartLimitIntervalSec=6h
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
-# Four-hour watchdog; unconditional plaintext-stage cleanup happens in the
-# script's exit trap regardless of outcome.
-TimeoutStartSec=4h
-User=telos
+User=root
+UMask=0077
+# Neither NoNewPrivileges nor PrivateTmp is set, deliberately, and for one reason: on Ubuntu 26.04
+# the service would then run podman inside a restricted process tree, and
+#   * NoNewPrivileges makes AppArmor deny the signals podman sends to the containers
+#     (SIGTERM is silently ignored; `podman stop` waits out its whole timeout), and
+#   * PrivateTmp gives the service its own mount namespace, where rootful Podman cannot
+#     unmount the network namespaces of containers started outside it.
+# The unit still runs with UMask=0077, and the staging directory is root-only (0700) and is
+# removed on every exit path by the script. See docs/implementation/design-alterations.md A22.
 EnvironmentFile=/etc/telos/backup.env
-ExecStart=/opt/telos/scripts/backup.sh
+Environment=TELOS_NODE_PATH=/var/lib/telos
+Environment=TELOS_RELEASE_ROOT=/opt/telos
+ExecStart=/opt/telos/scripts/backup.sh --candidate-lock /srv/telos/current/candidate-lock.json --result-out /var/lib/telos/state/backup-latest.result.json
+# The script traps SIGTERM, restarts the services it stopped and removes its plaintext
+# stage, so give it time to do that before systemd escalates to SIGKILL.
+KillSignal=SIGTERM
+TimeoutStopSec=10min
+TimeoutStartSec=4h
+# Another maintenance operation holding the lock (exit 75) is not a failure; the next
+# firing tries again. A real failure is retried after 30 minutes, three times in six hours.
+SuccessExitStatus=75
+Restart=on-failure
+RestartSec=30min
 Nice=10
 IOSchedulingClass=idle
 

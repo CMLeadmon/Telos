@@ -77,7 +77,9 @@ backup_done=0
 # and the EXIT cleanup runs.
 child_pid=""
 run_interruptible() {
-  "$@" 9>&- &
+  # An asynchronous command in a non-interactive shell reads /dev/null unless stdin is
+  # redirected explicitly, which would silently discard a here-document or pipe meant for it.
+  "$@" 9>&- <&0 &
   child_pid=$!
   local status=0
   wait "$child_pid" || status=$?

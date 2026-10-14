@@ -121,7 +121,7 @@ backend/account_lifecycle_integration_test.go
 documentation/operations/data-retention.md
 backend/backup_manifest.go
 backend/backup_manifest_test.go
-scripts/maintenance-lock.sh
+scripts/lib/maintenance.sh
 scripts/prune-backups.sh
 scripts/verify-recovery-escrow.sh
 scripts/tests/backup_test.sh

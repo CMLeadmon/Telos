@@ -1,12 +1,12 @@
 [Unit]
-Description=Hourly Telos backup check (performs a snapshot only when the last
- verified success is at least 12 hours old; a failure leaves the operation due
- so the next firing retries automatically).
+Description=Run the Telos encrypted off-node backup four times a day
 
 [Timer]
-OnCalendar=hourly
+OnCalendar=*-*-* 00,06,12,18:00:00
+RandomizedDelaySec=30min
+# A node that was off at a scheduled time catches up on the next boot.
 Persistent=true
-RandomizedDelaySec=5m
+Unit=telos-backup.service
 
 [Install]
 WantedBy=timers.target

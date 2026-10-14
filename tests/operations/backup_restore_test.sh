@@ -39,10 +39,13 @@ case "$1" in
     [[ "$fail_at" == restart ]] && exit 1
     touch "$state/running/${!#}"; exit 0 ;;
   exec)
-    shift; [[ "$1" == -i ]] && { shift; cat >/dev/null; }
+    shift; input=""; [[ "$1" == -i ]] && { shift; input="$(cat)"; }
     name="$1"; shift; joined="$*"
     if [[ "$joined" == *pg_dump* ]]; then [[ "$fail_at" == pgdump ]] && exit 1; printf 'PGDMP-binary-dump'; exit 0; fi
-    if [[ "$joined" == *psql* ]]; then printf '[{"version":1,"name":"0001_init.sql","checksum":"%064d"},{"version":2,"name":"0002_x.sql","checksum":"%064d"}]\n' 1 2; exit 0; fi
+    if [[ "$joined" == *psql* ]]; then
+      # The query arrives on stdin; an empty read means the script dropped it.
+      [[ "$input" == *schema_migrations* ]] || exit 1
+      printf '[{"version":1,"name":"0001_init.sql","checksum":"%064d"},{"version":2,"name":"0002_x.sql","checksum":"%064d"}]\n' 1 2; exit 0; fi
     if [[ "$joined" == *mariadb-dump* ]]; then [[ "$fail_at" == mariadb ]] && exit 1; printf -- '-- mariadb dump\n'; exit 0; fi
     exit 0 ;;
   volume)
