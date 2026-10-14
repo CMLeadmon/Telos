@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -659,5 +660,40 @@ func TestLoginAnswersJSONWithItsContentType(t *testing.T) {
 	var body map[string]string
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["status"] != "success" {
 		t.Errorf("login body = %q (%v)", rec.Body.String(), err)
+	}
+}
+
+// A file id is the base64url of its path, so it is 36 characters long whenever the
+// filename is 27 bytes. withAuth once took any 36-character path id for a channel
+// UUID and handed it to Postgres, which answered 500 to every member (the owner's
+// global permission skipped the query) who tried to open such a file.
+func TestFileIDsThatLookLikeUUIDsInLengthOnlyAreNotChannelScopes(t *testing.T) {
+	f := withFixture(t)
+	ctx := context.Background()
+	var userID string
+	if err := f.DB.QueryRow(ctx, `INSERT INTO users (username, password_hash) VALUES ('fileviewer','x') RETURNING id`).Scan(&userID); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := f.DB.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) VALUES ($1, 'Member')`, userID); err != nil {
+		t.Fatalf("grant role: %v", err)
+	}
+	_, _, access, err := registerDevice(ctx, userID, "Phone", "ios", "1.0.0")
+	if err != nil {
+		t.Fatalf("registerDevice: %v", err)
+	}
+	name := "f4e89a57-rehearsal-note.pdf" // 27 bytes
+	id := base64.RawURLEncoding.EncodeToString([]byte(name))
+	if len(id) != 36 {
+		t.Fatalf("fixture error: id is %d characters", len(id))
+	}
+	reached := false
+	handler := withAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { reached = true }), "view_files")
+	r := httptest.NewRequest("GET", "/api/v1/files/"+id+"/download", nil)
+	r.SetPathValue("id", id)
+	r.Header.Set("Authorization", "Bearer "+access)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, r)
+	if rec.Code != http.StatusOK || !reached {
+		t.Fatalf("a 36-character file id answered %d (handler reached: %v), want the handler to run", rec.Code, reached)
 	}
 }

@@ -234,11 +234,14 @@ class Journey:
         def accept():
             self.member.json("POST", "/api/v1/auth/invites/accept", expected=(200, 201),
                              json_body={"token": invite["token"], "username": member["username"], "password": member["password"]})
+            # Accepting an invite creates the account; the member then signs in.
+            self.member.json("POST", "/api/v1/auth/login", expected=(200,),
+                             json_body={"username": member["username"], "password": member["password"]})
             me = self.member.json("GET", "/api/v1/auth/me")
             if (me.get("Username") or me.get("username")) != member["username"].lower():
                 raise Assertion("the member session is not for the invited account")
             return "member joined"
-        self.check("auth.accept", "an invited member joins and holds a session", accept)
+        self.check("auth.accept", "an invited member joins, signs in and holds a session", accept)
 
     def chat(self):
         marker = f"smoke-{uuid.uuid4().hex[:10]}"
@@ -354,12 +357,13 @@ class Journey:
         self.check("commentary.file", "commentary attaches to and reads from a file", comment)
 
         def delete():
-            self.member.request("DELETE", f"/api/v1/files/{state['id']}")
+            # Deleting needs manage_files, which a member does not hold: the owner cleans up.
+            self.owner.request("DELETE", f"/api/v1/files/{state['id']}")
             status, _, _ = self.member.request("GET", f"/api/v1/files/{state['id']}/download")
             if status != 404:
                 raise Assertion(f"a deleted file still answers {status}")
             return "deleted"
-        self.check("files.delete", "the member deletes the file", delete)
+        self.check("files.delete", "the owner deletes the member's file", delete)
 
     # ---- outage stages
     def stage(self, name):

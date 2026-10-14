@@ -109,7 +109,9 @@ def main():
         "video": {"id": identifier(video)},
         "audio": {"id": identifier(audio)},
         "ebook": {"id": identifier(book), "format": "epub"},
-        "upload": {"filename": "rehearsal-note.txt", "text": "Telos rehearsal upload.\n"},
+        # Uploads are limited to document, image, audio and video types and sniffed by
+        # content, so the text fixture is a minimal PDF header rather than a .txt.
+        "upload": {"filename": "rehearsal-note.pdf", "text": "%PDF-1.4\n%Telos rehearsal upload\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"},
     }
     with open(args.out, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=1)

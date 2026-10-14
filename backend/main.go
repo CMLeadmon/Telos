@@ -733,11 +733,12 @@ func withAuth(next http.Handler, requiredPerm string) http.Handler {
 			if cParam == "" {
 				cParam = r.PathValue("id")
 			}
-			if cParam != "" {
-				// verify if it is valid UUID
-				if len(cParam) == 36 {
-					channelID = &cParam
-				}
+			// Only a real UUID can scope a permission to a channel. A file id is the
+			// base64url of its path, which is exactly 36 characters for a 27-byte
+			// name; treating any 36-character value as a channel sent Postgres an
+			// invalid uuid and answered 500 to every member who opened such a file.
+			if cParam != "" && looksLikeUUID(cParam) {
+				channelID = &cParam
 			}
 
 			allowed, err := hasPermission(r.Context(), user, requiredPerm, channelID)

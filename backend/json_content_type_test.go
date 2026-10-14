@@ -60,3 +60,54 @@ func TestHandlersThatEncodeJSONSetAContentType(t *testing.T) {
 		}
 	}
 }
+
+// The content type must be set before WriteHeader or it is silently dropped, so a
+// WriteHeader immediately followed by writeJSON (which sets it) is the same defect
+// as having no Content-Type at all.
+func TestWriteJSONIsNeverPrecededByWriteHeader(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fset := token.NewFileSet()
+	for _, file := range files {
+		if strings.HasSuffix(file, "_test.go") {
+			continue
+		}
+		parsed, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatalf("%s: %v", file, err)
+		}
+		ast.Inspect(parsed, func(node ast.Node) bool {
+			block, ok := node.(*ast.BlockStmt)
+			if !ok {
+				return true
+			}
+			for i := 0; i+1 < len(block.List); i++ {
+				if callName(block.List[i]) == "WriteHeader" && callName(block.List[i+1]) == "writeJSON" {
+					t.Errorf("%s: %s sets the status before writeJSON sets the content type, so the type is dropped",
+						file, fset.Position(block.List[i].Pos()))
+				}
+			}
+			return true
+		})
+	}
+}
+
+func callName(statement ast.Stmt) string {
+	expression, ok := statement.(*ast.ExprStmt)
+	if !ok {
+		return ""
+	}
+	call, ok := expression.X.(*ast.CallExpr)
+	if !ok {
+		return ""
+	}
+	switch fun := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fun.Sel.Name
+	case *ast.Ident:
+		return fun.Name
+	}
+	return ""
+}

@@ -133,8 +133,7 @@ func handleCreateAnnotation(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, a)
+	writeJSONStatus(w, http.StatusCreated, a)
 }
 
 func handlePatchAnnotation(w http.ResponseWriter, r *http.Request) {
@@ -239,8 +238,7 @@ func handleCreateAnnotationReply(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, reply)
+	writeJSONStatus(w, http.StatusCreated, reply)
 }
 
 func handleDeleteAnnotationReply(w http.ResponseWriter, r *http.Request) {
@@ -326,13 +324,21 @@ func commentCreateHandler(targetType string) http.HandlerFunc {
 			writeAPIError(w, r, http.StatusInternalServerError, "internal_error", "The request could not be completed.")
 			return
 		}
-		w.WriteHeader(http.StatusCreated)
-		writeJSON(w, a)
+		writeJSONStatus(w, http.StatusCreated, a)
 	}
 }
 
 // writeJSON is a compact JSON responder.
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
+}
+
+// writeJSONStatus answers with a non-200 status. The content type has to be set
+// before WriteHeader or it is ignored, which is why callers must not do
+// WriteHeader followed by writeJSON.
+func writeJSONStatus(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }

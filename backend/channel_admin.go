@@ -171,8 +171,7 @@ func handleAdminCreateChannel(w http.ResponseWriter, r *http.Request) {
 		channelAdminErr(w, r, err)
 		return
 	}
-	w.WriteHeader(http.StatusCreated)
-	writeJSON(w, map[string]string{"id": id})
+	writeJSONStatus(w, http.StatusCreated, map[string]string{"id": id})
 }
 
 func handleAdminUpdateChannel(w http.ResponseWriter, r *http.Request) {
