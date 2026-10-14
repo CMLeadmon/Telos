@@ -66,8 +66,16 @@ def read_json(path):
     return document if isinstance(document, dict) else None
 
 
+# The only variable taken from this program's own environment: the operator-verified Compose provider, which a node's operator
+# gets through /etc/environment and which the CLI refuses to guess. It is passed on, never read from the drill's descriptor.
+PASSED_THROUGH = ("PODMAN_COMPOSE_PROVIDER",)
+
+
 def child_env(base, node, generation=None):
     env = {"PATH": PATH, "LC_ALL": "C", "HOME": "/root", "TELOS_RELEASE_BASE": base, "TELOS_NODE_PATH": node}
+    for name in PASSED_THROUGH:
+        if os.environ.get(name):
+            env[name] = os.environ[name]
     if generation:
         env["TELOS_RELEASE_ROOT"] = os.path.join(base, "generations", generation)
     return env
@@ -111,6 +119,12 @@ def cli(base, node, generation, *arguments):
     return run([os.path.join(base, "generations", generation, "telos"), *arguments], child_env(base, node, generation), PROBE_TIMEOUT)
 
 
+def provider_facts(base, node):
+    """Can the lifecycle scripts find the Compose provider? Without it an upgrade fails after it has stopped the writers."""
+    path = child_env(base, node).get("PODMAN_COMPOSE_PROVIDER", "")
+    return {"set": bool(path), "usable": bool(path) and os.path.isabs(path) and os.path.isfile(path) and os.access(path, os.X_OK)}
+
+
 def listing(path):
     try:
         return sorted(name for name in os.listdir(path) if not name.startswith("."))
@@ -136,7 +150,7 @@ def mode_state(base, node, identifiers):
         "receipt": read_json(os.path.join(node, "state", "installed-generation.json")),
         "journal": read_json(os.path.join(node, "state", "operation.json")),
         "operationsKept": listing(os.path.join(node, "state", "operations")),
-        "schema": schema, "gateway": gateway,
+        "schema": schema, "gateway": gateway, "composeProvider": provider_facts(base, node),
         "generations": {identifier: generation_facts(base, identifier) for identifier in identifiers},
         "rollbackDirs": listing(os.path.join(os.path.dirname(node), "telos-rollback")),
     }

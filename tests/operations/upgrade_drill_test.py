@@ -56,6 +56,7 @@ class FakeNode:
     def state(self):
         return {"schemaVersion": 1, "mode": "state", "observedAt": "2026-10-14T10:00:00Z", "current": self.current, "receipt": self.receipt,
                 "journal": copy.deepcopy(self.journal), "operationsKept": [f"{op}.json" for op in self.operations], "schema": self.schema, "gateway": self.gateway,
+                "composeProvider": {"set": "no-provider" not in self.faults, "usable": "no-provider" not in self.faults},
                 "generations": {PRED: {"present": PRED in self.installed, "migrations": {"min": 1, "current": 24, "max": 24}, "rollbackCompatibleThrough": 24},
                                 CAND: {"present": CAND in self.installed, "migrations": {"min": 10, "current": self.post_schema, "max": self.post_schema},
                                        "rollbackCompatibleThrough": self.cand_through}},
@@ -324,6 +325,9 @@ class StartStateTests(DrillCase):
     def test_the_node_must_start_on_the_predecessor(self):
         self.refused_without_changes(lambda n: (setattr(n, "current", CAND), setattr(n, "receipt", receipt(CAND))), "start.predecessor")
 
+    def test_a_node_whose_lifecycle_scripts_cannot_find_the_compose_provider_is_not_touched(self):
+        self.refused_without_changes(lambda n: n.faults.add("no-provider"), "start.provider")
+
     def test_an_unhealthy_node_is_not_upgraded(self):
         self.refused_without_changes(lambda n: setattr(n, "gateway", None), "start.healthy")
 
@@ -466,6 +470,27 @@ class NodeProgramTests(unittest.TestCase):
         code, out, _ = self.call("restore", str(self.base), str(self.node), self.cand, self.pred, "b" * 32, "t2", "rehearsal")
         self.assertIn("--rehearsal", self.log.read_text().splitlines()[-1])
         self.assertNotIn("--candidate-lock", self.log.read_text().splitlines()[-1])
+
+    def test_only_the_compose_provider_is_passed_to_the_scripts(self):
+        env_probe = self.base / "generations" / self.cand / "scripts" / "upgrade.sh"
+        env_probe.write_text(f'#!/usr/bin/env bash\necho "provider=${{PODMAN_COMPOSE_PROVIDER:-unset}} secret=${{SECRET_TOKEN:-unset}} release_base=$TELOS_RELEASE_BASE" >>"{self.log}"\n'
+                             'out=""; while [ $# -gt 0 ]; do [ "$1" = --result-out ] && out="$2"; shift; done; echo \'{"status":"complete"}\' >"$out"\n')
+        self.env = dict(os.environ, PODMAN_COMPOSE_PROVIDER="/opt/provider/podman-compose", SECRET_TOKEN="hunter2")
+        self.assertEqual(self.call("upgrade", str(self.base), str(self.node), self.cand, self.pred, "env1")[0], 0)
+        self.assertEqual(self.log.read_text().strip(), f"provider=/opt/provider/podman-compose secret=unset release_base={self.base}")
+        del self.env["PODMAN_COMPOSE_PROVIDER"]
+        self.assertEqual(self.call("upgrade", str(self.base), str(self.node), self.cand, self.pred, "env2")[0], 0)
+        self.assertIn("provider=unset", self.log.read_text().splitlines()[-1])
+
+    def test_state_says_whether_the_provider_is_usable(self):
+        provider = self.base / "podman-compose"
+        provider.write_text("#!/bin/sh\n")
+        self.env = dict(os.environ, PODMAN_COMPOSE_PROVIDER=str(provider))
+        self.assertEqual(json.loads(self.call("state", str(self.base), str(self.node))[1])["composeProvider"], {"set": True, "usable": False})
+        provider.chmod(0o755)
+        self.assertEqual(json.loads(self.call("state", str(self.base), str(self.node))[1])["composeProvider"], {"set": True, "usable": True})
+        self.env = {k: v for k, v in os.environ.items() if k != "PODMAN_COMPOSE_PROVIDER"}
+        self.assertEqual(json.loads(self.call("state", str(self.base), str(self.node))[1])["composeProvider"], {"set": False, "usable": False})
 
     def test_unsafe_arguments_are_refused_before_anything_runs(self):
         cases = [

@@ -35,6 +35,7 @@ installation is still pending, so this is not yet a certified deployment.
 | HTTPS trust | Platform-trusted HTTPS only |
 | Browser matrix | Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome |
 | Backup/recovery | Implemented and rehearsed; not shipping until Phase 5 candidate evidence |
+| Upgrade and rollback | Implemented and rehearsed on reference machines (upgrade, fast rollback, schema upgrade and restore); not shipping until Phase 5 candidate evidence |
 
 The server targets **Ubuntu 24.04+ only**, with `ubuntu-24.04` as the minimum
 reference release, `x86_64` as the initial architecture, and Podman `5.0.0` or
@@ -58,6 +59,12 @@ Encrypted off-node backup and recovery are blocked until Phase 5 candidate evide
 They require verified encrypted snapshots, 14 daily and 8 weekly retention,
 and a separate-host restore before the RPO of at most 24 hours and RTO of at
 most 4 hours can be claimed.
+
+Upgrade and rollback between installed generations (verified encrypted snapshot first, one-shot migrations, atomic
+activation, a binary rollback only where the previous generation accepts the schema, otherwise a restore of the recorded
+snapshot) are implemented and have been exercised on reference machines between rehearsal generations. That is
+implementation and rehearsal evidence only: they are not shipping until the frozen candidate passes the `upgrade-rollback`
+gate against an exact signed predecessor release, and a rehearsal never counts for that.
 
 ## Removed and unavailable surfaces
 

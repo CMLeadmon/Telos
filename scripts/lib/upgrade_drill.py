@@ -98,6 +98,8 @@ def evaluate_start(state, predecessor, candidate):
               f"the last operation ended {journal_state or 'never started'}", f"the last operation is {journal_state}"),
         check("start.candidate", "the candidate generation is installed and verifiable beside the predecessor", bool(present),
               f"generation {candidate[:12]} is installed", f"generation {candidate[:12]} is not installed on the node"),
+        check("start.provider", "the lifecycle scripts can find the Compose provider (PODMAN_COMPOSE_PROVIDER)", bool(get(state, "composeProvider", "usable")),
+              "the provider is set and executable", f"provider set {get(state, 'composeProvider', 'set')}, usable {get(state, 'composeProvider', 'usable')}: an upgrade would fail after stopping the writers"),
         check("start.healthy", "the gateway reports ok and the schema is readable", state.get("gateway") == "ok" and isinstance(state.get("schema"), int),
               f"gateway ok on schema {state.get('schema')}", f"gateway {state.get('gateway')}, schema {state.get('schema')}"),
     ]
