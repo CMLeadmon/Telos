@@ -436,3 +436,11 @@ takes 2 / 39 to 0 / 43; Postgres 16.14 → 16.15 takes 33 High to 24 but the `go
 Grimmory v3.5.0 and Jellyfin 10.11.11 were not re-measured. So most Criticals are fixable by moving pins; the `gosu` one and whatever remains in Grimmory and Jellyfin
 need an upstream rebuild, a different image, or a decision by a person (the gate cannot accept a Critical; a High needs an exact, expiring, operator-signed record).
 That triage is a maintainer decision and is **not** made here: `ci/risk-acceptances.json` stays empty.
+
+## P4-T7 (live, final) — capacity gate on the generation-layout node: PASSED as a rehearsal
+
+Run 4 of the 30-minute capacity drill (`telos-review/beta-evidence/vm/*capacity-rehearsal-4-generation-node-passed`), against the node serving rehearsal generation T2c from
+`/srv/telos/current`: **18 assertions passed, 1,800 s, 18,000 iterations, 0 failed requests, p95 83 ms (mutation p95 53 ms), every semantic check, 12 containers with no
+restart / OOM / health loss, CPU and memory inside bounds, storage kept, 25 live member sessions throughout, journey passes afterwards, fixture removed — and, unlike
+runs 1–3, an observed-runtime subject**: the node now has a generation receipt and every service runs a registry-pinned image. (The first attempt refused to start: the
+capacity target must name the exact candidate under test; it had `null`.) Limits: a rehearsal generation, one load host that is also a VM on the same machine as the node.
