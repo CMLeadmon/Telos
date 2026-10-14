@@ -645,6 +645,60 @@ class PipelineTests(unittest.TestCase):
         self.assertFalse((out2 / "subject.json").exists())
 
 
+    def command(self, *extra, rehearsal=True, commit=COMMIT):
+        """`supply_chain.py scan ...` through main(), with the scanners stubbed and the clock fixed."""
+        from unittest import mock
+        lock = self.write_lock()
+        source = self.dir / "src"
+        source.mkdir(exist_ok=True)
+        out = self.dir / f"out-{len(list(self.dir.glob('out-*')))}"
+        out.mkdir()
+        real = sc.scan
+        argv = ["scan", "--artifact-root", str(self.artifact_root), "--sbom-dir", str(self.sbom_dir), "--result-out", str(out / "result.json"),
+                "--tools-dir", str(self.tools), "--source-dir", str(source)]
+        argv += (["--rehearsal-lock", str(lock)] + (["--source-commit", commit] if commit else [])) if rehearsal else ["--candidate-lock", str(lock)] + (["--source-commit", commit] if commit else [])
+        with mock.patch.object(sc, "scan", side_effect=lambda *a, **k: real(*a, binary=self.binary, now=NOW)):
+            code = sc.main(argv + list(extra))
+        return code, out
+
+    def test_the_scan_command_writes_the_labelled_record_and_maps_the_verdict_to_the_exit_code(self):
+        self.generate()
+        code, out = self.command()
+        self.assertEqual(code, 0)
+        result = rg.verify_result_directory(out, "result.json")
+        self.assertEqual((result["recordKind"], result["status"], result["gateId"]), ("rehearsal", "passed", "candidate-supply-chain"))
+        self.assertTrue((out / "subject.json").exists() and (out / "scan-report.json").exists())
+        code, out = self.command(rehearsal=False, commit=None)
+        self.assertEqual(code, 0)
+        self.assertEqual(rg.verify_result_directory(out, "result.json")["recordKind"], "candidate")
+        self.scenario["trivy"] = {"Results": [{"Target": "x", "Vulnerabilities": [
+            {"VulnerabilityID": "CVE-2026-9", "PkgName": "libx", "InstalledVersion": "1", "Severity": "CRITICAL"}]}]}
+        self.save()
+        code, out = self.command()
+        self.assertEqual(code, sc.EXIT_FAILED)
+        failed = rg.verify_result_directory(out, "result.json")
+        self.assertEqual(failed["status"], "failed")
+        self.assertFalse((out / "subject.json").exists(), "a failing scan has no artifact subject")
+
+    def test_the_scan_command_refuses_a_commit_that_does_not_belong_to_the_lock_kind(self):
+        self.generate()
+        self.assertEqual(self.command(commit="2" * 40)[0], sc.EXIT_USAGE, "the rehearsal commit must be the one the lock was built from")
+        code, out = self.command(commit=None)   # the lock carries the commit; naming it is optional, contradicting it is not
+        self.assertEqual(code, 0)
+        self.assertEqual(rg.verify_result_directory(out, "result.json")["sourceCommit"], COMMIT)
+        self.assertEqual(self.command(rehearsal=False)[0], sc.EXIT_USAGE, "a candidate scan takes its commit from the lock, never from the command line")
+
+
+class ModuleShapeTests(unittest.TestCase):
+    def test_no_top_level_definition_appears_twice(self):
+        # A splice once left a second copy of write_scan_result, check_policy and a stale main behind; the later copy silently won at
+        # import and the live scan crashed (found by the first live run).
+        import ast
+        tree = ast.parse((ROOT / "scripts/lib/supply_chain.py").read_text(encoding="utf-8"))
+        names = [n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.ClassDef))]
+        self.assertEqual(sorted({n for n in names if names.count(n) > 1}), [])
+
+
 class CommandLineTests(unittest.TestCase):
     def test_policy_command_passes_on_the_repository(self):
         completed = subprocess.run([sys.executable, str(ROOT / "scripts/lib/supply_chain.py"), "policy"], capture_output=True, text=True)
