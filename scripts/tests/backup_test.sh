@@ -54,7 +54,9 @@ wait "$holder"
 # --- a killed holder frees the lock ---------------------------------------------------
 # The child closes descriptor 9, so killing the holder really releases the lock (a child
 # that inherited it would keep the lock held, which is the case backup.sh avoids).
-( exec bash -c '. scripts/lib/maintenance.sh; with_maintenance_lock bash -c "exec 9>&-; sleep 30"' ) &
+# The victim leads its own process group so the child it orphans can be removed afterwards (the gate runner rejects a test that
+# leaves a descendant running).
+setsid bash -c '. scripts/lib/maintenance.sh; with_maintenance_lock bash -c "exec 9>&-; sleep 30"' &
 victim=$!
 sleep 0.5
 rc=0; run_locked true || rc=$?
@@ -62,12 +64,14 @@ rc=0; run_locked true || rc=$?
 kill -KILL "$victim"; wait "$victim" 2>/dev/null || true
 sleep 0.3
 run_locked true || fail "the lock stayed held after its holder was SIGKILLed"
+kill -TERM -- "-$victim" 2>/dev/null || true   # the orphaned `sleep 30` shares the victim's process group
 
 # --- children started under the lock do not inherit it ---------------------------------
 # (backup.sh closes descriptor 9 for podman/restic so a container cannot keep it held.)
-( run_locked bash -c 'sleep 4 9>&- &' ) 
+( run_locked bash -c 'sleep 4 9>&- & echo $! >"'"$tmp"'/child.pid"' )
 rc=0; run_locked true || rc=$?
 [ "$rc" -eq 0 ] || fail "a background child that closed fd 9 still held the lock (rc=$rc)"
+kill "$(cat "$tmp/child.pid")" 2>/dev/null || true
 
 # --- backup "due" logic: a backup is due when the last success is >= 12h old -----------
 last_success_epoch=0; now=1000000000; due_threshold=$((12 * 3600))
