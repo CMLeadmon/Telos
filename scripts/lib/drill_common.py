@@ -165,3 +165,44 @@ def write_json(directory, name, document):
     path.parent.mkdir(parents=True, exist_ok=True)
     rg.write_atomic_exclusive(str(path), data)
     return {"path": name, "sha256": rg.raw_sha256(data)}
+
+
+def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, hosts, tool_versions, observed_at, attachments=(), printer=print, label="drill"):
+    """Write one gate-result record for an observing drill; return the shared exit code.
+
+    ``assertions`` is a list of {id, description, status, detail}; the verdict is failed if any failed,
+    not_run if any did not run, else passed. A passed drill also writes the observed-subject descriptor
+    naming the hosts it observed and every attachment. The runner, not this function, writes the
+    evidence envelope. ``observation`` must already be free of secrets (it is checked again here).
+    """
+    out_dir = Path(args.result_out).resolve().parent
+    statuses = {a["status"] for a in assertions}
+    status = "failed" if "failed" in statuses else "not_run" if "not_run" in statuses else "passed"
+    reason = {
+        "passed": f"{len(assertions)} assertions passed",
+        "failed": "failed: " + ", ".join(a["id"] for a in assertions if a["status"] == "failed")[:240],
+        "not_run": "not run: " + ", ".join(a["id"] for a in assertions if a["status"] == "not_run")[:240],
+    }[status]
+    files = [write_json(out_dir, "observation.json", observation) | {"kind": "report"},
+             write_json(out_dir, "assertions.json", {"schemaVersion": 1, "assertions": assertions}) | {"kind": "report"}]
+    for name, document in attachments:
+        files.append(write_json(out_dir, name, document) | {"kind": "report"})
+    record = {
+        "schemaVersion": 1, "recordKind": mode, "gateId": os.environ.get("TELOS_GATE_ID", gate_id), "sourceCommit": commit,
+        "candidateLockDigest": lock_digest, "status": status, "reason": reason, "subjectFile": None,
+        "attachments": files, "toolVersions": tool_versions,
+    }
+    if status == "passed":
+        subject = {
+            "schemaVersion": 1, "kind": "external-host", "sourceCommit": commit, "candidateLockDigest": lock_digest,
+            "observedAt": observed_at, "purpose": record["gateId"], "hosts": sorted(hosts, key=lambda h: h["hostId"]),
+            "records": sorted(({"path": a["path"], "sha256": a["sha256"]} for a in files), key=lambda r: r["path"]),
+        }
+        files.append(write_json(out_dir, "subject.json", subject) | {"kind": "subject"})
+        record["subjectFile"] = "subject.json"
+    files.sort(key=lambda item: item["path"])
+    rg.reject_secret_text(json.dumps(record) + json.dumps(observation) + json.dumps(assertions), "drill output")
+    rg.validate_record("gate-result", record)
+    rg.write_atomic_exclusive(args.result_out, rg.canonical_bytes(record))
+    printer(f"{label}: {status}: {reason}")
+    return {"passed": EXIT_PASSED, "failed": EXIT_FAILED, "not_run": EXIT_NOT_RUN}[status]

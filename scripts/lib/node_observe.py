@@ -12,6 +12,8 @@ Modes (argv[1]):
   identity                 machine/boot identity only
   clean                    what already exists on the host (for a clean-install check)
   install NODE_PATH        the full install picture described in the clean-install runbook
+  exposure NODE_PATH       host identity, published container ports, every TCP and UDP listener (with the
+                           owning process name where the kernel reports it) and the Podman networks
   restore NODE_PATH [KIND=SHA256 ...]
                            the install picture plus what a separate-host restore recorded:
                            the restore journal and result, the sanitizer's audit row, and the
@@ -397,6 +399,63 @@ def mode_restore(node_path, stale_arguments=()):
     return document
 
 
+def udp_listener_rows():
+    code, out = run(["ss", "-Hlunp"])
+    if code != 0:
+        return None
+    rows = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            address, _, port = parts[3].rpartition(":")
+            if port.isdigit():
+                process = re.search(r'users:\(\("([^"]+)"', line)
+                rows.append({"address": address.strip("[]"), "port": int(port), "process": process.group(1) if process else None})
+    return sorted(rows, key=lambda r: (r["port"], r["address"]))
+
+
+def tcp_listener_process_rows():
+    code, out = run(["ss", "-Hltnp"])
+    if code != 0:
+        return None
+    rows = []
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4:
+            address, _, port = parts[3].rpartition(":")
+            if port.isdigit():
+                process = re.search(r'users:\(\("([^"]+)"', line)
+                rows.append({"address": address.strip("[]"), "port": int(port), "process": process.group(1) if process else None})
+    return sorted(rows, key=lambda r: (r["port"], r["address"]))
+
+
+def network_rows():
+    code, out = run(["podman", "network", "ls", "--format", "{{.Name}}"])
+    if code != 0:
+        return None
+    names = [line.strip() for line in out.splitlines() if line.strip()]
+    rows = []
+    for name in names:
+        code, out = run(["podman", "network", "inspect", name])
+        try:
+            document = json.loads(out)[0] if code == 0 else None
+        except (ValueError, IndexError):
+            document = None
+        if document is None:
+            return None
+        rows.append({"name": name, "internal": bool(document.get("internal")), "driver": document.get("driver"),
+                     "subnets": sorted(s.get("subnet") for s in document.get("subnets") or [] if s.get("subnet"))})
+    return sorted(rows, key=lambda r: r["name"])
+
+
+def mode_exposure(node_path):
+    return {
+        "schemaVersion": SCHEMA, "mode": "exposure", "observedAt": now_iso(), "host": host_facts(),
+        "containers": container_rows(), "listeners": tcp_listener_process_rows(), "udpListeners": udp_listener_rows(),
+        "networks": network_rows(), "addresses": address_rows(),
+    }
+
+
 def mode_watch_setup(node_path, seconds, interval):
     deadline = time.monotonic() + seconds
     samples, seen = [], set()
@@ -430,7 +489,7 @@ def mode_watch_setup(node_path, seconds, interval):
 
 def main(argv):
     if len(argv) < 2:
-        print("usage: node_observe.py identity|clean|install NODE|restore NODE|watch-setup NODE SECONDS INTERVAL", file=sys.stderr)
+        print("usage: node_observe.py identity|clean|install NODE|exposure NODE|restore NODE|watch-setup NODE SECONDS INTERVAL", file=sys.stderr)
         return 2
     mode = argv[1]
     try:
@@ -440,6 +499,8 @@ def main(argv):
             document = mode_clean()
         elif mode == "install" and len(argv) == 3 and os.path.isabs(argv[2]):
             document = mode_install(os.path.normpath(argv[2]))
+        elif mode == "exposure" and len(argv) == 3 and os.path.isabs(argv[2]):
+            document = mode_exposure(os.path.normpath(argv[2]))
         elif mode == "restore" and len(argv) >= 3 and os.path.isabs(argv[2]):
             document = mode_restore(os.path.normpath(argv[2]), argv[3:])
         elif mode == "watch-setup" and len(argv) == 5 and os.path.isabs(argv[2]):

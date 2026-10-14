@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "telos": {
+    "publisher": "telos-traefik",
+    "publicTcp": [80, 443],
+    "publicUdp": [],
+    "neverReachable": [
+      {"port": 3000, "what": "Next.js dev server"},
+      {"port": 3306, "what": "MariaDB"},
+      {"port": 3310, "what": "ClamAV"},
+      {"port": 5432, "what": "PostgreSQL"},
+      {"port": 6060, "what": "Grimmory"},
+      {"port": 6379, "what": "Redis"},
+      {"port": 8080, "what": "gateway and Traefik web entrypoint"},
+      {"port": 8081, "what": "static client"},
+      {"port": 8096, "what": "Jellyfin"},
+      {"port": 8443, "what": "Traefik websecure entrypoint"},
+      {"port": 9090, "what": "metrics and Prometheus"}
+    ],
+    "setupContainers": ["telos-setup-proxy"],
+    "networks": {
+      "telos-ingress": {"internal": false, "members": ["telos-traefik", "telos-client", "telos-core"]},
+      "telos-backend": {"internal": true},
+      "telos-db": {"internal": true},
+      "telos-observability": {"internal": true},
+      "telos-egress": {"internal": false, "members": ["telos-egress-proxy"]}
+    }
+  },
+  "operatorDeclared": {"tcp": [], "udp": []},
+  "scan": {
+    "tcp": "1-65535",
+    "udp": "53,67,68,69,111,123,137,138,161,500,514,1900,3478,4500,5353,5683,7359,11211,51820"
+  }
+}
