@@ -8,6 +8,7 @@ set -euo pipefail
 # `capacity`, `host-exposure` and `controlled-egress` gates. The k6 syntax check exits 3 (not_run) with no Node.
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
+python3 -I tests/operations/edge_policy_test.py
 python3 -I tests/operations/exposure_audit_test.py
 python3 -I tests/operations/egress_drill_test.py
 python3 -I tests/operations/capacity_drill_test.py

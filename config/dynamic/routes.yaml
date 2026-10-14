@@ -101,14 +101,15 @@ http:
         amount: 128
     # Login throttle at the edge: 10 requests/minute per source IP, burst 5.
     # The gateway's atomic Redis limiter is the authoritative second layer.
+    # The bucket is keyed by the connection's remote address (Traefik is the edge). Do NOT add
+    # `sourceCriterion.ipStrategy.depth`: it reads the client-supplied X-Forwarded-For, which an edge
+    # does not receive, so every request would share one empty key and the whole community would
+    # be limited to 10 sign-ins a minute (found by the capacity drill; tests/operations/edge_policy_test.py).
     telos-login-rate:
       rateLimit:
         average: 10
         period: 1m
         burst: 5
-        sourceCriterion:
-          ipStrategy:
-            depth: 1
     # 16 KiB auth JSON, held in memory (no disk spool).
     telos-auth-body:
       buffering:
