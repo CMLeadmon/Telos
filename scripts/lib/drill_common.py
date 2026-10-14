@@ -167,6 +167,17 @@ def write_json(directory, name, document):
     return {"path": name, "sha256": rg.raw_sha256(data)}
 
 
+def stringify_floats(value):
+    """Canonical records have no floats; measurements (rates, timestamps, quotas) are kept as decimal strings."""
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, dict):
+        return {key: stringify_floats(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [stringify_floats(child) for child in value]
+    return value
+
+
 MANIFEST_IN_REFERENCE = re.compile(r"@(sha256:[0-9a-f]{64})\Z")
 
 
@@ -224,10 +235,11 @@ def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, 
         "failed": "failed: " + ", ".join(a["id"] for a in assertions if a["status"] == "failed")[:240],
         "not_run": "not run: " + ", ".join(a["id"] for a in assertions if a["status"] == "not_run")[:240],
     }[status]
+    observation = stringify_floats(observation)
     files = [write_json(out_dir, "observation.json", observation) | {"kind": "report"},
              write_json(out_dir, "assertions.json", {"schemaVersion": 1, "assertions": assertions}) | {"kind": "report"}]
     for name, document in attachments:
-        files.append(write_json(out_dir, name, document) | {"kind": "report"})
+        files.append(write_json(out_dir, name, stringify_floats(document)) | {"kind": "report"})
     record = {
         "schemaVersion": 1, "recordKind": mode, "gateId": os.environ.get("TELOS_GATE_ID", gate_id), "sourceCommit": commit,
         "candidateLockDigest": lock_digest, "status": status, "reason": reason, "subjectFile": None,
