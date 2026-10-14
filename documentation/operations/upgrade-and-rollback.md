@@ -1,11 +1,12 @@
 # Upgrade and Rollback
 
-> **Status:** the generation layout, durable operation journal, `scripts/upgrade.sh`, `scripts/rollback.sh` and
-> `scripts/restore.sh --mode rollback` are implemented and covered by `tests/operations/upgrade_rollback_fixtures_test.sh`
-> (stub generations; a SIGKILL at every step). They have **not** yet been exercised on a node against a real
-> predecessor release: no release has been published, so `release/predecessor-policy.json` names none and
-> `scripts/build-predecessor.sh` reports `not_run`. The `upgrade-rollback` external gate stays blocked until a
-> frozen candidate, an exact signed predecessor and the release builder exist.
+> **Status:** the generation layout, durable operation journal, `scripts/install-candidate.sh`, `scripts/upgrade.sh`,
+> `scripts/rollback.sh` and `scripts/restore.sh --mode rollback` are implemented and covered by hermetic tests
+> (`tests/operations/upgrade_rollback_fixtures_test.sh`, `candidate_install_test.py`: stub generations, a SIGKILL at every
+> step). The live rehearsal on the reference VMs is recorded in `docs/implementation/standalone-beta-progress.md`; it is
+> **not** certification evidence. `release/predecessor-policy.json` names no exact predecessor (no release has been
+> published), so `scripts/build-predecessor.sh` reports `not_run` and the `upgrade-rollback` external gate stays blocked
+> until a frozen candidate, an exact signed predecessor and the release builder's output exist.
 
 ## Layout
 
@@ -20,6 +21,17 @@
 generations it may be upgraded **from** (`predecessorIds`, candidate-lock digests) and `rollbackCompatibleThrough` — the
 highest schema version at which the *previous* generation's binaries still run. Every operation re-verifies the files
 against it.
+
+## Install the target first
+
+`scripts/upgrade.sh` moves between generations that are already installed. Install the target candidate without activating it:
+
+```bash
+sudo scripts/install-candidate.sh --candidate /root/candidate-NEW      # verifies the graph, loads and proves the images, copies the generation
+```
+
+It keeps the candidate lock in `/var/lib/telos/state/candidates/<digest>/candidate-lock.json`; those files are the `--candidate-lock` and
+`--current-candidate-lock` arguments below. The first install on a node uses `--activate` instead (see `release.md`).
 
 ## Upgrade
 
