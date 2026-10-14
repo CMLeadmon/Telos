@@ -1,8 +1,11 @@
 # Candidate Supply Chain
 
-> **Status:** the scan, its policy and its tests are implemented, and the scan has run live against a rehearsal candidate
-> (`docs/implementation/standalone-beta-progress.md`). That run **failed on real findings in the pinned images**; the gate
-> stays red until those are fixed or accepted by a person. A rehearsal run is never certification evidence.
+> **Status:** the scan, its policy and its tests are implemented, and the scan has run live against rehearsal candidates
+> (`docs/implementation/standalone-beta-progress.md`). After moving every pin and Go module we can move (A42) it is **still red**:
+> 296 findings, 15 distinct Critical advisories, **none in a Telos image** — all in the upstream images of Grimmory (7), Jellyfin (6),
+> MariaDB (1) and Postgres (1), which are already at their newest upstream tags or ship the same `gosu` binary. The gate cannot accept a
+> Critical, so closing it needs a decision by a person: replace an image, wait for an upstream rebuild, or change the policy. A rehearsal
+> run is never certification evidence.
 
 The `candidate-supply-chain` gate judges one frozen candidate: every image and desktop artifact in its graph, and the exact
 source tree it was built from. It runs only after the freeze, from the SBOMs the builder wrote.
