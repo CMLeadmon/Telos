@@ -588,7 +588,7 @@ def extract_package(tools, archive, destination):
 
 def build(args, tools=None, sbom_generator=None, repo=None):
     tools = tools or Tools()
-    repo = Path(repo or REPO)
+    repo = Path(repo or getattr(args, "repo", None) or REPO)
     out_dir = Path(args.out_dir)
     if not out_dir.is_absolute():
         fail("--out-dir must be an absolute path")
@@ -635,7 +635,7 @@ def build_once(args, tools, sbom_generator, source, work, no_cache):
     lock_dir_root.mkdir(mode=0o755)
     for sub in ("source", "images", "desktop"):
         (lock_dir_root / sub).mkdir(mode=0o755)
-    tarball, tree = export_source(args_repo(args), tools, source, work)
+    tarball, tree = export_source(repo_for(args), tools, source, work)
     shutil.copyfile(tarball, lock_dir_root / "source" / tarball.name)
     check_versions(tree, source.version)
     run([tools.python, tree / "scripts" / "verify-image-lock.py", "--source"], cwd=tree, env=build_env(source.epoch), what="the image lock check")
@@ -664,7 +664,7 @@ def build_once(args, tools, sbom_generator, source, work, no_cache):
     return {"root": lock_dir_root, "graph": graph}
 
 
-def args_repo(args):
+def repo_for(args):
     return Path(getattr(args, "repo", None) or REPO)
 
 

@@ -2,6 +2,13 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# build-predecessor.sh --out-dir ABS [--desktop-dir DIR] [--tools-dir DIR]: rebuild the exact predecessor named by
+# release/predecessor-policy.json with its own builder and require its recorded digests (exit 3 while none is named).
+for argument in "$@"; do
+  case "$argument" in
+    --out-dir|--desktop-dir|--tools-dir) exec python3 -I "$script_dir/lib/predecessor.py" build "$@" ;;
+  esac
+done
 original_argv=("$0" "$@")
 candidate_lock=""
 evidence_out=""
