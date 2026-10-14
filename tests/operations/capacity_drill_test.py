@@ -128,7 +128,7 @@ class K6Tests(unittest.TestCase):
     def test_the_load_script_declares_the_required_shape(self):
         script = (ROOT / "tests" / "load" / "telos.js").read_text()
         for needle in ('"constant-vus"', "vus: SESSIONS", "const SESSIONS = 25", "WRITES_PER_SECOND = 10", 'http_req_failed: ["rate<0.01"]',
-                       'http_req_duration: ["p(95)<750"]', '"http_req_duration{kind:mutation}": ["p(95)<1000"]', "semantic_failures", "PHASES = 4"):
+                       'http_req_duration: ["p(95)<750"]', '"http_req_duration{kind:mutation}": ["p(95)<1000"]', "semantic_failures", "PHASES = 4", "noCookiesReset: true"):
             self.assertIn(needle, script)
         self.assertEqual({t for t in drill.REQUIRED_THRESHOLDS["http_req_duration"]}, {"p(95)<750"})
 

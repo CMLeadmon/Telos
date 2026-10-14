@@ -537,6 +537,7 @@ func proxyRequest(w http.ResponseWriter, r *http.Request, targetURLStr, token st
 				h.Set("Authorization", fmt.Sprintf("MediaBrowser Token=%q", token))
 			}
 		},
+		StartGate: jellyfinStartGate,
 	}
 
 	// Item-level authorization is added in Phase 4 (JellyfinAuthorizer); the

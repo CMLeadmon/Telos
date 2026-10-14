@@ -32,6 +32,9 @@ function seconds(text) {
 const PHASE_SECONDS = seconds(DURATION) / PHASES;
 
 export const options = {
+  // k6 empties each VU's cookie jar at the end of every iteration unless told otherwise; a signed-in
+  // member keeps their session across iterations, so this must stay true.
+  noCookiesReset: true,
   scenarios: {
     member_journeys: { executor: "constant-vus", vus: SESSIONS, duration: DURATION, exec: "memberJourney" },
   },
@@ -46,15 +49,20 @@ export const options = {
 };
 
 const semanticFailures = new Counter("semantic_failures");
-const state = { phase: -1, username: null, channelId: null }; // per VU: k6 gives each VU its own module scope
+const DEBUG = __ENV.TELOS_LOAD_DEBUG === "1";
+const state = { phase: -1, username: null, channelId: null, libraryId: null }; // per VU: k6 gives each VU its own module scope
 
 function headers(extra) {
   return Object.assign({ "Content-Type": "application/json", Origin: ORIGIN }, extra || {});
 }
 
+let reported = 0;
 function ok(response, name, predicate) {
   const passed = check(response, { [name]: (r) => predicate(r) });
-  if (!passed) semanticFailures.add(1);
+  if (!passed) {
+    semanticFailures.add(1);
+    if (DEBUG && reported++ < 20) console.error(`check failed: ${name} -> ${response.status} ${response.request.url.replace(ORIGIN, "")} ${String(response.body).slice(0, 80)}`);
+  }
   return passed;
 }
 
@@ -67,7 +75,8 @@ function rotateSession() {
   const phase = Math.min(PHASES - 1, Math.floor(elapsed / PHASE_SECONDS));
   if (phase === state.phase) return;
   if (state.username !== null) {
-    const out = http.post(`${ORIGIN}/api/v1/auth/logout`, null, { headers: headers(), tags: { kind: "mutation", step: "logout" } });
+    // No body and no Content-Type: the gateway rejects a JSON content type with nothing in it.
+    const out = http.post(`${ORIGIN}/api/v1/auth/logout`, null, { headers: { Origin: ORIGIN }, tags: { kind: "mutation", step: "logout" } });
     ok(out, "logout", (r) => r.status === 200 || r.status === 204);
   }
   const account = DATA.accounts[(exec.vu.idInTest - 1) % SESSIONS + SESSIONS * phase];
@@ -96,7 +105,13 @@ const READS = {
     ok(response, "chat roots", (r) => r.status === 200 && json(r) !== null);
   },
   stream() {
-    const list = http.get(`${ORIGIN}/api/v1/media/items`, { tags: { kind: "read", module: "stream" } });
+    if (!state.libraryId) {
+      const libraries = http.get(`${ORIGIN}/api/v1/media`, { tags: { kind: "read", module: "stream" } });
+      ok(libraries, "media libraries", (r) => r.status === 200 && Array.isArray(json(r)) && json(r).length > 0);
+      const first = (json(libraries) || [])[0];
+      if (first) state.libraryId = first.id || first.ID;
+    }
+    const list = http.get(`${ORIGIN}/api/v1/media/items?libraryId=${encodeURIComponent(state.libraryId || "")}`, { tags: { kind: "read", module: "stream" } });
     ok(list, "media items", (r) => r.status === 200 && json(r) !== null);
     const info = http.get(`${ORIGIN}/api/v1/media/items/${DATA.fixture.video.id}/playback-info`, { tags: { kind: "read", module: "stream" } });
     ok(info, "playback info", (r) => r.status === 200 && json(r) !== null);

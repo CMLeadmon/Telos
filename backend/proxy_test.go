@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // --- sessionTokenFromRequest -------------------------------------------------
@@ -209,5 +211,103 @@ func TestProxyRequestCancellationClosesBody(t *testing.T) {
 	proxyRequest(rec, req, upstream.URL+"/Items/x/Images/Primary", "tok", nil)
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("cancelled proxy status = %d, want 502", rec.Code)
+	}
+}
+
+// --- start gate --------------------------------------------------------------
+
+func TestStartGateAdmitsAtMostNConcurrentStartsAndReleasesOnce(t *testing.T) {
+	gate := startGate(2, 50*time.Millisecond)
+	r1, err1 := gate(context.Background())
+	r2, err2 := gate(context.Background())
+	if err1 != nil || err2 != nil {
+		t.Fatalf("the first two starts must be admitted: %v %v", err1, err2)
+	}
+	if _, err := gate(context.Background()); !errors.Is(err, errUpstreamBusy) {
+		t.Fatalf("a third start must wait out and report busy, got %v", err)
+	}
+	r1()
+	r1() // a second release of the same slot must not free another one
+	if _, err := gate(context.Background()); err != nil {
+		t.Fatalf("a freed slot must admit: %v", err)
+	}
+	if _, err := gate(context.Background()); !errors.Is(err, errUpstreamBusy) {
+		t.Fatalf("the double release freed a slot it did not own: %v", err)
+	}
+	r2()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	full := startGate(1, time.Minute)
+	if _, err := full(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := full(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("a cancelled caller must stop waiting: %v", err)
+	}
+}
+
+func TestProxyUpstreamHoldsTheStartGateOnlyUntilHeadersArrive(t *testing.T) {
+	headersSent := make(chan struct{})
+	finish := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "audio/mpeg")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		close(headersSent)
+		<-finish // the body keeps streaming long after the start
+	}))
+	defer upstream.Close()
+	defer close(finish)
+
+	var inFlight, peak int32
+	inner := startGate(1, 200*time.Millisecond)
+	gate := func(ctx context.Context) (func(), error) {
+		release, err := inner(ctx)
+		if err != nil {
+			return nil, err
+		}
+		n := atomic.AddInt32(&inFlight, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		return func() { atomic.AddInt32(&inFlight, -1); release() }, nil
+	}
+	target, _ := url.Parse(upstream.URL + "/Audio/x/stream")
+	policy := ProxyPolicy{ResponseHeaders: mediaResponseHeaders, AllowRanges: true, StartGate: gate}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		rec := httptest.NewRecorder()
+		proxyUpstream(rec, httptest.NewRequest("GET", "/x", nil), target, policy, nil)
+	}()
+	<-headersSent
+	// The first request is still streaming its body. A second start must be admitted: the slot was
+	// released when the headers arrived.
+	release, err := gate(context.Background())
+	if err != nil {
+		t.Fatalf("a streaming body must not hold the start slot: %v", err)
+	}
+	release()
+	if atomic.LoadInt32(&peak) > 1 {
+		t.Fatalf("more than one start was in flight at once (peak %d)", peak)
+	}
+}
+
+func TestProxyUpstreamAnswers503WhenTheGateTimesOut(t *testing.T) {
+	reached := int32(0)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { atomic.AddInt32(&reached, 1) }))
+	defer upstream.Close()
+	target, _ := url.Parse(upstream.URL + "/x")
+	busy := func(context.Context) (func(), error) { return nil, errUpstreamBusy }
+	rec := httptest.NewRecorder()
+	proxyUpstream(rec, httptest.NewRequest("GET", "/x", nil), target, ProxyPolicy{StartGate: busy}, nil)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("a busy upstream must answer 503 with Retry-After, got %d %v", rec.Code, rec.Header())
+	}
+	if atomic.LoadInt32(&reached) != 0 {
+		t.Fatal("the upstream was contacted although the gate refused")
 	}
 }

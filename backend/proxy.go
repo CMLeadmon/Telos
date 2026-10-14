@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 )
 
 // sessionTokenFromRequest returns the session token from exactly the secure
@@ -52,6 +54,35 @@ type ProxyPolicy struct {
 	// UpstreamAuth injects server-held upstream credentials (never from the
 	// browser). It runs after the allowlisted request headers are set.
 	UpstreamAuth func(h http.Header)
+	// StartGate, when set, is held from just before the upstream request is sent until its response
+	// HEADERS arrive -- not for the body. It bounds how many upstream requests are *starting* at once:
+	// Jellyfin (10.11) fails and then crashes when many audio/transcode starts race, while any number of
+	// already-started streams are fine. An error from the gate (the wait ran out) is answered 503.
+	StartGate func(ctx context.Context) (release func(), err error)
+}
+
+// errUpstreamBusy is returned by a StartGate whose wait expired.
+var errUpstreamBusy = errors.New("upstream busy")
+
+// startGate returns a gate admitting at most n concurrent request starts, each waiting at most wait.
+func startGate(n int, wait time.Duration) func(ctx context.Context) (func(), error) {
+	if n < 1 {
+		n = 1
+	}
+	slots := make(chan struct{}, n)
+	return func(ctx context.Context) (func(), error) {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case slots <- struct{}{}:
+			var once sync.Once
+			return func() { once.Do(func() { <-slots }) }, nil
+		case <-timer.C:
+			return nil, errUpstreamBusy
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 }
 
 // hop-by-hop headers are never relayed in either direction.
@@ -125,9 +156,20 @@ func proxyUpstream(w http.ResponseWriter, r *http.Request, target *url.URL, poli
 		policy.UpstreamAuth(outReq.Header)
 	}
 
+	releaseStart := func() {}
+	if policy.StartGate != nil {
+		release, gateErr := policy.StartGate(r.Context())
+		if gateErr != nil {
+			w.Header().Set("Retry-After", "2")
+			writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_busy", "The media server is busy; try again in a moment.")
+			return
+		}
+		releaseStart = release
+	}
 	// RoundTrip never follows redirects, so an upstream 3xx Location is never
 	// acted on or relayed to the browser.
 	resp, err := upstreamTransport.RoundTrip(outReq)
+	releaseStart() // the response headers are in (or the attempt failed): the start is over
 	if err != nil {
 		log.Printf("proxy: upstream request failed request_id=%s host=%s: %v", requestIDFrom(r.Context()), upstream.Host, err)
 		writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "An upstream service is unavailable.")
