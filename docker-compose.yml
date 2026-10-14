@@ -609,7 +609,8 @@ services:
 
   # Internal-only metrics store. No host port and no route: the operator reads it through
   # `telos status` and scripts/verify-monitoring.sh, never a public UI. Retention is
-  # bounded by time and size.
+  # bounded by time and size. The lifecycle and admin APIs are off by default and
+  # must stay off (their flags would turn them on).
   prometheus:
     image: docker.io/prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
     container_name: telos-prometheus
@@ -634,8 +635,6 @@ services:
       - --storage.tsdb.retention.time=15d
       - --storage.tsdb.retention.size=1GB
       - --web.listen-address=:9090
-      - --web.enable-lifecycle=false
-      - --web.enable-admin-api=false
     networks:
       - telos-observability
     volumes:

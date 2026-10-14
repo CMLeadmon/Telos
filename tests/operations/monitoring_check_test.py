@@ -122,6 +122,10 @@ class SourceChecks(unittest.TestCase):
         self.expect("retention must be bounded")
         self.ws.edit_yaml("docker-compose.yml", lambda d: d["services"]["prometheus"].pop("healthcheck"))
         self.expect("needs a health check")
+        for flag in ("--web.enable-lifecycle", "--web.enable-admin-api"):
+            shutil.copy(ROOT / "docker-compose.yml", self.ws.dir / "docker-compose.yml")
+            self.ws.edit_yaml("docker-compose.yml", lambda d, f=flag: d["services"]["prometheus"]["command"].append(f))
+            self.expect(f"must not enable its {flag.split('enable-')[1]}")
 
     def test_metrics_are_never_routed_publicly(self):
         for token in ("/metrics", "prometheus", "9090"):

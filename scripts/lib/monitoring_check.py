@@ -137,8 +137,9 @@ def check_compose_routing(compose_path, routes_path, lock):
         command = " ".join(str(item) for item in prometheus.get("command", []))
         if not re.search(r"--storage\.tsdb\.retention\.time=\d+d", command) or "--storage.tsdb.retention.size=" not in command:
             findings.append("prometheus retention must be bounded by time and size")
-        if "--web.enable-lifecycle=false" not in command and "--web.enable-lifecycle" in command:
-            findings.append("prometheus must not enable its lifecycle API")
+        for flag in ("--web.enable-lifecycle", "--web.enable-admin-api"):
+            if flag in command:
+                findings.append(f"prometheus must not enable its {flag.split('enable-')[1]} (the API is off unless the flag is present)")
         if not prometheus.get("healthcheck"):
             findings.append("prometheus needs a health check")
     core = services.get("telos-core", {})
