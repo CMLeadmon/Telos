@@ -285,6 +285,29 @@ rollback "$opid" && fail "$CASE: rolled back onto a schema the old binaries cann
 grep -q "RESTORE-RECORDED-ROLLBACK" "$SB/rollback-out" || fail "$CASE: no restore instruction"
 expect_active "$NEW"; expect_serving "$NEW"; expect_no "podman stop"; expect_no " stop"
 
+# A finished upgrade may be handed to restore.sh only when the previous binaries cannot run on the schema it left.
+claim() { python3 -I scripts/lib/generations.py journal claim-restore --root "$TELOS_RELEASE_BASE" --node "$TELOS_NODE_PATH" --operation-id "$1" --no-owner-check >"$SB/claim-out" 2>&1; }
+CASE="claim restore, incompatible schema"; sandbox clm 22
+upgrade || fail "$CASE: upgrade"
+opid="$(journal_field operationId)"; : >"$STUB_STATE/calls.log"
+claim "$opid" || fail "$CASE: $(tail -3 "$SB/claim-out")"
+expect_state restore-required; expect_active "$NEW"; expect_serving "$NEW"; expect_no "podman stop"
+grep -q "cannot run on schema 24" "$TELOS_NODE_PATH/state/operation.json" || fail "$CASE: the journal does not say why"
+claim "$opid" && fail "$CASE: claimed twice"
+grep -q "only a completed upgrade" "$SB/claim-out" || fail "$CASE: wrong refusal: $(tail -2 "$SB/claim-out")"
+
+CASE="claim restore, compatible schema"; sandbox clc 24
+upgrade || fail "$CASE: upgrade"
+opid="$(journal_field operationId)"
+claim "$opid" && fail "$CASE: a restore was allowed where rollback.sh keeps the data"
+grep -q "use rollback.sh" "$SB/claim-out" || fail "$CASE: wrong refusal: $(tail -2 "$SB/claim-out")"
+expect_state complete
+
+CASE="claim restore, wrong operation"; sandbox clw 22
+upgrade || fail "$CASE: upgrade"
+claim "$(printf 'f%.0s' $(seq 32))" && fail "$CASE: accepted another operation id"
+expect_state complete
+
 CASE="rollback, previous images missing"; sandbox rbi 24
 upgrade || fail "$CASE: upgrade"
 opid="$(journal_field operationId)"; : >"$STUB_STATE/calls.log"

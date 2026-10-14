@@ -330,6 +330,25 @@ make_rollback_host() {  # NAME [journal-state] [host-machine-file] -> a host tha
                         python3 -I scripts/lib/generations.py journal advance --node "$node" --state "$st" --post-schema 24 >/dev/null; done ;;
   esac
 }
+write_generation_manifests() {  # NAME TO_ROLLBACK_COMPATIBLE_THROUGH -> verifiable generations; FROM runs schema <=22, TO leaves 24
+  python3 -I - "$work/host-$1/srv/generations" "$FROM_GEN" "$TO_GEN" "$2" <<'PY'
+import os, sys
+sys.path.insert(0, "scripts/lib")
+import release_graph as rg
+root, from_gen, to_gen, to_compat = sys.argv[1:]
+def manifest(current, lo, compat):
+    return {"schemaVersion": 1, "sourceCommit": "4" * 40, "version": "0.1.0-beta.1", "images": {"core": "sha256:" + "5" * 64},
+            "migrations": {"min": lo, "current": current, "max": current, "checksumSetDigest": "sha256:" + "6" * 64},
+            "predecessorIds": [], "rollbackCompatibleThrough": compat, "artifactIndexSubset": []}
+for generation, record in ((from_gen, manifest(22, 1, 22)), (to_gen, manifest(24, 10, int(to_compat)))):
+    directory = os.path.join(root, generation)
+    os.chmod(directory, 0o755)
+    path = os.path.join(directory, "generation.json")
+    with open(path, "wb") as handle:
+        handle.write(rg.canonical_bytes(record))
+    os.chmod(path, 0o644)
+PY
+}
 run_rollback() {  # NAME [flags...] -- [VAR=value ...]
   local n="$1"; shift
   local flags=()
@@ -368,8 +387,12 @@ rollback_untouched rbusage
 
 make_rollback_host rbwrongop
 ROLLBACK_OP_OVERRIDE="$(printf 'f%.0s' $(seq 32))" rollback_refuses rbwrongop "not the node's last operation" "${ROLLBACK_GOOD[@]}"
+# A completed upgrade is handed to a restore only when swapping binaries cannot undo it.
 make_rollback_host rbdone complete
-rollback_refuses rbdone "a restore is only for restore-required or failed" "${ROLLBACK_GOOD[@]}"
+rollback_refuses rbdone "cannot be handed to a restore" "${ROLLBACK_GOOD[@]}"        # generations that do not verify prove nothing
+make_rollback_host rbdonecompat complete; write_generation_manifests rbdonecompat 24   # the previous binaries accept schema 24
+rollback_refuses rbdonecompat "use rollback.sh" "${ROLLBACK_GOOD[@]}" -- TELOS_GENERATION_OWNER_CHECK=0
+python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1]))["state"] == "complete"' "$work/host-rbdonecompat/node/state/operation.json" || fail "rbdonecompat: a refused claim changed the journal"
 make_rollback_host rbhost restore-required "$TARGET_ID_FILE"
 rollback_refuses rbhost "not the host the upgrade ran on" "${ROLLBACK_GOOD[@]}"
 make_rollback_host rbdiff restore-required "$TARGET_ID_FILE"   # the journal and this machine agree, but the snapshot came from another
@@ -418,6 +441,17 @@ PY
   python3 -I scripts/lib/generations.py journal begin --node "$work/host-$id/node" --kind upgrade --from "$FROM_GEN" --to "$TO_GEN" --schema 22 \
     --host "sha256:$(sha256sum "$SOURCE_ID_FILE" | cut -d' ' -f1)" >/dev/null || fail "$id: a restored operation still blocks the next one"
 done
+make_rollback_host rbclaim complete; write_generation_manifests rbclaim 22              # the previous binaries cannot run on schema 24
+run_rollback rbclaim "${ROLLBACK_GOOD[@]}" -- TELOS_GENERATION_OWNER_CHECK=0 || fail "rbclaim: restoring a completed, schema-incompatible upgrade failed: $(tail -4 "$work/out-rbclaim")"
+python3 -I - "$work/host-rbclaim" "$ROLLBACK_OP" <<'PY' || fail "rbclaim: bad journal or result"
+import json, sys
+host, op = sys.argv[1:3]
+result = json.load(open(f"{host}/result.json"))
+assert result["status"] == "restored" and result["mode"] == "rollback" and result["operationId"] == op, result
+journal = json.load(open(f"{host}/node/state/operation.json"))
+assert journal["state"] == "restored" and journal["operationId"] == op, journal
+PY
+[[ "$(readlink "$work/host-rbclaim/srv/current")" == "generations/$FROM_GEN" ]] || fail "rbclaim: the generation the upgrade left was not reactivated"
 make_rollback_host rbfail
 FAIL_AT=sanitize run_rollback rbfail "${ROLLBACK_GOOD[@]}" -- FAIL_AT=sanitize && fail "rbfail: a failing sanitize was accepted"
 python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1]))["state"] == "restore-required"' "$work/host-rbfail/node/state/operation.json" || fail "rbfail: a failed rollback restore closed the journal"

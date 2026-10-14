@@ -27,6 +27,8 @@ guesses after a migration: an unexplained schema is `restore`.
     generations.py journal advance --node N --state STATE [--snapshot ID] [--post-schema N] [--error TEXT]
     generations.py journal show    --node N
     generations.py journal resolve --node N --operation-id ID     (restore-required/failed -> restored, after a restore)
+    generations.py journal claim-restore --root R --node N --operation-id ID [--no-owner-check]
+                                                                  (complete -> restore-required, only if the predecessor cannot run on the schema)
     generations.py plan-recovery   --root R --node N --schema N [--ready true|false]
 
 Exit codes: 0 ok, 1 refused (message on stderr), 2 usage.
@@ -364,6 +366,30 @@ def resolve(node, operation_id, state="restored"):
     return record
 
 
+def claim_restore(node, operation_id, from_manifest, to_manifest):
+    """Let a restore undo an upgrade that finished (`complete`) but cannot be undone by swapping binaries.
+
+    A rollback is an operator decision, not only a reaction to a failure. The journal may only be
+    handed to a restore when the previous generation's binaries provably cannot run on the schema the
+    upgrade left; otherwise `rollback.sh` is the safe way back and a restore would discard data for nothing.
+    """
+    record = read_journal(node)
+    if record is None or record["operationId"] != operation_id:
+        fail("that operation is not the node's last operation")
+    if record["kind"] != "upgrade":
+        fail("only an upgrade can be undone by a restore")
+    if record["state"] != "complete":
+        fail(f"only a completed upgrade is claimed this way; this one is {record['state']}")
+    if not record.get("snapshotId") or not record.get("fromGeneration") or record.get("postSchema") is None:
+        fail("the operation did not record the snapshot, the previous generation and the schema it left")
+    if fast_rollback_ok(to_manifest, from_manifest, record["postSchema"]):
+        fail(f"the previous generation can run on schema {record['postSchema']}; use rollback.sh, which keeps the data written since")
+    record.update(state="restore-required", updatedAt=now(),
+                  lastError=f"restore requested: the previous generation cannot run on schema {record['postSchema']}"[:300])
+    write_journal(node, record)
+    return record
+
+
 def advance(node, state, snapshot=None, post_schema=None, error=None):
     record = read_journal(node)
     if record is None:
@@ -468,6 +494,7 @@ def build_parser():
     p.add_argument("--snapshot"); p.add_argument("--post-schema", type=int); p.add_argument("--error")
     p = journal.add_parser("show"); p.add_argument("--node", required=True)
     p = journal.add_parser("resolve"); p.add_argument("--node", required=True); p.add_argument("--operation-id", required=True)
+    p = journal.add_parser("claim-restore"); root_args(p, ()); p.add_argument("--node", required=True); p.add_argument("--operation-id", required=True)
     p = sub.add_parser("plan-recovery")
     p.add_argument("--root", required=True); p.add_argument("--node", required=True)
     p.add_argument("--schema", type=int, required=True); p.add_argument("--ready", type=parse_bool)
@@ -509,6 +536,13 @@ def run(args):
             return advance(args.node, args.state, args.snapshot, args.post_schema, args.error)
         if args.journal_command == "resolve":
             return resolve(args.node, args.operation_id)
+        if args.journal_command == "claim-restore":
+            record = read_journal(args.node)
+            if record is None or not record.get("fromGeneration"):
+                fail("there is no completed upgrade with a previous generation to claim")
+            from_manifest, _ = verify_generation(args.root, record["fromGeneration"], owner)
+            to_manifest, _ = verify_generation(args.root, record["toGeneration"], owner)
+            return claim_restore(args.node, args.operation_id, from_manifest, to_manifest)
         return read_journal(args.node) or {}
     if args.command == "plan-recovery":
         journal = read_journal(args.node)

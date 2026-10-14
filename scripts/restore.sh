@@ -214,6 +214,15 @@ run_restore() {
     local upgrade_journal host_hash
     host_hash="sha256:$(sha256sum "$machine_id_file" | cut -d' ' -f1)"
     upgrade_journal="$(python3 -I "$script_dir/lib/generations.py" journal show --node "$node_path")" || die "the upgrade journal is unreadable"
+    if [ "$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1]).get("state", ""))' "$upgrade_journal")" = complete ]; then
+      # The operator wants a finished upgrade undone. That is only a restore's job when swapping binaries cannot do it:
+      # the claim succeeds only if the previous generation provably cannot run on the schema the upgrade left.
+      local owner_flag=()
+      [ "${TELOS_GENERATION_OWNER_CHECK:-1}" != 0 ] || owner_flag=(--no-owner-check)
+      python3 -I "$script_dir/lib/generations.py" journal claim-restore --root "$release_base" --node "$node_path" --operation-id "$operation_id" "${owner_flag[@]}" >/dev/null \
+        || die "refusing the rollback restore: the completed upgrade cannot be handed to a restore (use rollback.sh when the previous generation can run on the schema)"
+      upgrade_journal="$(python3 -I "$script_dir/lib/generations.py" journal show --node "$node_path")" || die "the upgrade journal is unreadable"
+    fi
     snapshot="$(python3 -I - "$operation_id" "$host_hash" "$upgrade_journal" <<'PY'
 import json, sys
 operation, host, text = sys.argv[1:4]
