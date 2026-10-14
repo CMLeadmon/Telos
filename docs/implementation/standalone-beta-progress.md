@@ -474,3 +474,5 @@ member journeys, markers: **36 checks passed each** (`beta-evidence/vm/*refreshe
 (`telos-core`, `telos-client` clean; Traefik 0 Critical / 4 High; egress proxy 4 High). What remains is in four upstream images and needs a person: Grimmory (7 Critical), Jellyfin (6),
 MariaDB (1) and Postgres (1, the `gosu` binary) — all at the newest upstream tag in their line except MariaDB/Postgres, whose newest patch still ships the same `gosu`. The gate cannot
 accept a Critical, so closing it means replacing an image, an upstream rebuild, or a changed policy; none of that is decided here. `ci/risk-acceptances.json` is still empty.
+
+**Addendum — the same two local-catalog runs repeated at the final commit `c98c9b4`** (after the pin refresh and Go module bump): host 23 passed, node VM **45 of 49 passed** (the same four `not_run` that need a frozen candidate). The 30-minute capacity drill was also repeated on the refreshed stack (T4): 18 checks passed, 0 failed requests, p95 84 ms (mutation p95 57 ms), 12 containers with no restart, 25 live sessions — no measurable change from before the refresh (p95 83 ms).
