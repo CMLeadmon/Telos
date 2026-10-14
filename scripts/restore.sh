@@ -275,7 +275,7 @@ run_restore() {
 
   step="postgres restore"
   journal_event "$step" begin
-  podman exec -i telos-postgres sh -c 'exec pg_restore --clean --if-exists --no-owner --role=telos_owner --exit-on-error --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' <"$data/postgres.dump"
+  podman exec -i telos-postgres sh -c 'exec pg_restore --clean --if-exists --exit-on-error --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"' <"$data/postgres.dump"
   journal_event "$step" done
 
   step="mariadb restore"

@@ -323,7 +323,7 @@ run_backup() {
   local consistency_point; consistency_point="$(now)"
 
   step="postgres dump"
-  podman exec telos-postgres sh -c 'exec pg_dump --format=custom --no-owner --username="$POSTGRES_USER" "$POSTGRES_DB"' >"$data/postgres.dump"
+  podman exec telos-postgres sh -c 'exec pg_dump --format=custom --username="$POSTGRES_USER" "$POSTGRES_DB"' >"$data/postgres.dump"
   step="migration manifest"
   podman exec -i telos-postgres sh -c 'exec psql --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --no-psqlrc --tuples-only --no-align' >"$data/migrations.json" <<'SQL'
 SELECT coalesce(json_agg(json_build_object('version', version, 'name', name, 'checksum', checksum) ORDER BY version), '[]') FROM schema_migrations;
