@@ -1389,6 +1389,20 @@ with tempfile.TemporaryDirectory() as root:
     assert module.process_has_ownership_token(4242, token, allow_unrelated_permission_denied=True) is False and calls["count"] == 1, calls
     calls.update(count=0, denials=0)
     assert module.process_has_ownership_token(9999, token) is False and calls["count"] == 0, "a process that is gone is not inspected twice"
+    # a zombie (dead, not yet reaped) cannot be read and cannot own anything: it is "not ours" at once, not a failed cleanup
+    os.makedirs(f"{root}/4243")
+    pathlib.Path(f"{root}/4243/environ").write_bytes(b"")
+    pathlib.Path(f"{root}/4243/stat").write_bytes(b"4243 (python3) Z 4200 4243 4243 0 -1 4228108 3342 0 0 0 2 1 0 0 20 0 1 0 7972885 0 0 18446744073709551615 0 0 0\n")
+
+    def zombie_open(path, *args, **kwargs):
+        if str(path).endswith("/4243/environ"):
+            calls["count"] += 1
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, *args, **kwargs)
+
+    module.open = zombie_open
+    calls.update(count=0, denials=0)
+    assert module.process_has_ownership_token(4243, token) is False and calls["count"] == 1, calls
 PY
 
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'

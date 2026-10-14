@@ -182,7 +182,7 @@ def read_process_start_time(pid):
 
 
 # While a process executes a new program the kernel keeps it non-dumpable for a moment, and /proc/<pid>/environ answers EACCES
-# even to its owner. npm and Next.js spawn programs constantly, so a cleanup that lands in that window must look again instead
+# even to its owner; a zombie answers EACCES for good. npm and Next.js spawn programs constantly, so a cleanup that lands in that window must look again instead
 # of declaring the process uninspectable (found on a slower VM, where the window is easy to hit). A denial that persists is
 # still a refusal.
 INSPECTION_RETRIES = 100
@@ -202,6 +202,13 @@ def process_has_ownership_token(
             return False
         except PermissionError:
             if allow_unrelated_permission_denied:
+                return False
+            # A zombie (dead, not yet reaped) has no memory to read and so answers EACCES; it cannot own anything.
+            try:
+                stat = read_process_stat(pid)
+            except RuntimeError:
+                stat = ()
+            if stat is None or (stat and stat[0] in {"X", "Z"}):
                 return False
             if attempt + 1 < INSPECTION_RETRIES:
                 time.sleep(INSPECTION_RETRY_SECONDS)
