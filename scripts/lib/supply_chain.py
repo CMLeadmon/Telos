@@ -538,10 +538,16 @@ def scan(candidate_lock, artifact_root, sbom_dir, tools_dir, source_dir=None, ru
     if age > MAX_DB_AGE_SECONDS:
         findings.append(f"the vulnerability database is {int(age // 3600)} hours old (limit 24)")
     # Secrets: the exact source tree of the candidate, never the working tree.
-    secret_count = None
+    secret_count, gitleaks_config_digest = None, None
     if source_dir:
         secret_report = Path(tempfile.mkdtemp(prefix="gitleaks.")) / "report.json"
-        completed = run([gitleaks, "dir", str(source_dir), "--no-banner", "--report-format", "json", "--report-path", str(secret_report), "--exit-code", "0"], timeout=1800)
+        # The tree's own reviewed allowlist, named explicitly rather than left to gitleaks' discovery (which looks only at the scan
+        # root, so a tarball's top directory silently dropped it); without one the default ruleset applies in full.
+        config = Path(source_dir) / ".gitleaks.toml"
+        config_args = ["--config", str(config)] if config.is_file() and not config.is_symlink() else []
+        if config_args:
+            gitleaks_config_digest = rg.raw_sha256(config.read_bytes())
+        completed = run([gitleaks, "dir", str(source_dir), *config_args, "--no-banner", "--report-format", "json", "--report-path", str(secret_report), "--exit-code", "0"], timeout=1800)
         if completed.returncode != 0:
             raise Refused(f"gitleaks failed: {completed.stderr.strip()[-200:]}")
         leaks = json.loads(secret_report.read_text(encoding="utf-8") or "[]")
@@ -587,7 +593,7 @@ def scan(candidate_lock, artifact_root, sbom_dir, tools_dir, source_dir=None, ru
         "schemaVersion": 1, "candidateLockDigest": lock_digest, "startedAt": stamp(started), "finishedAt": stamp(now_utc()),
         "tools": {"trivy": {"version": trivy_version, "binarySha256": trivy_digest}, "gitleaks": {"version": gitleaks_version, "binarySha256": gitleaks_digest},
                   "syft": index["tool"]},
-        "vulnerabilityDatabase": database, "secretFindings": secret_count, "artifacts": report_artifacts, "licenses": license_report,
+        "vulnerabilityDatabase": database, "secretFindings": secret_count, "gitleaksConfigSha256": gitleaks_config_digest, "artifacts": report_artifacts, "licenses": license_report,
         "acceptancesUsed": accepted_all, "status": "failed" if findings else "passed", "findings": findings[:200],
     }
     return report, findings

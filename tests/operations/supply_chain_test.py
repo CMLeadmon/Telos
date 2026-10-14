@@ -470,6 +470,7 @@ STUB_GITLEAKS = '''#!/usr/bin/env python3
 import json, sys
 args = sys.argv[1:]
 json.dump(json.load(open(%(scenario)r))["gitleaks"], open(args[args.index("--report-path") + 1], "w"))
+open(%(scenario)r + ".gitleaks-argv", "w").write(json.dumps(args))
 '''
 
 
@@ -565,6 +566,20 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(report["vulnerabilityDatabase"]["digest"].startswith("sha256:"))
         self.assertEqual(set(report["tools"]), {"trivy", "gitleaks", "syft"})
         self.assertEqual(report["secretFindings"], 0)
+
+    def test_the_source_trees_own_gitleaks_allowlist_is_named_explicitly_and_recorded(self):
+        self.generate()
+        source = self.dir / "src"
+        source.mkdir(exist_ok=True)
+        argv_file = Path(str(self.scenario_path) + ".gitleaks-argv")
+        report, findings = self.scan()
+        self.assertNotIn("--config", json.loads(argv_file.read_text()), "no allowlist in the tree: the default ruleset applies in full")
+        self.assertIsNone(report["gitleaksConfigSha256"])
+        (source / ".gitleaks.toml").write_text('title = "x"\n')
+        report, findings = self.scan()
+        argv = json.loads(argv_file.read_text())
+        self.assertEqual(argv[argv.index("--config") + 1], str(source / ".gitleaks.toml"))
+        self.assertEqual(report["gitleaksConfigSha256"], rg.raw_sha256(b'title = "x"\n'))
 
     def test_a_critical_an_unaccepted_high_and_a_secret_each_fail(self):
         self.generate()
