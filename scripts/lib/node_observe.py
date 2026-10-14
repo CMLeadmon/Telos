@@ -312,10 +312,13 @@ def mode_install(node_path):
 
 
 SANITIZE_SQL = (
-    "SELECT (SELECT count(*) FROM sessions WHERE revoked_at IS NULL AND expires_at > NOW()),"
-    " (SELECT count(*) FROM devices WHERE revoked_at IS NULL),"
-    " (SELECT count(*) FROM device_refresh_tokens WHERE consumed_at IS NULL AND expires_at > NOW()),"
-    " (SELECT count(*) FROM invites WHERE used_at IS NULL AND expires_at > NOW()),"
+    # Only credentials that existed when the restore ran count: the node has been serving since, and
+    # a later sign-in is not a leftover from the backup.
+    "WITH r AS (SELECT COALESCE(max(restored_at), NOW()) AS at FROM restore_events) "
+    "SELECT (SELECT count(*) FROM sessions, r WHERE revoked_at IS NULL AND expires_at > NOW() AND created_at <= r.at),"
+    " (SELECT count(*) FROM devices, r WHERE revoked_at IS NULL AND created_at <= r.at),"
+    " (SELECT count(*) FROM device_refresh_tokens t JOIN devices d ON d.id = t.device_id, r WHERE t.consumed_at IS NULL AND t.expires_at > NOW() AND d.created_at <= r.at),"
+    " (SELECT count(*) FROM invites, r WHERE used_at IS NULL AND expires_at > NOW() AND created_at <= r.at),"
     " (SELECT count(*) FROM restore_events),"
     " COALESCE((SELECT source_snapshot FROM restore_events ORDER BY restored_at DESC LIMIT 1), ''),"
     " COALESCE((SELECT to_char(restored_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') FROM restore_events ORDER BY restored_at DESC LIMIT 1), '')"

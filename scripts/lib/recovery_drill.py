@@ -175,12 +175,14 @@ def evaluate_stale_known(restore, stale, hashes):
                   f"not found in the restored database: {unknown[:4]}; still usable: {alive[:4]}" if hashes else "no stale credentials were supplied")]
 
 
-def evaluate_timeline(result, journey_passed_at):
+def evaluate_timeline(result, journey_passed_at, journey_unrun=False):
     description = "recovery point and time objectives hold with the timestamps in order"
     result = result or {}
     values = {name: parse_time(result.get(name)) for name in ("consistencyPointAt", "snapshotFinishedAt", "incidentDeclaredAt")}
     if values["incidentDeclaredAt"] is None:
         return [not_run("recovery.objectives", description, "the restore recorded no incidentDeclaredAt, so the recovery clock never started; re-run restore.sh with --incident-declared-at")]
+    if journey_passed_at is None and journey_unrun:
+        return [not_run("recovery.objectives", description, "part of the member journey did not run, so the recovery time cannot be measured")]
     if values["consistencyPointAt"] is None or values["snapshotFinishedAt"] is None or journey_passed_at is None:
         return [assertion("recovery.objectives", description, "failed", "a timestamp needed for RPO/RTO is missing or unparseable")]
     points = [values["consistencyPointAt"], values["snapshotFinishedAt"], values["incidentDeclaredAt"], journey_passed_at]
@@ -285,9 +287,13 @@ def run(argv, remote_factory=dc.Remote, tls_probe=cid.probe_tls, redirect_probe=
         verifier_identity=dc.local_machine_id, smoke=cid.run_smoke, probes=probe_credentials, dns=evaluate_dns, clock=now_epoch):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target-file", required=True)
+    parser.add_argument("--rehearsal-source-verifier", action="store_true",
+                        help="rehearsal only: accept the machine that made the backup as the observer (no third machine is available)")
     resolve = dc.parse_mode_arguments(parser)
     args = parser.parse_args(argv)
     mode, commit, lock_digest = resolve(args)
+    if args.rehearsal_source_verifier and mode != "rehearsal":
+        raise dc.DrillError("--rehearsal-source-verifier belongs to --rehearsal only; a candidate drill needs a third machine")
     args.fixture_manifest = None
     out_dir = Path(args.result_out).resolve().parent
     if not out_dir.is_dir():
@@ -305,7 +311,8 @@ def run(argv, remote_factory=dc.Remote, tls_probe=cid.probe_tls, redirect_probe=
         raise dc.DrillError("the recovered host changed identity during the drill")
     restore = facts["restore"]
     result = restore.get("result") or {}
-    if verifier_identity() == result.get("sourceHostIdSha256"):
+    verifier_is_source = verifier_identity() == result.get("sourceHostIdSha256")
+    if verifier_is_source and not args.rehearsal_source_verifier:
         raise dc.NotRun("the verifier is the machine that made the backup; run the drill from a third machine")
 
     tls, redirect = tls_probe(target["origin"]), redirect_probe(target["origin"])
@@ -320,7 +327,12 @@ def run(argv, remote_factory=dc.Remote, tls_probe=cid.probe_tls, redirect_probe=
             json.dump(credentials, handle)
         smoke_target["credentialsFile"] = str(creds_path)
         code, report, summary = smoke(args, mode, commit, lock_digest, smoke_target, scratch, manifest, cid.host_descriptor_for(facts))
-        journey_passed_at = clock() if report is not None and code == 0 else None
+        # The journey's dependency-outage stages need a controller that stops Jellyfin and Grimmory
+        # on the host; this drill only observes, so those rows are out of its scope. Every other row
+        # must pass for the journey (and the recovery clock) to count.
+        in_scope = [] if report is None else [row for row in report["assertions"] if not (row["id"].startswith("outage.") and row["status"] == "not_run")]
+        journey_ok = report is not None and bool(in_scope) and all(row["status"] == "passed" for row in in_scope)
+        journey_passed_at = clock() if journey_ok else None
 
         assertions = (cid.evaluate_platform(facts) + cid.evaluate_node(facts, target) + cid.evaluate_services(facts)
                       + evaluate_restore_record(restore, target, mode, lock_digest) + evaluate_sanitization(restore)
@@ -329,22 +341,25 @@ def run(argv, remote_factory=dc.Remote, tls_probe=cid.probe_tls, redirect_probe=
         if report is None:
             assertions.append(assertion("journey.smoke", "the member journey over HTTPS on restored content", "failed", f"the smoke probe produced no report (exit {code}): {summary}"))
         else:
-            rows = report["assertions"]
+            rows = in_scope
             bad = [r["id"] for r in rows if r["status"] == "failed"]
             skipped = [r["id"] for r in rows if r["status"] == "not_run"]
+            left_out = [r["id"] for r in report["assertions"] if r not in rows]
             assertions.append(assertion("journey.smoke", "the member journey over HTTPS on restored content",
                                         "failed" if bad else "not_run" if skipped else "passed",
-                                        f"{len(rows)} journey assertions" + (f"; failed {bad[:5]}" if bad else "") + (f"; not run {skipped[:5]}" if skipped else "")))
-        assertions += evaluate_timeline(result, journey_passed_at)
+                                        f"{len(rows)} journey assertions" + (f"; failed {bad[:5]}" if bad else "") + (f"; not run {skipped[:5]}" if skipped else "")
+                                        + (f"; outage stages out of scope: {left_out}" if left_out else "")))
+        unrun = report is not None and not any(row["status"] == "failed" for row in in_scope) and any(row["status"] == "not_run" for row in in_scope)
+        assertions += evaluate_timeline(result, journey_passed_at, journey_unrun=unrun)
         status = worst(assertions)
         reason = {
-            "passed": f"{len(assertions)} recovery assertions passed",
+            "passed": f"{len(assertions)} recovery assertions passed" + (" (rehearsal: the observer was the machine that made the backup)" if verifier_is_source else ""),
             "failed": "failed: " + ", ".join(a["id"] for a in assertions if a["status"] == "failed")[:240],
             "not_run": "not run: " + ", ".join(a["id"] for a in assertions if a["status"] == "not_run")[:240],
         }[status]
         sanitized_restore = {k: v for k, v in restore.items() if k != "staleCredentials"}
         sanitized_restore["staleCredentials"] = {k.split("=")[0] + "#" + str(i): v for i, (k, v) in enumerate(sorted((restore.get("staleCredentials") or {}).items()))}
-        observation = {"schemaVersion": 1, "origin": target["origin"], "facts": {k: v for k, v in facts.items() if k != "restore"},
+        observation = {"schemaVersion": 1, "origin": target["origin"], "verifierIsSource": verifier_is_source, "facts": {k: v for k, v in facts.items() if k != "restore"},
                        "restore": sanitized_restore, "tls": tls, "httpRedirect": redirect}
         evaluation = {"schemaVersion": 1, "assertions": assertions}
         attachments = [dc.write_json(out_dir, "observation.json", observation) | {"kind": "report"},

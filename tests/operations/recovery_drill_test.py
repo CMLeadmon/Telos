@@ -330,6 +330,23 @@ class RunTests(unittest.TestCase):
             self.invoke(verifier=SOURCE_HOST)
         self.assertFalse((self.out / "result.json").exists())
 
+    def test_a_rehearsal_may_use_the_source_as_observer_only_when_it_says_so(self):
+        self.assertEqual(self.invoke(verifier=SOURCE_HOST, extra=("--rehearsal-source-verifier",)), 0)
+        self.assertIn("observer was the machine that made the backup", self.result()["reason"])
+        self.assertTrue(json.loads((self.out / "observation.json").read_text())["verifierIsSource"])
+        for child in self.out.iterdir():
+            child.unlink()
+        self.assertEqual(self.invoke(), 0)
+        self.assertFalse(json.loads((self.out / "observation.json").read_text())["verifierIsSource"])
+        lock = self.dir / "lock.json"
+        lock.write_bytes(rg.canonical_bytes({"schemaVersion": 1, "sourceCommit": COMMIT}))
+        with self.assertRaisesRegex(dc.DrillError, "third machine"):
+            drill.run(["--target-file", self.target_file, "--candidate-lock", str(lock), "--rehearsal-source-verifier",
+                       "--result-out", str(self.out / "other.json")], remote_factory=self.remote_factory(good_restore_facts()),
+                      verifier_identity=lambda: SOURCE_HOST)
+        with self.assertRaisesRegex(dc.DrillError, "recovered host itself|third machine"):
+            self.invoke(verifier=RECOVERED_HOST, extra=("--rehearsal-source-verifier",))
+
     def test_wrong_machine_identity_causes_no_collection_or_smoke(self):
         facts = good_restore_facts()
         facts["host"]["machineIdSha256"] = "sha256:" + "c" * 64
@@ -361,6 +378,24 @@ class RunTests(unittest.TestCase):
             child.unlink()
         self.assertEqual(self.invoke(clock=lambda: epoch(60 + drill.RTO_MAX_SECONDS + 1)), 1)
         self.assertIn("recovery.objectives", self.result()["reason"])
+
+    def test_dependency_outage_stages_are_out_of_scope_but_other_unrun_rows_are_not(self):
+        rows = [{"id": "chat.send", "description": "chat", "status": "passed", "detail": "ok"},
+                {"id": "outage.jellyfin", "description": "outage", "status": "not_run", "detail": "no controller"}]
+
+        def with_rows(extra):
+            def run(args, mode, commit, lock_digest, target, scratch, manifest, hosts):
+                return 3, {"schemaVersion": 1, "origin": target["origin"], "assertions": rows + extra}, "summary"
+            return run
+        self.assertEqual(self.invoke(smoke=with_rows([])), 0)
+        detail = [a for a in json.loads((self.out / "assertions.json").read_text())["assertions"] if a["id"] == "journey.smoke"][0]["detail"]
+        self.assertIn("outage stages out of scope", detail)
+        for child in self.out.iterdir():
+            child.unlink()
+        self.assertEqual(self.invoke(smoke=with_rows([{"id": "media.range", "description": "range", "status": "not_run", "detail": "x"}])), 3)
+        for child in self.out.iterdir():
+            child.unlink()
+        self.assertEqual(self.invoke(smoke=with_rows([{"id": "outage.grimmory", "description": "o", "status": "failed", "detail": "x"}])), 1)
 
     def test_a_failed_journey_never_yields_a_recovery_time(self):
         # No journey pass, so there is no honest RTO: the objective is judged failed, not skipped.
