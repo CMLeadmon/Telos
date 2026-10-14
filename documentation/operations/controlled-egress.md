@@ -71,6 +71,23 @@ The proxy hides its identity (`via off`, `forwarded_for delete`,
 
 ## Verification
 
+- `bash scripts/drills/egress.sh --target-file TARGET.json (--rehearsal --source-commit SHA | --candidate-lock LOCK)
+  --result-out OUT/result.json` — **the live drill** (the `controlled-egress` gate), run from a machine that is not the
+  node. A locked curl image (`toolImages.egress-probe` in `release/images.lock`) joins each service's *network
+  namespace* (by path: Compose puts the containers in a pod, which rules out `--network container:`) with no
+  capabilities, a read-only root and no volumes, and records only status and exit codes:
+  - ClamAV, Jellyfin, Grimmory, PostgreSQL, Redis, MariaDB and Prometheus cannot reach the Internet directly, by
+    hostname (pinned with `--resolve`, since a joined namespace has no resolver of its own) or by IP literal;
+  - the three proxied services reach an allowlisted HTTPS host through the proxy (if the node's own proxy namespace
+    cannot reach it either, the allowed path is `not_run`, not a pass);
+  - through the proxy an unlisted domain, an IP literal, a private address, the link-local metadata address, an
+    alternate port and plaintext to an unlisted host are all refused;
+  - a request carrying a random query token is logged without the token (the program reports a verdict, never log text);
+  - the containers' and networks' identities are bound to the run.
+  A probe that could not run (podman failed) is `not_run`: only a *network* failure counts as isolation.
+  `telos-core` and Traefik keep their own egress by design (the gateway's cover downloads are allowlisted in-process;
+  Traefik needs ACME), so they are outside the "direct path must fail" set.
+
 - `sh scripts/tests/egress_test.sh` — static policy assertions plus a real
   `squid -k parse`. With `EGRESS_LIVE=1` it boots the proxy on an isolated
   network and asserts an allowlisted host succeeds (`200`) while an unlisted host
