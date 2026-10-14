@@ -1363,6 +1363,7 @@ with tempfile.TemporaryDirectory() as root:
     module.PROC_ROOT = root
     os.makedirs(f"{root}/4242")
     pathlib.Path(f"{root}/4242/environ").write_bytes(f"{module.PROCESS_OWNER_ENV}={token}\0OTHER=1\0".encode())
+    pathlib.Path(f"{root}/4242/stat").write_bytes(b"4242 (node) S 4200 4242 4242 0 -1 4228108 3342 0 0 0 2 1 0 0 20 0 1 0 7972885 0 0 18446744073709551615 0 0 0\n")
     calls = {"count": 0, "denials": 0}
 
     def flaky_open(path, *args, **kwargs):
