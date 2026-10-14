@@ -40,8 +40,9 @@ if args[:3] == ["inspect", "--type", "container"]:
     name = args[3]
     if name not in scenario["running"]:
         out("[]", 1)
-    out(json.dumps([{"Id": "c" * 64, "Image": "d" * 64, "State": {"Running": True},
-                     "NetworkSettings": {"Networks": {"telos-backend": {}}}}]))
+    pid = 1000 + sorted(scenario["running"]).index(name)
+    out(json.dumps([{"Id": "c" * 64, "Image": "d" * 64, "State": {"Running": True, "Pid": pid},
+                     "NetworkSettings": {"Networks": {"telos-backend": {"IPAddress": "10.89.1.%d" % (pid - 990)}}}}]))
 if args[:2] == ["network", "inspect"]:
     internal = scenario["internalNetworks"]
     name = args[2]
@@ -51,7 +52,10 @@ if args[:1] == ["exec"]:
     line = "1760000000.000 10 10.89.1.5 TCP_MISS/301 400 GET http://openlibrary.org/" + ("?telos_probe=" + token if scenario.get("leak") else "") + " - HIER_DIRECT/1.2.3.4 -\n"
     out(line if scenario.get("logs", True) else "")
 if args[:1] == ["run"]:
-    namespace = next(a.split(":", 1)[1] for a in args if a.startswith("container:"))
+    pid = int(next(a for a in args if a.startswith("ns:/proc/")).split("/")[2])
+    namespace = sorted(scenario["running"])[pid - 1000]
+    if scenario.get("podmanBroken"):
+        out("", 125)
     curl = args[args.index("curl") + 1:]
     url = curl[-1]
     proxied = "-x" in curl
@@ -92,7 +96,7 @@ class Node:
         podman.write_text(FAKE_PODMAN)
         podman.chmod(podman.stat().st_mode | stat.S_IEXEC)
         (self.dir / "scenario.json").write_text(json.dumps(self.scenario))
-        program = drill.remote_program(REFERENCE, token)
+        program = drill.remote_program(REFERENCE, token, "203.0.113.9")
         completed = subprocess.run([sys.executable, "-I", "-"], input=program, capture_output=True, check=True,
                                    env={"PATH": f"{bin_dir}:/usr/bin:/bin", "FAKE_SCENARIO": str(self.dir / "scenario.json")})
         return json.loads(completed.stdout)
@@ -140,6 +144,21 @@ class ProgramAndJudgementTests(unittest.TestCase):
         self.assertEqual(self.evaluate(running=[n for n in drill.INTERNAL_ONLY if n != "telos-clamav"] + [drill.PROXY])["egress.identity"], "failed")
         self.assertEqual(self.evaluate(internalNetworks=["telos-db", "telos-observability"])["egress.identity"], "failed")
         self.assertEqual(self.evaluate(running=list(drill.INTERNAL_ONLY))["egress.identity"], "failed", "no proxy is running")
+
+    def test_a_probe_that_could_not_run_proves_nothing(self):
+        result = self.evaluate(podmanBroken=True)
+        self.assertEqual(result["egress.runnable"], "not_run")
+        self.assertNotIn("egress.direct", result, "a failed probe must not be counted as an isolated service")
+
+    def test_only_a_network_failure_counts_as_isolation(self):
+        node = Node()
+        self.addCleanup(node.close)
+        result = node.run()
+        for row in result["probes"]:
+            if row["probe"] == "direct-ip":
+                row["exit"] = 0   # curl succeeded -> there IS a path, whatever the code printed
+                break
+        self.assertEqual(statuses(drill.evaluate(result, REFERENCE))["egress.direct"], "failed")
 
     def test_no_engine_or_no_probe_image_is_not_run(self):
         self.assertEqual(self.evaluate(engine=False), {"egress.engine": "not_run"})
@@ -199,7 +218,7 @@ class RunTests(unittest.TestCase):
 
     def invoke(self, runner, verifier=base.VERIFIER_HOST):
         return drill.run(["--target-file", self.target_file, "--rehearsal", "--source-commit", base.COMMIT, "--result-out", str(self.out / "result.json")],
-                         remote_factory=self.remote_factory(), runner=runner, verifier_identity=lambda: verifier)
+                         remote_factory=self.remote_factory(), runner=runner, verifier_identity=lambda: verifier, resolver=lambda: "203.0.113.9")
 
     def test_a_node_without_a_generation_receipt_records_its_observations_but_is_not_run(self):
         self.assertEqual(self.invoke(self.runner_for()), 3)

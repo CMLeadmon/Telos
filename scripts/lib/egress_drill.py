@@ -53,6 +53,8 @@ DENIED = (
     ("plaintext-unlisted", "http://example.com/"),
 )
 DIRECT = (("direct-hostname", "https://openlibrary.org/"), ("direct-ip", "https://1.1.1.1/"))
+INFRA_EXIT = (None, 125, 126, 127)   # podman itself failed; curl's own failures are small numbers
+NETWORK_FAILURE_EXIT = {6, 7, 28, 35, 52, 55, 56}   # no resolver, refused, timed out, reset: no usable path
 SUCCESS = {"200", "301", "302", "304"}
 REFUSED = {"000", "403", "407"}
 assertion, check, not_run = cid.assertion, cid.check, cid.not_run
@@ -70,8 +72,16 @@ def podman(*args, timeout=90):
         return None
 
 
+INFRA = (None, 125, 126, 127)   # podman itself failed: nothing was probed
+
+
 def probe(namespace, *curl):
-    result = podman("run", "--rm", "--pull=never", "--network", "container:" + namespace, "--cap-drop=ALL",
+    """Run the locked curl image inside a running container's network namespace (by path: compose puts
+    the containers in a pod, which rules out --network container:)."""
+    pid = (identity.get(namespace) or {}).get("pid")
+    if not pid:
+        return {"httpCode": None, "exit": None}
+    result = podman("run", "--rm", "--pull=never", "--network", "ns:/proc/%d/ns/net" % pid, "--cap-drop=ALL",
                     "--security-opt=no-new-privileges", "--read-only", "--memory=64m", "--pids-limit=32", CFG["image"],
                     "curl", "-sS", "--max-time", "8", "-o", "/dev/null", "-w", "%{http_code}", *curl)
     if result is None:
@@ -90,7 +100,9 @@ def running(name):
         return None
     if not item.get("State", {}).get("Running"):
         return None
-    return {"id": item.get("Id", "")[:64], "imageId": item.get("Image", ""), "networks": sorted((item.get("NetworkSettings") or {}).get("Networks", {}))}
+    networks = (item.get("NetworkSettings") or {}).get("Networks", {})
+    return {"id": item.get("Id", "")[:64], "imageId": item.get("Image", ""), "networks": sorted(networks), "pid": item.get("State", {}).get("Pid"),
+            "addresses": {n: v.get("IPAddress") for n, v in networks.items()}}
 
 
 out = {"engine": podman("version") is not None and podman("version").returncode == 0}
@@ -104,7 +116,17 @@ if out["probeImage"]["id"] is None:
     print(json.dumps(out))
     raise SystemExit(0)
 
-out["identities"] = {name: running(name) for name in CFG["internalOnly"] + [CFG["proxy"]]}
+identity = {name: running(name) for name in CFG["internalOnly"] + [CFG["proxy"]]}
+out["identities"] = {name: ({k: v for k, v in row.items() if k not in ("pid", "addresses")} if row else None) for name, row in identity.items()}
+proxy_address = ((identity.get(CFG["proxy"]) or {}).get("addresses") or {}).get("telos-backend")
+proxy_url = "http://%s:3128" % proxy_address if proxy_address else None
+import socket
+resolved = CFG.get("allowedIp")
+if not resolved:
+    try:
+        resolved = socket.gethostbyname(CFG["allowedHost"])
+    except OSError:
+        resolved = None
 networks = {}
 for name in ("telos-backend", "telos-db", "telos-observability", "telos-egress", "telos-ingress"):
     result = podman("network", "inspect", name)
@@ -115,9 +137,11 @@ for name in ("telos-backend", "telos-db", "telos-observability", "telos-egress",
     networks[name] = {"id": document.get("id"), "internal": bool(document.get("internal"))} if document else None
 out["networks"] = networks
 
-# Does the node itself reach the Internet? Without that the allowed path cannot be shown.
-if out["identities"].get(CFG["proxy"]):
-    out["control"] = probe(CFG["proxy"], CFG["allowedUrl"])
+# Does the node itself reach the Internet? Without that the allowed path cannot be shown. (Probes join
+# a namespace but not its DNS, so the allowed host is resolved here and pinned with --resolve.)
+pin = ["--resolve", "%s:443:%s" % (CFG["allowedHost"], resolved)] if resolved else []
+if out["identities"].get(CFG["proxy"]) and resolved:
+    out["control"] = probe(CFG["proxy"], *pin, CFG["allowedUrl"])
 else:
     out["control"] = {"httpCode": None, "exit": None}
 
@@ -126,19 +150,22 @@ for name in CFG["internalOnly"]:
     if not out["identities"].get(name):
         continue
     for label, url in CFG["direct"]:
-        probes.append(dict(service=name, probe=label, **probe(name, "--noproxy", "*", url)))
+        extra = pin if label == "direct-hostname" else []
+        probes.append(dict(service=name, probe=label, **probe(name, "--noproxy", "*", *extra, url)))
     if name in CFG["proxied"]:
-        proxy = "http://" + CFG["proxy"] + ":3128"
-        probes.append(dict(service=name, probe="allowed", **probe(name, "-x", proxy, CFG["allowedUrl"])))
+        if proxy_url is None:
+            probes.append(dict(service=name, probe="allowed", httpCode=None, exit=None))
+            continue
+        probes.append(dict(service=name, probe="allowed", **probe(name, "-x", proxy_url, CFG["allowedUrl"])))
         for label, url in CFG["denied"]:
-            probes.append(dict(service=name, probe=label, **probe(name, "-x", proxy, url)))
+            probes.append(dict(service=name, probe=label, **probe(name, "-x", proxy_url, url)))
 out["probes"] = probes
 
 # Query redaction: send a token through the proxy, then look for it (never print the log).
 redaction = {"requested": False, "logged": False, "tokenLeaked": None}
 first = next((n for n in CFG["proxied"] if out["identities"].get(n)), None)
 if first and out["identities"].get(CFG["proxy"]):
-    sent = probe(first, "-x", "http://" + CFG["proxy"] + ":3128", "http://openlibrary.org/?telos_probe=" + CFG["token"])
+    sent = probe(first, "-x", proxy_url, "http://openlibrary.org/?telos_probe=" + CFG["token"]) if proxy_url else {"httpCode": None, "exit": None}
     redaction["requested"] = sent["httpCode"] is not None
     log = podman("exec", CFG["proxy"], "cat", "/var/log/squid/access.log")
     if log is not None and log.returncode == 0:
@@ -173,13 +200,16 @@ def evaluate(result, lock_reference):
                      f"{len(INTERNAL_ONLY) + 1} containers and the network identities are bound to this run",
                      f"not running: {missing}; internal networks internal={internal_ok}; egress routable={egress_ok}"))
     probes = probe_map(result)
+    infra = sorted({f"{p['service']}:{p['probe']}" for p in result.get("probes") or [] if p.get("exit") in INFRA_EXIT})
+    if infra or not probes:
+        return out + [not_run("egress.runnable", "every probe actually ran", f"the probe container could not run for {infra[:4] or 'any service'}; a probe that did not run proves nothing")]
     direct_leaks = []
     for name in INTERNAL_ONLY:
         if not identities.get(name):
             continue
         for label, _ in DIRECT:
             row = probes.get((name, label))
-            if row is None or row["httpCode"] is None or row["httpCode"] != "000" or row["exit"] == 0:
+            if row is None or row["httpCode"] != "000" or row["exit"] not in NETWORK_FAILURE_EXIT:
                 direct_leaks.append(f"{name}:{label}={row and row['httpCode']}")
     out.append(check("egress.direct", "no internal-only service can reach the Internet directly (hostname or IP)", not direct_leaks and not missing,
                      f"{len(INTERNAL_ONLY)} services: direct HTTPS to a hostname and to an IP literal both fail", f"direct paths worked or were not probed: {direct_leaks[:6]}"))
@@ -214,15 +244,23 @@ def locked_reference():
     return f"{entry['source']}@{entry['manifestDigest']}"
 
 
-def remote_program(reference, token):
-    config = {"image": reference, "proxy": PROXY, "proxied": list(PROXIED), "internalOnly": list(INTERNAL_ONLY), "allowedUrl": ALLOWED_URL,
+def remote_program(reference, token, allowed_ip=None):
+    config = {"image": reference, "proxy": PROXY, "proxied": list(PROXIED), "internalOnly": list(INTERNAL_ONLY), "allowedUrl": ALLOWED_URL, "allowedHost": "openlibrary.org", "allowedIp": allowed_ip,
               "denied": [list(p) for p in DENIED], "direct": [list(p) for p in DIRECT], "token": token}
     return ("CFG_JSON = " + repr(json.dumps(config)) + "\n" + REMOTE).encode("utf-8")
 
 
 # ------------------------------------------------------------------ command
 
-def run(argv, remote_factory=dc.Remote, runner=rp.run_program, verifier_identity=dc.local_machine_id):
+def resolve_allowed(host="openlibrary.org"):
+    import socket
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return None
+
+
+def run(argv, remote_factory=dc.Remote, runner=rp.run_program, verifier_identity=dc.local_machine_id, resolver=resolve_allowed):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--target-file", required=True)
     resolve = dc.parse_mode_arguments(parser)
@@ -235,7 +273,7 @@ def run(argv, remote_factory=dc.Remote, runner=rp.run_program, verifier_identity
         raise dc.NotRun("the verifier is the node itself; run the drill from another machine over SSH")
     reference = locked_reference()
     token = "tok" + secrets.token_hex(12)
-    result = runner(args.target_file, remote_program(reference, token), timeout=600)
+    result = runner(args.target_file, remote_program(reference, token, resolver()), timeout=600)
     remote = remote_factory(target)
     facts = remote.collect("install", target["nodePath"])
     if facts["host"]["machineIdSha256"] != target["hostId"]:
