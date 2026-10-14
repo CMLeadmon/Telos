@@ -463,3 +463,14 @@ Running the catalog on the VM exposed real defects, all fixed with tests: the Pl
 directories, the second without cache) were byte-identical — and the result equals a build of the same commit made hours earlier, before several later commits to the
 builder's own tree: archive `265ea5ce3cd88984…` and candidate lock `2eb453dbd766…` are identical in both. Archived with the other VM evidence
 (`telos-review/beta-evidence/vm/*reproducible-build-verification`). Rehearsal only; the freeze repeats it.
+
+## P5 (live) — pin refresh and Go module bump, proven on the reference VM (rehearsal)
+
+Prompted by the red supply-chain scan (A42). Each candidate move was measured first with the gate's Trivy (`beta-evidence/vm/*candidate-supply-chain-scan-rehearsal*/pin-refresh-experiment.txt`), then applied
+with `scripts/refresh-image-lock.py` (the designed tool) and the Go toolchain, and the repository's own checks re-run (`verify-image-lock --source`, image-lock, runtime-hardening,
+release, product-truth and supply-chain suites; Go build, vet and unit tests). Two rehearsal generations were built, installed beside the running one and driven by the real
+`upgrade-rollback` drill on existing data: **T3** (new pins, `992064e5…`) from T2c and **T4** (new pins + Go modules, `d0bb5fcf…`) from T3 — upgrade, fast rollback, re-upgrade,
+member journeys, markers: **36 checks passed each** (`beta-evidence/vm/*refreshed-pins-{c,d}`). Scan of T4: **296 findings, 15 distinct Critical advisories, none in a Telos image**
+(`telos-core`, `telos-client` clean; Traefik 0 Critical / 4 High; egress proxy 4 High). What remains is in four upstream images and needs a person: Grimmory (7 Critical), Jellyfin (6),
+MariaDB (1) and Postgres (1, the `gosu` binary) — all at the newest upstream tag in their line except MariaDB/Postgres, whose newest patch still ships the same `gosu`. The gate cannot
+accept a Critical, so closing it means replacing an image, an upstream rebuild, or a changed policy; none of that is decided here. `ci/risk-acceptances.json` is still empty.
