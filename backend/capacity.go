@@ -98,7 +98,10 @@ func envInt(name string, def int) int {
 	return def
 }
 
-// jellyfinStartGate bounds concurrent Jellyfin request STARTS (see ProxyPolicy.StartGate). Jellyfin
-// 10.11 hits a file-lock race in its transcode directory when audio streams start together, then
-// crashes; members already streaming are unaffected, so only the start phase is gated, briefly.
-var jellyfinStartGate = startGate(envInt("TELOS_JELLYFIN_MAX_STARTS", 4), 5*time.Second)
+// jellyfinStartGate bounds concurrent Jellyfin request STARTS, for the media proxy
+// (ProxyPolicy.StartGate) and every API call (jellyfinGET). Jellyfin 10.11.11 crashes (SIGSEGV)
+// when PlaybackInfo and audio direct-stream starts overlap 18-way -- reproduced against Jellyfin
+// itself, with no Telos code in the path -- after logging a file-lock race on its transcode
+// directory. Twelve-way is fine, so six slots keep a wide margin. Members already streaming are
+// unaffected: a slot is held only until the response headers arrive.
+var jellyfinStartGate = startGate(envInt("TELOS_JELLYFIN_MAX_STARTS", 6), 5*time.Second)

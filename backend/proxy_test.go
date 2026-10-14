@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -309,5 +310,55 @@ func TestProxyUpstreamAnswers503WhenTheGateTimesOut(t *testing.T) {
 	}
 	if atomic.LoadInt32(&reached) != 0 {
 		t.Fatal("the upstream was contacted although the gate refused")
+	}
+}
+
+func TestJellyfinGETHoldsTheSharedGateOnlyUntilHeaders(t *testing.T) {
+	previous := jellyfinStartGate
+	defer func() { jellyfinStartGate = previous }()
+	var inFlight, peak int32
+	inner := startGate(2, 2*time.Second)
+	jellyfinStartGate = func(ctx context.Context) (func(), error) {
+		release, err := inner(ctx)
+		if err != nil {
+			return nil, err
+		}
+		n := atomic.AddInt32(&inFlight, 1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
+				break
+			}
+		}
+		return func() { atomic.AddInt32(&inFlight, -1); release() }, nil
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(40 * time.Millisecond)
+		w.Write([]byte("{}"))
+	}))
+	defer upstream.Close()
+	oldBase := getJellyfinBaseURL
+	getJellyfinBaseURL = func() string { return upstream.URL }
+	defer func() { getJellyfinBaseURL = oldBase }()
+	var done sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			resp, err := jellyfinGET(context.Background(), "/x", "")
+			if err != nil {
+				t.Errorf("jellyfinGET: %v", err)
+				return
+			}
+			resp.Body.Close()
+		}()
+	}
+	done.Wait()
+	if p := atomic.LoadInt32(&peak); p > 2 {
+		t.Fatalf("%d Jellyfin API starts overlapped; the gate allows 2", p)
+	}
+	jellyfinStartGate = func(context.Context) (func(), error) { return nil, errUpstreamBusy }
+	if _, err := jellyfinGET(context.Background(), "/x", ""); !errors.Is(err, errUpstreamBusy) {
+		t.Fatalf("a refused start must surface as busy, got %v", err)
 	}
 }
