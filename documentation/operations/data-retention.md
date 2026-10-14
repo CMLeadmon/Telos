@@ -72,3 +72,12 @@ writes an immutable `file_audit` row.
 
 Any future account-owned data must extend the same deletion fixture before it
 is released.
+
+## Backups, retention and deletion
+
+Encrypted snapshots are kept 14 daily and 8 weekly (`scripts/backup.sh` applies the policy after each
+verified run; nothing else prunes). A deletion is therefore removed from the live node at once but
+remains in older snapshots until they age out — up to eight weeks. A restore from such a snapshot
+brings the deleted member's rows back (the sanitizer revokes sessions, devices and invites but does
+not re-run deletions). After any restore, re-apply deletions requested since the snapshot's
+consistency point before admitting users. A deletion request does not shorten backup retention.
