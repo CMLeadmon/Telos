@@ -6,15 +6,22 @@
 # the proxy on an isolated network and assert an allowlisted host succeeds while
 # an unlisted host, an IP literal, and an alternate port are refused.
 #
+# The images are the locked ones (release/images.lock), by digest: Squid from `images.squid`,
+# curl from `toolImages.egress-probe`. This script proves the POLICY against a throwaway proxy;
+# the running node's service namespaces are probed by scripts/drills/egress.sh.
+#
 # Exit codes: 0 pass, 10 static policy defect, 20 live behavior defect,
-# 30 environment unavailable.
+# 30 environment unavailable (and live mode without an engine is 30, never a pass).
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CONF="$ROOT/config/egress/squid.conf"
 ALLOW="$ROOT/config/egress/allowed-domains.txt"
 ENGINE="${CONTAINER_ENGINE:-podman}"
-IMG="docker.io/ubuntu/squid:latest"
+lock_ref() {  # SECTION KEY -> source@manifestDigest
+  python3 -I -c 'import json,sys; e = json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]]; print(e["source"] + "@" + e["manifestDigest"])' "$ROOT/release/images.lock" "$1" "$2"
+}
+IMG="$(lock_ref images squid)"
 
 fail()  { echo "egress-test: FAIL: $1" >&2; exit "${2:-10}"; }
 note()  { echo "egress-test: $1"; }
@@ -36,7 +43,11 @@ grep -q 'database.clamav.net'                  "$ALLOW" || fail "clamav signatur
 note "static policy checks passed"
 
 if ! command -v "$ENGINE" >/dev/null 2>&1; then
-  note "container engine unavailable; skipping parse/live checks"
+  if [ "${EGRESS_LIVE:-0}" = "1" ]; then
+    echo "egress-test: not_run: live mode needs a container engine and none is available" >&2
+    exit 30
+  fi
+  note "container engine unavailable; static policy checks only (squid -k parse and live checks need an engine)"
   exit 0
 fi
 
@@ -68,7 +79,7 @@ trap cleanup EXIT
   "$IMG" >/dev/null 2>&1 || fail "cannot start proxy" 30
 sleep 3
 
-CURL_IMG="${CURL_IMG:-docker.io/curlimages/curl:latest}"
+CURL_IMG="${CURL_IMG:-$(lock_ref toolImages egress-probe)}"
 viacurl() { "$ENGINE" run --rm --network "$NET" "$CURL_IMG" \
   -s -o /dev/null -w '%{http_code}' --max-time 15 -x "http://$NAME:3128" "$1" 2>/dev/null; }
 

@@ -215,6 +215,13 @@ def node_facts(node_path):
         except ValueError:
             watch = {"invalid": True}
     facts["setupWatch"] = watch
+    receipt_path = os.path.join(node_path, "state", "installed-generation.json")
+    try:
+        with open(receipt_path, "rb") as handle:
+            receipt_bytes = handle.read(262144)
+        facts["receipt"] = {"present": True, "digest": "sha256:" + hashlib.sha256(receipt_bytes).hexdigest()}
+    except OSError:
+        facts["receipt"] = {"present": False, "digest": None}
     return facts
 
 

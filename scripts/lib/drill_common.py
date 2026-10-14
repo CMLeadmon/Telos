@@ -167,7 +167,42 @@ def write_json(directory, name, document):
     return {"path": name, "sha256": rg.raw_sha256(data)}
 
 
-def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, hosts, tool_versions, observed_at, attachments=(), printer=print, label="drill"):
+MANIFEST_IN_REFERENCE = re.compile(r"@(sha256:[0-9a-f]{64})\Z")
+
+
+def build_runtime_subject(facts, commit, lock_digest, containers=None):
+    """The observed-runtime descriptor, or (None, why not).
+
+    A runtime observation is only evidence about a *generation*: it binds the installed receipt and, for
+    every running Telos service, the container, image and registry manifest digest. A node without an
+    installed-generation receipt, or with a service whose image has no manifest digest (a locally built
+    image), cannot give that, so a rehearsal there records its observations but no subject.
+    """
+    receipt = ((facts.get("node") or {}).get("receipt") or {})
+    if not receipt.get("present"):
+        return None, "the node has no installed-generation receipt, so the observation cannot be bound to a generation"
+    rows = [c for c in (containers if containers is not None else facts.get("containers") or []) if c.get("telos") and c.get("state") == "running"]
+    if not rows:
+        return None, "no running Telos service was observed"
+    services, unpinned = [], []
+    for row in rows:
+        match = MANIFEST_IN_REFERENCE.search(str(row.get("image") or ""))
+        image_id = str(row.get("imageId") or "").removeprefix("sha256:")
+        if not match or not re.fullmatch(r"[0-9a-f]{64}", image_id):
+            unpinned.append(row["name"])
+            continue
+        services.append({"name": row["name"], "containerId": str(row["id"])[:64], "imageId": image_id, "manifestDigest": match.group(1)})
+    if unpinned:
+        return None, f"these services run images without a registry manifest digest: {', '.join(sorted(unpinned)[:6])}"
+    host = facts["host"]
+    return {"schemaVersion": 1, "kind": "runtime", "sourceCommit": commit, "candidateLockDigest": lock_digest, "observedAt": facts["observedAt"],
+            "hostId": host["machineIdSha256"], "bootId": host["bootId"], "generationReceiptDigest": receipt["digest"],
+            "runtime": {"name": "podman", "rootless": False, "version": ((facts.get("tools") or {}).get("podman") or {}).get("version") or "unknown"},
+            "services": sorted(services, key=lambda s: s["name"])}, None
+
+
+def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, hosts, tool_versions, observed_at, attachments=(), printer=print, label="drill",
+             runtime_facts=None):
     """Write one gate-result record for an observing drill; return the shared exit code.
 
     ``assertions`` is a list of {id, description, status, detail}; the verdict is failed if any failed,
@@ -176,6 +211,12 @@ def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, 
     evidence envelope. ``observation`` must already be free of secrets (it is checked again here).
     """
     out_dir = Path(args.result_out).resolve().parent
+    runtime_subject = None
+    if runtime_facts is not None:
+        runtime_subject, unavailable = build_runtime_subject(runtime_facts, commit, lock_digest)
+        if runtime_subject is None:
+            assertions = list(assertions) + [{"id": "subject.runtime", "description": "the observation can be bound to an installed generation",
+                                              "status": "not_run", "detail": unavailable[:300]}]
     statuses = {a["status"] for a in assertions}
     status = "failed" if "failed" in statuses else "not_run" if "not_run" in statuses else "passed"
     reason = {
@@ -193,7 +234,7 @@ def finalize(args, mode, commit, lock_digest, gate_id, assertions, observation, 
         "attachments": files, "toolVersions": tool_versions,
     }
     if status == "passed":
-        subject = {
+        subject = runtime_subject if runtime_subject is not None else {
             "schemaVersion": 1, "kind": "external-host", "sourceCommit": commit, "candidateLockDigest": lock_digest,
             "observedAt": observed_at, "purpose": record["gateId"], "hosts": sorted(hosts, key=lambda h: h["hostId"]),
             "records": sorted(({"path": a["path"], "sha256": a["sha256"]} for a in files), key=lambda r: r["path"]),

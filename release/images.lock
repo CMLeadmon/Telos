@@ -149,6 +149,15 @@
     }
   },
   "toolImages": {
+    "egress-probe": {
+      "manifestDigest": "sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6",
+      "platforms": {
+        "linux/amd64": "sha256:88a9abad9d958340e48564f9bdcdaa29916a2984be59314da709f8bbc0eef6f7"
+      },
+      "registry": "docker.io",
+      "resolvedAt": "2026-10-14T05:23:41Z",
+      "source": "docker.io/curlimages/curl:8.12.1"
+    },
     "k6": {
       "manifestDigest": "sha256:9c2dee7f8ed74d317e4027c06a10f169b625638189de8d4555d0b3486a5aeb34",
       "platforms": {
