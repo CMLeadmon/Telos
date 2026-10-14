@@ -94,7 +94,9 @@ they can, the claim is refused and `rollback.sh` — which keeps every byte writ
 rehearsal found that `rollback.sh` named the restore for a finished schema upgrade and the restore then refused it.) A
 claimed operation blocks the next upgrade until the restore closes it, exactly like one that failed. It brings the stack
 down, keeps the failed state under `telos-rollback/<time>/` (node files, shared storage, and an export of every data
-volume), reactivates the generation the upgrade left, and restores the databases, volumes and storage as in
+volume), reactivates the generation the upgrade left, runs every stack operation (databases, migrations, sanitizer, the final
+start) from **that** generation's own verified tree and images — after checking they are all loaded, before anything stops —
+never from the newer tree the script belongs to, and restores the databases, volumes and storage as in
 [`backup-and-restore.md`](./backup-and-restore.md), sanitizing sessions, devices and invites. The journal then reads
 `restored`. A same-host restore never satisfies the `separate-host-restore` gate.
 

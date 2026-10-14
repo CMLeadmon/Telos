@@ -41,6 +41,7 @@ case "$1" in
     exit 0 ;;
   compose)
     shift; args="$*"
+    printf '%s\n' "$args" | grep -o -- '-f [^ ]*' | head -1 >>"$state/compose-files.log"
     case "$args" in
       *" build "*)          echo "BUILT $*" >>"$state/build.log"; exit 0 ;;
       *"sanitize-restore --snapshot"*) [[ "$fail_at" == sanitize ]] && exit 1; echo "SANITIZED $*" >>"$state/order.log"; exit 0 ;;
@@ -104,13 +105,26 @@ PY
   rm -rf "$content" "$data/inner"
 }
 
+# The stack CLI of a release tree: records which tree ran it and, like the real CLI, refuses --build in a release generation.
+write_telos_stub() {  # PATH
+  cat >"$1" <<'SH'
+#!/usr/bin/env bash
+here="$(cd "$(dirname "$0")" && pwd)"
+echo "telos $* tree=$(basename "$here")" >>"$STUB_STATE/order.log"
+if [[ "$*" == *--build* && -f "$here/images.env" ]]; then echo "start: --build is refused in a release generation" >&2; exit 1; fi
+[[ "${FAIL_AT:-}" == start ]] && exit 1
+exit 0
+SH
+  chmod +x "$1"
+}
+
 make_host() {  # NAME [candidate-digest] -> prepares an empty target host and a snapshot
   local n="$1"
   mkdir -p "$work/host-$n/state-stub" "$work/host-$n/node" "$work/host-$n/tmp" "$work/host-$n/release/backend/db" "$work/host-$n/release/cli"
   cp -r backend/db/migrations "$work/host-$n/release/backend/db/"
   cp -r cli/lib "$work/host-$n/release/cli/lib"
   touch "$work/host-$n/release/docker-compose.yml"
-  printf '#!/usr/bin/env bash\necho "telos $*" >>"$STUB_STATE/order.log"\n[[ "${FAIL_AT:-}" == start ]] && exit 1\nexit 0\n' >"$work/host-$n/release/telos"; chmod +x "$work/host-$n/release/telos"
+  write_telos_stub "$work/host-$n/release/telos"
   mkdir -p "$work/host-$n/stub/snapshot"
   make_snapshot "$work/host-$n/stub/snapshot" "${2:-}"
   printf '%s' "restic-password" >"$work/host-$n/pw"; chmod 0600 "$work/host-$n/pw"
@@ -317,12 +331,20 @@ make_rollback_host() {  # NAME [journal-state] [host-machine-file] -> a host tha
   local node="$work/host-$n/node"
   mkdir -p "$node/state" "$node/config" "$work/host-$n/srv/generations/$FROM_GEN" "$work/host-$n/srv/generations/$TO_GEN" "$work/restored-storage-$n"
   chmod 0700 "$node/state"
+  local from_dir="$work/host-$n/srv/generations/$FROM_GEN"
+  mkdir -p "$from_dir/backend/db" "$from_dir/cli"
+  cp -r backend/db/migrations "$from_dir/backend/db/"; cp -r cli/lib "$from_dir/cli/lib"
+  : >"$from_dir/docker-compose.yml"; : >"$from_dir/docker-compose.release.yml"; : >"$from_dir/docker-compose.setup.yml"
+  printf 'TELOS_CORE_IMAGE=localhost/core@sha256:%064d\nTELOS_CLIENT_IMAGE=localhost/client@sha256:%064d\nTELOS_EGRESS_PROXY_IMAGE=localhost/egress@sha256:%064d\n' 1 2 3 >"$from_dir/images.env"
+  write_telos_stub "$from_dir/telos"
+  touch "$work/host-$n/stub/images-present"
   echo "FAILED=1" >"$node/node.env"; echo "failed-state key" >"$node/config/failed.json"
   printf 'telos_traefik_acme\ntelos_jellyfin_config\ntelos_grimmory_config\ntelos_postgres_data\ntelos_grimmory_db_data\n' >"$work/host-$n/stub/existing-volumes"
   printf 'telos-core\ntelos-postgres\n' >"$work/host-$n/stub/existing-containers"
   ROLLBACK_OP="$(python3 -I scripts/lib/generations.py journal begin --node "$node" --kind upgrade --from "$FROM_GEN" --to "$TO_GEN" --schema 22 \
     --host "sha256:$(sha256sum "$machine" | cut -d' ' -f1)" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["operationId"])')"
   python3 -I scripts/lib/generations.py journal advance --node "$node" --state snapshot-verified --snapshot "$SNAPSHOT_ID" >/dev/null
+  write_generation_manifests "$n" 22
   case "$state" in
     restore-required) python3 -I scripts/lib/generations.py journal advance --node "$node" --state restore-required --error "old binaries cannot run" >/dev/null ;;
     failed)           python3 -I scripts/lib/generations.py journal advance --node "$node" --state failed --error "stack would not start" >/dev/null ;;
@@ -342,11 +364,14 @@ def manifest(current, lo, compat):
             "predecessorIds": [], "rollbackCompatibleThrough": compat, "artifactIndexSubset": []}
 for generation, record in ((from_gen, manifest(22, 1, 22)), (to_gen, manifest(24, 10, int(to_compat)))):
     directory = os.path.join(root, generation)
-    os.chmod(directory, 0o755)
     path = os.path.join(directory, "generation.json")
     with open(path, "wb") as handle:
         handle.write(rg.canonical_bytes(record))
-    os.chmod(path, 0o644)
+    for walked, directories, files in os.walk(directory):   # a verifiable generation is never group- or world-writable
+        os.chmod(walked, 0o755)
+        for name in files:
+            target = os.path.join(walked, name)
+            os.chmod(target, 0o755 if os.access(target, os.X_OK) else 0o644)
 PY
 }
 run_rollback() {  # NAME [flags...] -- [VAR=value ...]
@@ -356,7 +381,7 @@ run_rollback() {  # NAME [flags...] -- [VAR=value ...]
   [[ "${1:-}" == -- ]] && shift
   env -i HOME="$work" PATH="$bin:/usr/bin:/bin" NO_COLOR=1 PODMAN_COMPOSE_PROVIDER="$bin/podman-compose" TELOS_DEV=1 TELOS_HEALTH_URL="$HEALTH_URL" \
     STUB_STATE="$work/host-$n/stub" TELOS_NODE_PATH="$work/host-$n/node" TELOS_BACKUP_TMP_ROOT="$work/host-$n/tmp" \
-    TELOS_RELEASE_ROOT="$work/host-$n/release" TELOS_RELEASE_BASE="$work/host-$n/srv" TELOS_BACKUP_REQUIRE_ROOT=0 TELOS_MACHINE_ID_FILE="$SOURCE_ID_FILE" \
+    TELOS_RELEASE_ROOT="$work/host-$n/release" TELOS_RELEASE_BASE="$work/host-$n/srv" TELOS_BACKUP_REQUIRE_ROOT=0 TELOS_MACHINE_ID_FILE="$SOURCE_ID_FILE" TELOS_GENERATION_OWNER_CHECK=0 \
     RESTIC_REPOSITORY="sftp:backup@offsite.example:/srv/telos" RESTIC_PASSWORD_FILE="$work/host-$n/pw" RESTIC_CACHE_DIR="$work/cache" "$@" \
     bash scripts/restore.sh --mode rollback --operation-id "${ROLLBACK_OP_OVERRIDE:-$ROLLBACK_OP}" --result-out "$work/host-$n/result.json" "${flags[@]}" \
     >"$work/out-$n" 2>&1
@@ -388,11 +413,15 @@ rollback_untouched rbusage
 make_rollback_host rbwrongop
 ROLLBACK_OP_OVERRIDE="$(printf 'f%.0s' $(seq 32))" rollback_refuses rbwrongop "not the node's last operation" "${ROLLBACK_GOOD[@]}"
 # A completed upgrade is handed to a restore only when swapping binaries cannot undo it.
-make_rollback_host rbdone complete
+make_rollback_host rbdone complete; rm "$work/host-rbdone/srv/generations/$FROM_GEN/generation.json"
 rollback_refuses rbdone "cannot be handed to a restore" "${ROLLBACK_GOOD[@]}"        # generations that do not verify prove nothing
 make_rollback_host rbdonecompat complete; write_generation_manifests rbdonecompat 24   # the previous binaries accept schema 24
-rollback_refuses rbdonecompat "use rollback.sh" "${ROLLBACK_GOOD[@]}" -- TELOS_GENERATION_OWNER_CHECK=0
+rollback_refuses rbdonecompat "use rollback.sh" "${ROLLBACK_GOOD[@]}"
 python3 -I -c 'import json,sys; assert json.load(open(sys.argv[1]))["state"] == "complete"' "$work/host-rbdonecompat/node/state/operation.json" || fail "rbdonecompat: a refused claim changed the journal"
+make_rollback_host rbnoimage; rm "$work/host-rbnoimage/stub/images-present"
+rollback_refuses rbnoimage "is not in local storage" "${ROLLBACK_GOOD[@]}"                # the generation to return to must be runnable before anything stops
+make_rollback_host rbnogen; rm -rf "$work/host-rbnogen/srv/generations/$FROM_GEN"
+rollback_refuses rbnogen "is not installed or does not verify" "${ROLLBACK_GOOD[@]}"
 make_rollback_host rbhost restore-required "$TARGET_ID_FILE"
 rollback_refuses rbhost "not the host the upgrade ran on" "${ROLLBACK_GOOD[@]}"
 make_rollback_host rbdiff restore-required "$TARGET_ID_FILE"   # the journal and this machine agree, but the snapshot came from another
@@ -421,6 +450,13 @@ PY
     [[ -s "$rollback_dir/volumes/$v.tar" ]] || fail "$id: the failed state of $v was not exported"
   done
   [[ "$(stat -c %a "$rollback_dir")" == 700 && "$(stat -c %a "$rollback_dir/volumes")" == 700 ]] || fail "$id: the rollback directory is not private"
+  # The rollback leaves the PREVIOUS generation running: every stack operation comes from its tree, nothing is built, and the
+  # tree of the generation being undone (the one this script belongs to) is never used to start anything.
+  ! grep -q "tree=release" "$work/host-$id/stub/order.log" || fail "$id: the stack was started from the generation being undone: $(cat "$work/host-$id/stub/order.log")"
+  grep -q "^telos start tree=$FROM_GEN$" "$work/host-$id/stub/order.log" || fail "$id: the previous generation was not started without --build: $(cat "$work/host-$id/stub/order.log")"
+  ! grep -q "/release/" "$work/host-$id/stub/compose-files.log" || fail "$id: a compose call used the tree of the generation being undone: $(cat "$work/host-$id/stub/compose-files.log")"
+  [[ "$(sort -u "$work/host-$id/stub/compose-files.log")" == "-f $work/host-$id/srv/generations/$FROM_GEN/docker-compose.yml" ]] || fail "$id: compose calls did not all use the previous generation: $(sort -u "$work/host-$id/stub/compose-files.log")"
+  [[ ! -s "$work/host-$id/stub/build.log" ]] || fail "$id: an image was built in a release generation: $(cat "$work/host-$id/stub/build.log")"
   [[ "$(readlink "$work/host-$id/srv/current")" == "generations/$FROM_GEN" ]] || fail "$id: the generation the upgrade left was not reactivated"
   grep -q 'TELOS_DOMAIN=telos.test' "$work/host-$id/node/node.env" || fail "$id: node.env was not restored from the snapshot"
   python3 -I - "$work/host-$id/stub/order.log" <<'PY' || fail "$id: bad stack order: $(cat "$work/host-$id/stub/order.log")"
@@ -441,8 +477,8 @@ PY
   python3 -I scripts/lib/generations.py journal begin --node "$work/host-$id/node" --kind upgrade --from "$FROM_GEN" --to "$TO_GEN" --schema 22 \
     --host "sha256:$(sha256sum "$SOURCE_ID_FILE" | cut -d' ' -f1)" >/dev/null || fail "$id: a restored operation still blocks the next one"
 done
-make_rollback_host rbclaim complete; write_generation_manifests rbclaim 22              # the previous binaries cannot run on schema 24
-run_rollback rbclaim "${ROLLBACK_GOOD[@]}" -- TELOS_GENERATION_OWNER_CHECK=0 || fail "rbclaim: restoring a completed, schema-incompatible upgrade failed: $(tail -4 "$work/out-rbclaim")"
+make_rollback_host rbclaim complete                                                       # the previous binaries cannot run on schema 24
+run_rollback rbclaim "${ROLLBACK_GOOD[@]}" || fail "rbclaim: restoring a completed, schema-incompatible upgrade failed: $(tail -4 "$work/out-rbclaim")"
 python3 -I - "$work/host-rbclaim" "$ROLLBACK_OP" <<'PY' || fail "rbclaim: bad journal or result"
 import json, sys
 host, op = sys.argv[1:3]

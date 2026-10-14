@@ -207,7 +207,8 @@ run_restore() {
   [ "$tmp_root" != / ] || die "the temp root must not be /"
   journal_event "$step" done
 
-  local rollback="" volume previous_generation=""
+  local rollback="" volume previous_generation="" owner_flag=() release_mode=0
+  [ "${TELOS_GENERATION_OWNER_CHECK:-1}" != 0 ] || owner_flag=(--no-owner-check)
   if [ "$mode" = rollback ]; then
     step="upgrade journal check"
     journal_event "$step" begin
@@ -217,8 +218,6 @@ run_restore() {
     if [ "$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1]).get("state", ""))' "$upgrade_journal")" = complete ]; then
       # The operator wants a finished upgrade undone. That is only a restore's job when swapping binaries cannot do it:
       # the claim succeeds only if the previous generation provably cannot run on the schema the upgrade left.
-      local owner_flag=()
-      [ "${TELOS_GENERATION_OWNER_CHECK:-1}" != 0 ] || owner_flag=(--no-owner-check)
       python3 -I "$script_dir/lib/generations.py" journal claim-restore --root "$release_base" --node "$node_path" --operation-id "$operation_id" "${owner_flag[@]}" >/dev/null \
         || die "refusing the rollback restore: the completed upgrade cannot be handed to a restore (use rollback.sh when the previous generation can run on the schema)"
       upgrade_journal="$(python3 -I "$script_dir/lib/generations.py" journal show --node "$node_path")" || die "the upgrade journal is unreadable"
@@ -242,8 +241,25 @@ print(j["snapshotId"])
 PY
 )" || die "refusing the rollback restore"
     previous_generation="$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["fromGeneration"] or "")' "$upgrade_journal")"
+    # The rollback must leave the PREVIOUS generation running: its compose files, its images, its migrations. This script may
+    # belong to the generation being undone (the newer tooling), so every stack operation is pointed at the previous tree.
+    [ -n "$previous_generation" ] || die "the upgrade journal names no generation to return to"
+    python3 -I "$script_dir/lib/generations.py" verify --root "$release_base" --id "$previous_generation" "${owner_flag[@]}" >/dev/null \
+      || die "the generation the upgrade left (${previous_generation:0:12}) is not installed or does not verify"
+    release_root="$release_base/generations/$previous_generation"
+    [ -x "$release_root/telos" ] && [ -d "$release_root/cli" ] && [ -f "$release_root/docker-compose.yml" ] \
+      || die "the generation the upgrade left is not a complete release tree"
+    local ref refs
+    refs="$(python3 -I "$script_dir/lib/generations.py" images --root "$release_base" --id "$previous_generation" "${owner_flag[@]}" \
+      | python3 -I -c 'import json,sys; print("\n".join(json.load(sys.stdin)["images"]))')" || die "the images of the generation the upgrade left could not be listed"
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      podman image exists "$ref" 9>&- || die "image $ref of the generation the upgrade left is not in local storage; run install-candidate.sh for it again (nothing was changed)"
+    done <<<"$refs"
     journal_event "$step" done
   fi
+  # A release generation runs only the images it was installed with: nothing is built, and the CLI refuses --build.
+  [ -f "$release_root/images.env" ] && [ -f "$release_root/docker-compose.release.yml" ] && release_mode=1
 
   step="empty-host check"
   journal_event "$step" begin
@@ -373,9 +389,11 @@ PY
   # Images the host already holds (loaded from the release's artifacts) are used as they
   # are; only a missing one is built from the installed release.
   local missing_build=() service
-  for service in telos-migrate telos-sanitize-restore; do
-    podman image exists "localhost/telos_$service" 2>/dev/null || missing_build+=("$service")
-  done
+  if [ "$release_mode" -eq 0 ]; then
+    for service in telos-migrate telos-sanitize-restore; do
+      podman image exists "localhost/telos_$service" 2>/dev/null || missing_build+=("$service")
+    done
+  fi
   [ "${#missing_build[@]}" -eq 0 ] || stack --profile restore build "${missing_build[@]}" >/dev/null
   stack run --rm --no-deps -T telos-migrate >/dev/null
   journal_event "$step" done
@@ -392,7 +410,7 @@ PY
   for image in telos-core telos-client telos-egress-proxy; do
     podman image exists "localhost/telos_$image" 2>/dev/null || all_present=0
   done
-  [ "$all_present" -eq 0 ] || build_flag=()
+  if [ "$all_present" -eq 1 ] || [ "$release_mode" -eq 1 ]; then build_flag=(); fi
   telos_cli start "${build_flag[@]}"
   local wait=0
   until gateway_ready; do
