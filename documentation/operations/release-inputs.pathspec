@@ -25,6 +25,7 @@ backend/db/migrations/0020_remove_realtime_extras.sql
 backend/db/migrations/0021_annotation_targets.sql
 backend/db/migrations/0022_catalog_identity_and_progress.sql
 backend/db/migrations/0023_device_tokens.sql
+backend/db/migrations/0024_restore_events.sql
 backend/settings.go
 backend/settings_test.go
 config/traefik.yaml

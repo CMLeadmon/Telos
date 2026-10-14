@@ -55,7 +55,7 @@ core rules. They are ordered by how expensive the violation is to undo.
 - **Applied migrations are immutable.** `backend/migrations.go` verifies a checksum for every
   row in `schema_migrations`. Editing an already-applied file in `backend/db/migrations/`
   breaks every existing deployment. Schema changes are always a **new** numbered file
-  (`NNNN_description.sql`, currently through `0023`), written idempotently with
+  (`NNNN_description.sql`, currently through `0024`), written idempotently with
   `IF NOT EXISTS` / `ON CONFLICT`. There is no `schema.sql`.
 - **Never run `telos init --force` on an existing node.** `telos doctor` suggests it to clear
   `change-me` placeholders, but it regenerates every secret and desynchronizes them from the

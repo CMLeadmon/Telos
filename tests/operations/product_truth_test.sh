@@ -241,7 +241,7 @@ import sys
 for path in sys.argv[1:]:
     with open(path, encoding="utf-8") as source:
         text = source.read()
-    text = text.replace("currently through `0023`", "currently through `0022`")
+    text = text.replace("currently through `0024`", "currently through `0023`")
     text = text.replace(
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
         "The default backend build embeds the frontend and requires `backend/out/`.",

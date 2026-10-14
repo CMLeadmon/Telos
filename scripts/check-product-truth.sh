@@ -575,12 +575,12 @@ realized_marker = (
 browser_marker = realized_marker if browser_realized else transitional_marker
 guide_requirements = {
     "AGENTS.md": [
-        "currently through `0023`",
+        "currently through `0024`",
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
         browser_marker,
     ],
     "CLAUDE.md": [
-        "currently through `0023`",
+        "currently through `0024`",
         "The default backend build is headless and does not require `backend/out/` or a build tag.",
         browser_marker,
     ],
