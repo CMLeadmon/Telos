@@ -149,7 +149,8 @@ print(json.dumps(out))
 
 
 def node_program(paths):
-    return NODE_PROGRAM % {"paths": repr(json.dumps(paths))}
+    """The fixed node-side program as the bytes the transport (``python3 -I -`` over SSH) takes on stdin."""
+    return (NODE_PROGRAM % {"paths": repr(json.dumps(paths))}).encode("utf-8")
 
 
 DEFAULT_PATHS = {"backupEnv": "/etc/telos/backup.env", "currentLink": "/srv/telos/current", "fallbackRelease": "/opt/telos",

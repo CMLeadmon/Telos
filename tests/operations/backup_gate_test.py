@@ -159,9 +159,11 @@ class World:
                 "nodePath": str(self.dir), "tmpRoot": str(self.tmp), "backupTimeout": 60, "ownerUid": os.getuid()}
 
     def run_node(self):
-        completed = subprocess.run([sys.executable, "-I", "-"], input=gate.node_program(self.paths()), capture_output=True, text=True, env=self.environment())
-        assert completed.returncode == 0, completed.stderr
-        return json.loads(completed.stdout)
+        program = gate.node_program(self.paths())
+        assert isinstance(program, bytes), "the transport feeds the program to `python3 -I -` as bytes (found by the first live run)"
+        completed = subprocess.run([sys.executable, "-I", "-"], input=program, capture_output=True, env=self.environment())
+        assert completed.returncode == 0, completed.stderr.decode()
+        return json.loads(completed.stdout.decode())
 
     def restic(self, password=None):
         pw = password or self.password
