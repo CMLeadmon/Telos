@@ -149,6 +149,13 @@ class SampleTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in result.items() if v != "passed"}, {})
         self.assertEqual(set(result), {"capacity.samples", "capacity.stability", "capacity.cpu", "capacity.memory", "capacity.storage", "capacity.saturation", "capacity.sessions"})
 
+    def test_a_one_shot_that_exited_is_not_a_lost_service_but_a_stopped_gateway_is(self):
+        samples = good_samples()
+        done = lambda r, i: r["containers"].update({"telos-migrate": {"status": "exited", "health": None, "restarts": 0, "oomKilled": False, "cpuUsec": 0,  # noqa: E731
+                                                                      "cpuQuotaCores": None, "memoryBytes": None, "memoryLimitBytes": None, "oomKills": None}})
+        self.assertEqual(self.evaluate(mutate(samples, done))["capacity.stability"], "passed")
+        self.assertEqual(self.evaluate(mutate(samples, lambda r, i: r["containers"]["telos-core"].update(status="exited"), start=900, end=905))["capacity.stability"], "failed")
+
     def test_missing_samples_fail(self):
         self.assertEqual(self.evaluate(good_samples()[::3])["capacity.samples"], "failed")
         self.assertEqual(self.evaluate([])["capacity.samples"], "failed")
@@ -489,7 +496,7 @@ class RunTests(unittest.TestCase):
             path = os.path.join(out_dir, "k6-summary.json")
             if summary is not None:
                 Path(path).write_text(json.dumps(summary))
-            return 0, path
+            return 0, path, ""
 
         def runner(target_file, program, timeout=0):
             steps.append("samples")

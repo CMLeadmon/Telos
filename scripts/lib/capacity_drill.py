@@ -59,6 +59,7 @@ MEMORY_LIMIT_FRACTION = 0.85
 MIN_FREE_BYTES = 10 * 1024 ** 3
 MIN_FREE_FRACTION = 0.10
 P95_MS, MUTATION_P95_MS, FAILED_RATE, CHECK_RATE = 750, 1000, 0.01, 0.99
+ONE_SHOT = {"telos-migrate", "telos-audiobook-migrate", "telos-sanitize-restore"}   # they exit by design
 REQUIRED_THRESHOLDS = {
     "http_req_failed": {"rate<0.01"},
     "http_req_duration": {"p(95)<750"},
@@ -160,7 +161,7 @@ def evaluate_samples(samples, seconds, node_services):
         ooms = [r["oomKills"] for r in rows if r.get("oomKills") is not None]
         if ooms and max(ooms) > min(ooms):
             killed.append(name)
-        if any(r.get("health") == "unhealthy" or r.get("status") not in ("running", None) for r in rows):
+        if any(r.get("health") == "unhealthy" or (name not in ONE_SHOT and r.get("status") not in ("running", None)) for r in rows):
             unhealthy.append(name)
     out.append(check("capacity.stability", "no service restarted, was killed for memory or lost its health",
                      not (restarts or killed or unhealthy or missing),
@@ -267,13 +268,17 @@ def run_k6(engine, image, data_path, origin, duration, out_dir, add_host, ca_bun
     pulled = runner([*engine, "pull", "--quiet", image], capture_output=True, timeout=600, check=False)   # by digest: the locked image or nothing
     if pulled.returncode != 0:
         raise dc.NotRun("the locked k6 image could not be pulled on the load host")
-    argv = [*engine, "run", "--rm", "--pull=never", "--memory=2g", "--add-host", add_host,
+    # The container runs as the invoking user so it can read the 0600 credentials and write the 0700 output
+    # directory; it keeps no capabilities and no writable root.
+    argv = [*engine, "run", "--rm", "--pull=never", "--user", f"{os.geteuid()}:{os.getegid()}", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+            "--read-only", "--tmpfs", "/tmp", "--memory=2g", "--add-host", add_host,
             "-v", f"{ROOT / 'tests' / 'load'}:/scripts:ro", "-v", f"{data_path}:/data/load-data.json:ro", "-v", f"{out_dir}:/out",
             "-v", f"{ca_bundle}:/etc/ssl/certs/ca-certificates.crt:ro",
             "-e", f"TELOS_ORIGIN={origin}", "-e", "TELOS_LOAD_DATA=/data/load-data.json", "-e", f"TELOS_LOAD_DURATION={duration}",
             image, "run", "--summary-export", "/out/k6-summary.json", "--quiet", "/scripts/telos.js"]
     completed = runner(argv, capture_output=True, timeout=duration_seconds(duration) + 600, check=False)
-    return completed.returncode, summary_path
+    tail = completed.stderr.decode("utf-8", "replace").strip().splitlines()[-2:] if completed.stderr else []
+    return completed.returncode, summary_path, " | ".join(tail)[:240]
 
 
 def locked_k6():
@@ -328,7 +333,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         sampler.start()
         engine = [] if os.geteuid() == 0 or shutil.which("podman") is None else (["sudo", "-n", "podman"] if os.environ.get("TELOS_LOAD_SUDO", "1") == "1" else ["podman"])
         engine = engine or ["podman"]
-        code, summary_path = k6(engine, locked_k6(), str(fixture_dir / "load-data.json"), target["origin"], args.duration, str(scratch),
+        code, summary_path, k6_tail = k6(engine, locked_k6(), str(fixture_dir / "load-data.json"), target["origin"], args.duration, str(scratch),
                                 f"{host}:{address}", os.environ.get("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt"))
         sampler.join(timeout=seconds + 900)
         summary = None
@@ -337,7 +342,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         except (OSError, ValueError):
             pass
         if summary is None:
-            assertions.append(assertion("capacity.k6", "the load generator produced a summary", "failed", f"k6 exited {code} without a readable summary"))
+            assertions.append(assertion("capacity.k6", "the load generator produced a summary", "failed", f"k6 exited {code} without a readable summary ({k6_tail or 'no output'})"))
         else:
             assertions += evaluate_k6(summary, seconds)
         if stats_error:
