@@ -34,7 +34,7 @@ installation is still pending, so this is not yet a certified deployment.
 | Desktop distribution | Unsigned invite-only beta packages; blocked until Phase 3 evidence |
 | HTTPS trust | Platform-trusted HTTPS only |
 | Browser matrix | Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome |
-| Backup/recovery | Blocked until Phase 4 evidence |
+| Backup/recovery | Implemented and rehearsed; not shipping until Phase 5 candidate evidence |
 
 The server targets **Ubuntu 24.04+ only**, with `ubuntu-24.04` as the minimum
 reference release, `x86_64` as the initial architecture, and Podman `5.0.0` or
@@ -54,7 +54,7 @@ Only platform-trusted HTTPS is supported: use public ACME certificates or an
 operator-installed private CA trusted by the platform. Self-signed certificate
 and certificate-pinning overrides are not a beta trust path.
 
-Encrypted off-node backup and recovery are blocked until Phase 4 evidence exists.
+Encrypted off-node backup and recovery are blocked until Phase 5 candidate evidence exists.
 They require verified encrypted snapshots, 14 daily and 8 weekly retention,
 and a separate-host restore before the RPO of at most 24 hours and RTO of at
 most 4 hours can be claimed.

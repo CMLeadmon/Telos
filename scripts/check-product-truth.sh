@@ -417,12 +417,12 @@ if contract_valid:
     for surface in [*contract["modules"], contract["settingsSurface"]]:
         if surface.casefold() not in status.casefold():
             fail("modules", f"beta status does not name {surface}")
-    backup_block = "Encrypted off-node backup and recovery are blocked until Phase 4 evidence exists."
+    backup_block = "Encrypted off-node backup and recovery are blocked until Phase 5 candidate evidence exists."
     required_status_rows = {
         "desktop": ("Desktop distribution", "Unsigned invite-only beta packages; blocked until Phase 3 evidence"),
         "https": ("HTTPS trust", "Platform-trusted HTTPS only"),
         "browserMatrix": ("Browser matrix", "Chrome, Firefox, Edge, desktop Safari, iOS Safari, Android Chrome"),
-        "backupStatus": ("Backup/recovery", "Blocked until Phase 4 evidence"),
+        "backupStatus": ("Backup/recovery", "Implemented and rehearsed; not shipping until Phase 5 candidate evidence"),
     }
     for field, (label, value) in required_status_rows.items():
         if status_rows.get(label) != value:
@@ -715,6 +715,93 @@ if (root / ".env.example").exists() and f"\nTELOS_ALLOWED_ORIGINS={native_pair}\
 compose_text = text("docker-compose.yml") if (root / "docker-compose.yml").exists() else ""
 if compose_text and "TELOS_ALLOWED_ORIGINS=${TELOS_ALLOWED_ORIGINS:-}" not in compose_text:
     fail("desktopOrigins", "docker-compose.yml must pass TELOS_ALLOWED_ORIGINS to telos-core")
+
+# --- Operational safety envelope (Phase 4) ---------------------------------
+# The Phase 4 gates, their operational inputs and the absence of success-only scripts are
+# enforced structurally. Having the inputs proves nothing about a node: the status document
+# keeps implementation, rehearsal and candidate evidence apart, and backup/recovery shipping
+# claims stay blocked (above) until Phase 5 candidate evidence exists.
+PHASE4_LOCAL = [
+    "image-lock", "runtime-hardening-static", "monitoring-source", "backup-fixtures",
+    "restore-fixtures", "upgrade-rollback-fixtures", "capacity-exposure-fixtures", "supply-chain-policy",
+]
+PHASE4_EXTERNAL = [
+    "runtime-hardening", "monitoring", "encrypted-backup", "separate-host-restore",
+    "upgrade-rollback", "capacity", "host-exposure", "controlled-egress", "candidate-supply-chain",
+]
+PHASE4_INPUTS = [
+    "release/images.lock", "release/images-lock.schema.json", "release/backup-manifest.schema.json",
+    "release/generation-manifest.schema.json", "release/installed-generation.schema.json",
+    "release/operation-journal.schema.json", "release/predecessor-policy.json",
+    "config/runtime-hardening.json", "config/exposure-policy.json", "config/release-exclude.txt",
+    "ci/tools.lock", "ci/license-policy.json", "ci/risk-acceptance.schema.json", "ci/risk-acceptances.json",
+    "deploy/systemd/telos-backup.service", "deploy/systemd/telos-backup.timer",
+    "scripts/backup.sh", "scripts/prune-backups.sh", "scripts/restore.sh", "scripts/restore-state.sh",
+    "scripts/upgrade.sh", "scripts/rollback.sh", "scripts/verify-restore.sh", "scripts/verify-restored-node.sh",
+    "scripts/verify-runtime-hardening.sh", "scripts/verify-monitoring.sh", "scripts/run-capacity-drill.sh",
+    "scripts/audit-host-exposure.sh", "scripts/generate-sbom.sh", "scripts/scan-candidate.sh",
+    "scripts/drills/recovery.sh", "scripts/drills/egress.sh", "scripts/drills/upgrade-rollback.sh",
+    "scripts/lib/generations.py", "scripts/lib/lifecycle.sh", "scripts/lib/maintenance.sh",
+    "scripts/lib/backup_manifest.py", "scripts/lib/recovery_drill.py", "scripts/lib/capacity_drill.py",
+    "scripts/lib/exposure_audit.py", "scripts/lib/egress_drill.py", "scripts/lib/supply_chain.py",
+]
+SUCCESS_ONLY_LINE = re.compile(r"^(set\s+-\S+(\s+\S+)?|exit\s+0|true|:|echo\b.*|printf\b.*|return\s+0)$")
+STATUS_PASSED = re.compile(r"""["']?status["']?\s*[:=]\s*["']passed["']""")
+FAILURE_PATH = re.compile(r"\bexit\s+[1-9]|\bdie\b|\bfail\w*|\braise\b|sys\.exit|\bnot[_-]run\b")
+
+catalog_p4 = document("ci/phase-gates.json", "operationalGates")
+if isinstance(catalog_p4, dict):
+    gates_p4 = [gate for gate in catalog_p4.get("gates", []) if isinstance(gate, dict)]
+    by_id_p4 = {}
+    for gate in gates_p4:
+        by_id_p4.setdefault(gate.get("id"), []).append(gate)
+    for scope, ids in (("local", PHASE4_LOCAL), ("external", PHASE4_EXTERNAL)):
+        for gate_id in ids:
+            found = by_id_p4.get(gate_id, [])
+            if len(found) != 1:
+                fail("operationalGates", f"Phase 4 {scope} gate {gate_id} must exist exactly once in the catalog")
+                continue
+            gate = found[0]
+            if gate.get("phase") != 4 or gate.get("scope") != scope or gate.get("required") is not True:
+                fail("operationalGates", f"gate {gate_id} must be a required phase-4 {scope} gate")
+            for word in gate.get("command", []):
+                if isinstance(word, str) and re.fullmatch(r"(?:scripts|tests)/\S+\.(?:sh|py)", word):
+                    if not (root / word).is_file():
+                        fail("operationalGates", f"gate {gate_id} runs {word}, which does not exist")
+    certification = (by_id_p4.get("beta-certification") or [{}])[0]
+    for gate_id in PHASE4_LOCAL + PHASE4_EXTERNAL:
+        if gate_id not in certification.get("prerequisites", []):
+            fail("operationalGates", f"beta-certification must list {gate_id} as a prerequisite")
+
+for relative in PHASE4_INPUTS:
+    if not (root / relative).is_file():
+        fail("operationalInventory", f"missing Phase 4 operational input {relative}")
+
+unit = text("deploy/systemd/telos-backup.service") if (root / "deploy/systemd/telos-backup.service").is_file() else ""
+timer = text("deploy/systemd/telos-backup.timer") if (root / "deploy/systemd/telos-backup.timer").is_file() else ""
+if unit and not re.search(r"^ExecStart=\S*/scripts/backup\.sh\b", unit, re.M):
+    fail("systemdUnits", "telos-backup.service must run scripts/backup.sh")
+if unit and re.search(r"^ExecStart=.*\b(true|/bin/true)\b\s*$", unit, re.M):
+    fail("systemdUnits", "telos-backup.service ExecStart must not be a no-op")
+if timer and ("Persistent=true" not in timer or "telos-backup.service" not in timer):
+    fail("systemdUnits", "telos-backup.timer must be persistent and trigger telos-backup.service")
+
+operational_scripts = sorted(
+    {relative for relative in PHASE4_INPUTS if relative.startswith("scripts/") and relative.endswith((".sh", ".py"))}
+)
+for relative in operational_scripts:
+    path = root / relative
+    if not path.is_file():
+        continue
+    body = path.read_text(encoding="utf-8", errors="replace")
+    statements = [
+        line.strip() for line in body.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    if statements and all(SUCCESS_ONLY_LINE.match(line) for line in statements):
+        fail("operationalScripts", f"{relative} is a success-only script body")
+    if STATUS_PASSED.search(body) and not FAILURE_PATH.search(body):
+        fail("operationalScripts", f"{relative} writes a passed status but has no failure path")
 
 if errors:
     for field, message in errors:

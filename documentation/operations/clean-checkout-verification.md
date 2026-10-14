@@ -25,8 +25,8 @@ tears everything down.
 
 | Field | Value |
 |---|---|
-| Compose services | traefik, telos-migrate, telos-audiobook-migrate, telos-core, postgres, redis, telos-egress-proxy, clamav, jellyfin, grimmory-db, grimmory |
-| Migration inventory | 0001–0023; the verifier requires a contiguous tracked sequence |
+| Compose services | traefik, telos-migrate, telos-sanitize-restore (restore profile), telos-audiobook-migrate (migration profile), telos-core, telos-client, postgres, redis, telos-egress-proxy, clamav, jellyfin, grimmory-db, grimmory, prometheus |
+| Migration inventory | 0001–0024; the verifier requires a contiguous tracked sequence |
 | Runtime tool and builder images | Recorded by the candidate invocation |
 | Compose, image, health, static asset, bootstrap, login, and teardown results | Candidate-specific; read the emitted evidence artifact |
 

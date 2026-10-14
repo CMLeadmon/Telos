@@ -51,6 +51,15 @@ copy_fixture_raw() {
   done
   cp "$repo_root/LICENSE" "$fixture/LICENSE"
   cp "$repo_root/README.md" "$fixture/README.md"
+  # The Phase 4 operational inventory (locks, policies, units, operation scripts) is checked structurally.
+  local tree
+  for tree in release ci config deploy scripts; do
+    mkdir -p "$fixture/$tree"
+    cp -a "$repo_root/$tree/." "$fixture/$tree/"
+  done
+  mkdir -p "$fixture/tests/operations"
+  cp -a "$repo_root/tests/operations/." "$fixture/tests/operations/"
+  find "$fixture/scripts" "$fixture/tests/operations" -name __pycache__ -type d -prune -exec rm -rf {} +
   mkdir -p "$fixture/documentation/product"
   cp "$repo_root/documentation/product/beta-contract.json" \
     "$fixture/documentation/product/beta-contract.json"
@@ -316,7 +325,7 @@ import sys
 path = sys.argv[1]
 with open(path, encoding="utf-8") as source:
     text = source.read()
-blocked = "Encrypted off-node backup and recovery are blocked until Phase 4 evidence exists."
+blocked = "Encrypted off-node backup and recovery are blocked until Phase 5 candidate evidence exists."
 if blocked not in text:
     raise SystemExit("backup blocked marker is missing")
 with open(path, "w", encoding="utf-8") as destination:
@@ -896,6 +905,40 @@ bash "$repo_root/scripts/check-product-truth.sh" --root "$fixture_root/desktop-w
 desktop_fixture desktop-pinning-denied
 printf '\nTelos does not support certificate pinning; the platform trust store decides.\n' >>"$fixture_root/desktop-pinning-denied/README.md"
 bash "$repo_root/scripts/check-product-truth.sh" --root "$fixture_root/desktop-pinning-denied"
+
+# Phase 4 operational envelope: each mutation removes or hollows one real input.
+phase4_gate="$fixture_root/phase4-gate-missing"
+copy_realized_fixture "$phase4_gate"
+python3 - "$phase4_gate/ci/phase-gates.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+catalog = json.load(open(path, encoding="utf-8"))
+catalog["gates"] = [gate for gate in catalog["gates"] if gate["id"] != "controlled-egress"]
+json.dump(catalog, open(path, "w", encoding="utf-8"), indent=2)
+PY
+assert_rejected "phase4-gate-missing" "operationalGates" "$phase4_gate"
+
+phase4_input="$fixture_root/phase4-input-missing"
+copy_realized_fixture "$phase4_input"
+rm "$phase4_input/release/predecessor-policy.json"
+assert_rejected "phase4-input-missing" "operationalInventory" "$phase4_input"
+
+phase4_unit="$fixture_root/phase4-timer"
+copy_realized_fixture "$phase4_unit"
+sed -i '/^Persistent=true$/d' "$phase4_unit/deploy/systemd/telos-backup.timer"
+assert_rejected "phase4-timer-not-persistent" "systemdUnits" "$phase4_unit"
+
+phase4_stub="$fixture_root/phase4-success-only"
+copy_realized_fixture "$phase4_stub"
+printf '#!/usr/bin/env bash\nset -euo pipefail\necho "restore complete"\nexit 0\n' >"$phase4_stub/scripts/restore.sh"
+assert_rejected "phase4-success-only" "operationalScripts" "$phase4_stub"
+
+phase4_passed="$fixture_root/phase4-passed-without-failure"
+copy_realized_fixture "$phase4_passed"
+printf '#!/usr/bin/env bash\ncat >"$1" <<JSON\n{"status": "passed"}\nJSON\n' >"$phase4_passed/scripts/audit-host-exposure.sh"
+assert_rejected "phase4-passed-without-failure" "operationalScripts" "$phase4_passed"
 
 if ! cli_help="$("$repo_root/telos" help)"; then
   echo "Bash ./telos dispatcher did not produce the authoritative CLI help" >&2

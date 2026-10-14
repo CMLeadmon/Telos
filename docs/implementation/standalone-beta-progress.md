@@ -265,3 +265,32 @@ member journey on restored content, **RPO 33 s, RTO 223 s**. Artifacts: `telos-r
 Found live: restore as `telos_owner` failed on the extension (A23); a failed restore leaves a non-empty host that must be reset by hand.
 **External status:** `separate-host-restore` is **not_run** for certification — needs a candidate, a real third observer machine (A25),
 public DNS/certificate cutover and the stage controller for outages (A26). **Remaining in Task 5:** operator docs, gate wiring.
+
+## P4-T6 — generation-safe upgrade and rollback (implemented, locally verified)
+
+`scripts/lib/generations.py` (verify a generation against its closed `generation.json`, atomic `current` swap, installed receipt,
+durable operation journal, `plan-recovery` as a pure function of journal + observed schema + readiness), `release/operation-journal.schema.json`
+(+ the `restored` state), `scripts/lib/lifecycle.sh`, `scripts/upgrade.sh`, `scripts/rollback.sh`, `scripts/restore.sh --mode rollback`,
+`scripts/restore-state.sh`, `telos migrate`, `scripts/lib/predecessor.py` + `release/predecessor-policy.json` (currently `null`, so
+`scripts/build-predecessor.sh` reports `not_run`). Tests: `generations_test.py`, `predecessor_test.py`, `upgrade_rollback_test.sh` (a SIGKILL
+at every journal step, mutation-checked) and the hermetic `upgrade_rollback_fixtures_test.sh` gate.
+**Status:** implemented and locally verified. **No live upgrade has run:** there is no built predecessor and no builder yet (Phase 5 Task 2a),
+so `upgrade-rollback` stays `not_run`; synthetic version history would not be proof.
+
+## P4-T7 — capacity, host exposure, controlled egress (implemented; live rehearsals run)
+
+`config/exposure-policy.json`, `scripts/lib/exposure_audit.py` + `audit-host-exposure.sh` (external nmap scan of the node: only 22/80/443),
+`scripts/lib/egress_drill.py` + `drills/egress.sh` (locked curl probe image; 7 services direct-isolated, allowed destinations reach the proxy,
+18 denied destinations refused, redaction verified), `scripts/lib/capacity_drill.py` + `run-capacity-drill.sh` + `prepare-capacity-fixture.py` +
+`collect-runtime-stats.py` + `tests/load/telos.js` (25 virtual users from 26 source addresses, A27/A29), gateway gauges (A28).
+**Defects found only by running it live, fixed with regression tests:** the edge login limiter was one global bucket
+(Traefik `ipStrategy.depth: 1` without `X-Forwarded-For`), so 25 members shared one budget; Jellyfin 10.11.11 SIGSEGVs under roughly 18 or
+more concurrent library, PlaybackInfo and audio requests (reproduced against Jellyfin directly) — reduced by the gateway start gate (A30),
+not eliminated; several stale tests (doctor's container count, Compose network membership, hardening mutation, certification placeholders).
+
+## P4-T8 — supply chain (implemented, locally verified; live scan pending)
+
+`ci/tools.lock` v2 (gitleaks, syft, trivy with archive and binary digests, verified live), `scripts/bootstrap-ci-tools.py`, `ci/license-policy.json`
+v2 (linked ecosystems versus isolated services), `ci/risk-acceptance.schema.json` + empty `ci/risk-acceptances.json`, `.gitleaks.toml`,
+`scripts/lib/supply_chain.py`, `generate-sbom.sh`, `scan-candidate.sh`, `scripts/ci/validate-sbom.sh`, 47 unit tests, the CI jobs
+`operations-fixtures` and `supply-chain-source`. `candidate-supply-chain` is `not_run` without a frozen candidate.

@@ -59,7 +59,9 @@ surface.
 A Telos node is reached over direct HTTPS through its Traefik edge, or over a
 private network the operator runs. Outbound connections are limited to
 integrations the operator enables: ACME certificate issuance, ClamAV signature
-updates, and media/book metadata providers. Current backup scripts create local
-plaintext recovery material; encrypted off-node backup and recovery are blocked
-until Phase 4 evidence exists. Telos does not claim that no data ever leaves the
+updates, and media/book metadata providers. Backups are encrypted by restic before
+they leave the host and live in an operator-supplied off-node repository;
+encrypted off-node backup and recovery are implemented and rehearsed on
+reference machines, but shipping claims are blocked until Phase 5 candidate
+evidence exists. Telos does not claim that no data ever leaves the
 node; it documents exactly which operator-controlled channels exist.

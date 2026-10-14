@@ -19,10 +19,12 @@ trap cleanup EXIT
 
 printf '{"schemaVersion":1,"sourceCommit":"%040d"}\n' 0 >"$tmp/candidate.json"
 
-# Scripts that are still fail-closed placeholders for work not yet implemented: with no inputs (or only
-# a candidate lock) each must report not_run (exit 3) and never anything like success. A script leaves
-# this list when it is implemented; from then on its own suite proves its behavior (for example
-# runtime_hardening_policy_test.py, monitoring_test.sh, upgrade_rollback_test.sh, recovery_drill_test.py).
+# Scripts that must report not_run (exit 3) and never anything like success when they get no live inputs
+# (or only a candidate lock). Some are still placeholders for work not yet implemented (certify-beta.sh,
+# build-release.sh, stage-release.sh, sign-evidence.sh, ...); others are implemented and fail closed
+# without their target, rehearsal flag or candidate (run-capacity-drill.sh, audit-host-exposure.sh,
+# scan-candidate.sh). Each implemented script's own suite proves its behavior with inputs (for example
+# capacity_drill_test.py, exposure_audit_test.py, supply_chain_test.py).
 scripts=(
   certify-beta.sh run-capacity-drill.sh
   audit-host-exposure.sh certify-browser-matrix.sh build-release.sh
