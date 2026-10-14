@@ -74,6 +74,8 @@ def write_fakes(directory):
         def flag(name):
             return args[args.index(name) + 1] if name in args else None
         if args[0] == "build":
+            if "--timestamp" in args and os.environ.get("SOURCE_DATE_EPOCH"):
+                sys.exit("Error: timestamp and source-date-epoch would be ambiguous if allowed together")
             tag, dockerfile = flag("-t"), flag("-f")
             labels = dict(a.split("=", 1) for a, prev in zip(args[1:], args) if prev == "--label")
             if os.environ.get("TELOS_BUILD_FAKE_DROP_LABELS"):

@@ -94,9 +94,10 @@ class Tools:
         self.python = sys.executable
 
 
-def build_env(epoch, extra=None):
-    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp"), "LC_ALL": "C", "TZ": "UTC",
-           "SOURCE_DATE_EPOCH": str(epoch)}
+def build_env(epoch, extra=None, source_date_epoch=True):
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", "/tmp"), "LC_ALL": "C", "TZ": "UTC"}
+    if source_date_epoch:
+        env["SOURCE_DATE_EPOCH"] = str(epoch)
     for name, value in os.environ.items():
         # TELOS_BUILD_* are the test seams for the stand-in tools; the rest let podman and skopeo find their runtime and credentials.
         if name.startswith("TELOS_BUILD_") or name in ("XDG_RUNTIME_DIR", "REGISTRY_AUTH_FILE", "TMPDIR"):
@@ -245,7 +246,8 @@ def read_oci_archive(path):
 def build_images(tools, source, tree, lock_dir, no_cache, existing=None):
     """podman build + save for the images Telos owns. Returns {service: archive info}."""
     results = {}
-    env = build_env(source.epoch)
+    # podman refuses --timestamp together with SOURCE_DATE_EPOCH in the environment ("ambiguous"); the explicit flag wins.
+    env = build_env(source.epoch, source_date_epoch=False)
     for service, (context, dockerfile, variable) in BUILD_PLAN.items():
         tag = f"localhost/{service}:{source.version}"
         argv = [tools.podman, "build", "--timestamp", str(source.epoch), "--pull=missing", "--format", "oci", "-t", tag,
