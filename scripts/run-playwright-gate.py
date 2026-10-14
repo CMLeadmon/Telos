@@ -181,24 +181,37 @@ def read_process_start_time(pid):
     return process_stat[2]
 
 
+# While a process executes a new program the kernel keeps it non-dumpable for a moment, and /proc/<pid>/environ answers EACCES
+# even to its owner. npm and Next.js spawn programs constantly, so a cleanup that lands in that window must look again instead
+# of declaring the process uninspectable (found on a slower VM, where the window is easy to hit). A denial that persists is
+# still a refusal.
+INSPECTION_RETRIES = 100
+INSPECTION_RETRY_SECONDS = 0.01
+
+
 def process_has_ownership_token(
     pid, ownership_token, allow_unrelated_permission_denied=False
 ):
     expected = f"{PROCESS_OWNER_ENV}={ownership_token}".encode("ascii")
-    try:
-        with open(f"{PROC_ROOT}/{pid}/environ", "rb") as environment_file:
-            environment = environment_file.read().split(b"\0")
-    except (FileNotFoundError, ProcessLookupError):
-        return False
-    except PermissionError:
-        if allow_unrelated_permission_denied:
+    for attempt in range(INSPECTION_RETRIES):
+        try:
+            with open(f"{PROC_ROOT}/{pid}/environ", "rb") as environment_file:
+                environment = environment_file.read().split(b"\0")
+            return expected in environment
+        except (FileNotFoundError, ProcessLookupError):
             return False
-        raise RuntimeError(f"cannot inspect process {pid} ownership token")
-    except OSError as error:
-        raise RuntimeError(
-            f"cannot inspect process {pid} ownership token: {error}"
-        ) from error
-    return expected in environment
+        except PermissionError:
+            if allow_unrelated_permission_denied:
+                return False
+            if attempt + 1 < INSPECTION_RETRIES:
+                time.sleep(INSPECTION_RETRY_SECONDS)
+                continue
+            raise RuntimeError(f"cannot inspect process {pid} ownership token")
+        except OSError as error:
+            raise RuntimeError(
+                f"cannot inspect process {pid} ownership token: {error}"
+            ) from error
+    raise RuntimeError(f"cannot inspect process {pid} ownership token")
 
 
 def open_owned_process(pid, ownership_token):

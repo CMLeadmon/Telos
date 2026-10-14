@@ -1343,6 +1343,54 @@ for quote in ("'", '"'):
     )
 PY
 
+# A process in the middle of exec answers EACCES on /proc/<pid>/environ even to its owner for a moment: the ownership check
+# must look again, give up on a denial that persists, and never wait for a process that is gone or unrelated.
+python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
+import importlib.util
+import os
+import pathlib
+import sys
+import tempfile
+
+sys.dont_write_bytecode = True
+spec = importlib.util.spec_from_file_location("run_playwright_gate_inspection", sys.argv[1])
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+module.INSPECTION_RETRY_SECONDS = 0
+token = "owner-token"
+real_open = open
+with tempfile.TemporaryDirectory() as root:
+    module.PROC_ROOT = root
+    os.makedirs(f"{root}/4242")
+    pathlib.Path(f"{root}/4242/environ").write_bytes(f"{module.PROCESS_OWNER_ENV}={token}\0OTHER=1\0".encode())
+    calls = {"count": 0, "denials": 0}
+
+    def flaky_open(path, *args, **kwargs):
+        if str(path).endswith("/4242/environ"):
+            calls["count"] += 1
+            if calls["count"] <= calls["denials"]:
+                raise PermissionError(13, "Permission denied")
+        return real_open(path, *args, **kwargs)
+
+    module.open = flaky_open
+    calls.update(count=0, denials=3)
+    assert module.process_has_ownership_token(4242, token) is True and calls["count"] == 4, calls
+    calls.update(count=0, denials=3)
+    assert module.process_has_ownership_token(4242, "someone-else") is False and calls["count"] == 4, calls
+    calls.update(count=0, denials=10 ** 6)
+    try:
+        module.process_has_ownership_token(4242, token)
+    except RuntimeError as error:
+        assert "cannot inspect process 4242 ownership token" in str(error), error
+    else:
+        raise AssertionError("a persistent denial must be refused")
+    assert calls["count"] == module.INSPECTION_RETRIES, calls
+    calls.update(count=0, denials=10 ** 6)
+    assert module.process_has_ownership_token(4242, token, allow_unrelated_permission_denied=True) is False and calls["count"] == 1, calls
+    calls.update(count=0, denials=0)
+    assert module.process_has_ownership_token(9999, token) is False and calls["count"] == 0, "a process that is gone is not inspected twice"
+PY
+
 python3 - "$repo_root/scripts/run-playwright-gate.py" <<'PY'
 import argparse
 import contextlib
