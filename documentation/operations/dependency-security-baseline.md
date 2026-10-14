@@ -30,8 +30,8 @@ plus their minimal transitive requirements only):
 | github.com/jackc/pgx/v5 | v5.9.2 |
 | github.com/redis/go-redis/v9 | v9.6.3 |
 | github.com/go-jose/go-jose/v3 | v3.0.5 |
-| golang.org/x/net | v0.55.0 (raised from the v0.53.0 floor in P2-T2: the new `idna` origin-normalization path made GO-2026-5026, fixed in v0.55.0, reachable) |
-| golang.org/x/crypto | v0.50.0 |
+| golang.org/x/net | v0.60.0 (v0.55.0 after P2-T2, when the `idna` origin-normalization path made GO-2026-5026, fixed in v0.55.0, reachable; raised again by the candidate supply-chain scan, below) |
+| golang.org/x/crypto | v0.57.0 (v0.50.0 originally; raised by the candidate supply-chain scan, below) |
 | github.com/jackc/puddle/v2, pgservicefile | pgx v5.9.2 requirements |
 | google.golang.org/protobuf | v1.36.5 (raised in P2-T6: the LiveKit webhook decoder made GO-2024-2611, fixed in v1.33.0, reachable) |
 
@@ -48,3 +48,10 @@ unchanged from Phase 1.
   (Informational: unreachable findings remain in imported-but-uncalled code.)
 - `npm audit --omit=dev --audit-level=moderate`: **0 vulnerabilities.**
 - `go test ./...`, `npm run lint`, `npm run test:unit`, `npm run build`: pass.
+
+## Raised by the candidate supply-chain scan (P5)
+
+The first live scan of a rehearsal candidate (Trivy 0.75.0, database of 2026-10-14) reported 13 High findings in the gateway binary: ten in
+`golang.org/x/crypto` v0.51.0, two in `golang.org/x/net` v0.55.0 and one in `golang.org/x/text` v0.37.0 (fixed in 0.55.0, 0.60.0 and 0.39.0). The Go
+toolchain resolved the set together (`go get golang.org/x/net@v0.60.0`): `x/net` v0.60.0, `x/crypto` v0.57.0, `x/text` v0.42.0, `x/sync` v0.23.0 and
+`x/sys` v0.48.0, all BSD-3-Clause (recorded in `ci/license-policy.json`). Build, vet and the unit suite pass; the integration suite runs on the reference VM.
