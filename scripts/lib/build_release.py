@@ -50,6 +50,7 @@ REPO = HERE.parents[1]
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+-beta\.[1-9][0-9]*\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 EXIT_NOT_RUN = 3
+ACCEPTED_MANIFESTS = ("application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json")
 
 # service -> (build context relative to the export, Dockerfile relative to the export, images.env variable)
 BUILD_PLAN = {
@@ -214,8 +215,10 @@ def read_oci_archive(path):
         if len(manifests) != 1:
             fail(f"{path.name} must hold exactly one image, found {len(manifests)}")
         descriptor = manifests[0]
-        if descriptor.get("mediaType") not in ("application/vnd.oci.image.manifest.v1+json",):
-            fail(f"{path.name} holds a {descriptor.get('mediaType')}, not a single OCI image manifest")
+        # An upstream image may be an OCI manifest or a Docker schema 2 one; skopeo --preserve-digests keeps the manifest
+        # byte for byte, so its digest stays the upstream digest. Anything else (an index, a schema 1 manifest) is refused.
+        if descriptor.get("mediaType") not in ACCEPTED_MANIFESTS:
+            fail(f"{path.name} holds a {descriptor.get('mediaType')}, not a single image manifest")
 
         def blob(digest):
             algorithm, _, hexdigest = digest.partition(":")

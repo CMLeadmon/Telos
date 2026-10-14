@@ -636,5 +636,33 @@ class BuildPlanTests(unittest.TestCase):
         self.assertEqual(document["schemaVersion"], 1)
 
 
+
+class ManifestTypeTests(Fixture):
+    def archive_with(self, media_type):
+        path = self.dir / "x.oci.tar"
+        self.fakeoci.archive(str(path), "x", "seed", {}, 0)
+        import io as _io
+        import tarfile as _tar
+        with _tar.open(path) as handle:
+            members = {m.name: handle.extractfile(m).read() for m in handle.getmembers() if m.isfile()}
+        index = json.loads(members["index.json"])
+        index["manifests"][0]["mediaType"] = media_type
+        members["index.json"] = json.dumps(index).encode()
+        with _tar.open(path, "w") as handle:
+            for name, data in members.items():
+                info = _tar.TarInfo(name)
+                info.size = len(data)
+                handle.addfile(info, _io.BytesIO(data))
+        return path
+
+    def test_a_docker_schema2_upstream_manifest_is_accepted(self):
+        info = br.read_oci_archive(self.archive_with("application/vnd.docker.distribution.manifest.v2+json"))
+        self.assertRegex(info["manifestDigest"], r"^sha256:[0-9a-f]{64}$")
+
+    def test_an_index_or_an_old_manifest_is_refused(self):
+        for media_type in ("application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json", "application/vnd.docker.distribution.manifest.v1+json"):
+            with self.subTest(media_type), self.assertRaisesRegex(br.BuildError, "not a single image manifest"):
+                br.read_oci_archive(self.archive_with(media_type))
+
 if __name__ == "__main__":
     unittest.main()
