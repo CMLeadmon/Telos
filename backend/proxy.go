@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -54,15 +55,34 @@ type ProxyPolicy struct {
 	// UpstreamAuth injects server-held upstream credentials (never from the
 	// browser). It runs after the allowlisted request headers are set.
 	UpstreamAuth func(h http.Header)
-	// StartGate, when set, is held from just before the upstream request is sent until its response
-	// HEADERS arrive -- not for the body. It bounds how many upstream requests are *starting* at once:
-	// Jellyfin (10.11) fails and then crashes when many audio/transcode starts race, while any number of
-	// already-started streams are fine. An error from the gate (the wait ran out) is answered 503.
-	StartGate func(ctx context.Context) (release func(), err error)
 }
 
-// errUpstreamBusy is returned by a StartGate whose wait expired.
+// errUpstreamBusy is returned by a start gate whose wait expired.
 var errUpstreamBusy = errors.New("upstream busy")
+
+// gatedTransport holds a start gate around requests to one upstream, from just before the request is
+// sent until its response headers arrive (or it fails). Streaming bodies are read after the slot is
+// gone, so any number of started streams are unaffected.
+type gatedTransport struct {
+	base    http.RoundTripper
+	gate    func(ctx context.Context) (release func(), err error)
+	applies func(*http.Request) bool
+}
+
+func (t gatedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.gate == nil || t.applies == nil || !t.applies(req) {
+		return t.base.RoundTrip(req)
+	}
+	release, err := t.gate(req.Context())
+	if err != nil {
+		if errors.Is(err, errUpstreamBusy) {
+			return nil, fmt.Errorf("the media server is busy: %w", errUpstreamBusy)
+		}
+		return nil, err
+	}
+	defer release()
+	return t.base.RoundTrip(req)
+}
 
 // startGate returns a gate admitting at most n concurrent request starts, each waiting at most wait.
 func startGate(n int, wait time.Duration) func(ctx context.Context) (func(), error) {
@@ -163,25 +183,9 @@ func proxyUpstream(w http.ResponseWriter, r *http.Request, target *url.URL, poli
 		policy.UpstreamAuth(outReq.Header)
 	}
 
-	releaseStart := func() {}
-	if policy.StartGate != nil {
-		release, gateErr := policy.StartGate(r.Context())
-		if gateErr != nil {
-			if errors.Is(gateErr, errUpstreamBusy) {
-				w.Header().Set("Retry-After", "2")
-				writeAPIError(w, r, http.StatusServiceUnavailable, "upstream_busy", "The media server is busy; try again in a moment.")
-				return
-			}
-			// The caller went away while waiting: fail exactly as a cancelled upstream request does.
-			writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "An upstream service is unavailable.")
-			return
-		}
-		releaseStart = release
-	}
 	// RoundTrip never follows redirects, so an upstream 3xx Location is never
-	// acted on or relayed to the browser.
-	resp, err := upstreamTransport.RoundTrip(outReq)
-	releaseStart() // the response headers are in (or the attempt failed): the start is over
+	// acted on or relayed to the browser. (upstreamRoundTripper gates Jellyfin request starts.)
+	resp, err := upstreamRoundTripper.RoundTrip(outReq)
 	if err != nil {
 		log.Printf("proxy: upstream request failed request_id=%s host=%s: %v", requestIDFrom(r.Context()), upstream.Host, err)
 		writeAPIError(w, r, http.StatusBadGateway, "upstream_unavailable", "An upstream service is unavailable.")

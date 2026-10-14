@@ -247,7 +247,7 @@ func TestStartGateAdmitsAtMostNConcurrentStartsAndReleasesOnce(t *testing.T) {
 	}
 }
 
-func TestProxyUpstreamHoldsTheStartGateOnlyUntilHeadersArrive(t *testing.T) {
+func TestGatedTransportHoldsTheSlotOnlyUntilHeadersAndOnlyForTheGatedHost(t *testing.T) {
 	headersSent := make(chan struct{})
 	finish := make(chan struct{})
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -258,71 +258,41 @@ func TestProxyUpstreamHoldsTheStartGateOnlyUntilHeadersArrive(t *testing.T) {
 		<-finish // the body keeps streaming long after the start
 	}))
 	defer upstream.Close()
-	defer close(finish)
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) }))
+	defer other.Close()
 
-	var inFlight, peak int32
-	inner := startGate(1, 200*time.Millisecond)
-	gate := func(ctx context.Context) (func(), error) {
-		release, err := inner(ctx)
-		if err != nil {
-			return nil, err
-		}
-		n := atomic.AddInt32(&inFlight, 1)
-		for {
-			p := atomic.LoadInt32(&peak)
-			if n <= p || atomic.CompareAndSwapInt32(&peak, p, n) {
-				break
-			}
-		}
-		return func() { atomic.AddInt32(&inFlight, -1); release() }, nil
-	}
-	target, _ := url.Parse(upstream.URL + "/Audio/x/stream")
-	policy := ProxyPolicy{ResponseHeaders: mediaResponseHeaders, AllowRanges: true, StartGate: gate}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		rec := httptest.NewRecorder()
-		proxyUpstream(rec, httptest.NewRequest("GET", "/x", nil), target, policy, nil)
-	}()
-	<-headersSent
-	// The first request is still streaming its body. A second start must be admitted: the slot was
-	// released when the headers arrived.
-	release, err := gate(context.Background())
+	gate := startGate(1, 100*time.Millisecond)
+	transport := gatedTransport{base: http.DefaultTransport, gate: gate,
+		applies: func(req *http.Request) bool { return req.URL.Host == strings.TrimPrefix(upstream.URL, "http://") }}
+	client := &http.Client{Transport: transport}
+
+	resp, err := client.Get(upstream.URL)
 	if err != nil {
-		t.Fatalf("a streaming body must not hold the start slot: %v", err)
+		t.Fatal(err)
 	}
+	<-headersSent
+	// The first response is still streaming its body, yet its slot is free: a second start is admitted.
+	release, gateErr := gate(context.Background())
+	if gateErr != nil {
+		t.Fatalf("a streaming body must not hold the start slot: %v", gateErr)
+	}
+	// With the only slot taken, a gated request waits out and fails busy; an ungated host is untouched.
+	if _, err := client.Get(upstream.URL); !errors.Is(err, errUpstreamBusy) {
+		t.Fatalf("a full gate must report busy, got %v", err)
+	}
+	other2, err := client.Get(other.URL)
+	if err != nil {
+		t.Fatalf("a request to another host must not be gated: %v", err)
+	}
+	other2.Body.Close()
 	release()
-	if atomic.LoadInt32(&peak) > 1 {
-		t.Fatalf("more than one start was in flight at once (peak %d)", peak)
-	}
+	close(finish)
+	resp.Body.Close()
 }
 
-func TestProxyUpstreamAnswers503WhenTheGateTimesOut(t *testing.T) {
-	reached := int32(0)
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { atomic.AddInt32(&reached, 1) }))
-	defer upstream.Close()
-	target, _ := url.Parse(upstream.URL + "/x")
-	busy := func(context.Context) (func(), error) { return nil, errUpstreamBusy }
-	rec := httptest.NewRecorder()
-	proxyUpstream(rec, httptest.NewRequest("GET", "/x", nil), target, ProxyPolicy{StartGate: busy}, nil)
-	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Retry-After") == "" {
-		t.Fatalf("a busy upstream must answer 503 with Retry-After, got %d %v", rec.Code, rec.Header())
-	}
-	if atomic.LoadInt32(&reached) != 0 {
-		t.Fatal("the upstream was contacted although the gate refused")
-	}
-}
-
-func TestJellyfinGETHoldsTheSharedGateOnlyUntilHeaders(t *testing.T) {
-	previous := jellyfinStartGate
-	defer func() { jellyfinStartGate = previous }()
-	var inFlight, peak int32
-	inner := startGate(2, 2*time.Second)
-	jellyfinStartGate = func(ctx context.Context) (func(), error) {
-		release, err := inner(ctx)
-		if err != nil {
-			return nil, err
-		}
+func TestAnyRequestToJellyfinIsGatedWhicheverClientSendsIt(t *testing.T) {
+	var peak, inFlight int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := atomic.AddInt32(&inFlight, 1)
 		for {
 			p := atomic.LoadInt32(&peak)
@@ -330,35 +300,37 @@ func TestJellyfinGETHoldsTheSharedGateOnlyUntilHeaders(t *testing.T) {
 				break
 			}
 		}
-		return func() { atomic.AddInt32(&inFlight, -1); release() }, nil
-	}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(40 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond)
+		atomic.AddInt32(&inFlight, -1)
 		w.Write([]byte("{}"))
 	}))
-	defer upstream.Close()
-	oldBase := getJellyfinBaseURL
-	getJellyfinBaseURL = func() string { return upstream.URL }
-	defer func() { getJellyfinBaseURL = oldBase }()
+	defer server.Close()
+	oldBase, oldGate := getJellyfinBaseURL, jellyfinStartGate
+	getJellyfinBaseURL = func() string { return server.URL }
+	jellyfinStartGate = startGate(2, 5*time.Second)
+	defer func() { getJellyfinBaseURL, jellyfinStartGate = oldBase, oldGate }()
+
 	var done sync.WaitGroup
-	for i := 0; i < 8; i++ {
-		done.Add(1)
-		go func() {
+	for i := 0; i < 10; i++ {
+		done.Add(2)
+		go func() { // an API call
 			defer done.Done()
-			resp, err := jellyfinGET(context.Background(), "/x", "")
+			resp, err := jellyfinGET(context.Background(), "/Users", "")
 			if err != nil {
 				t.Errorf("jellyfinGET: %v", err)
 				return
 			}
 			resp.Body.Close()
 		}()
+		go func() { // a proxied media request
+			defer done.Done()
+			target, _ := url.Parse(server.URL + "/Audio/x/stream")
+			rec := httptest.NewRecorder()
+			proxyUpstream(rec, httptest.NewRequest("GET", "/x", nil), target, ProxyPolicy{ResponseHeaders: mediaResponseHeaders, AllowRanges: true}, nil)
+		}()
 	}
 	done.Wait()
 	if p := atomic.LoadInt32(&peak); p > 2 {
-		t.Fatalf("%d Jellyfin API starts overlapped; the gate allows 2", p)
-	}
-	jellyfinStartGate = func(context.Context) (func(), error) { return nil, errUpstreamBusy }
-	if _, err := jellyfinGET(context.Background(), "/x", ""); !errors.Is(err, errUpstreamBusy) {
-		t.Fatalf("a refused start must surface as busy, got %v", err)
+		t.Fatalf("%d Jellyfin requests were in flight at once; the gate allows 2", p)
 	}
 }

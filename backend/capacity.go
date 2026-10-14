@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -98,8 +99,14 @@ func envInt(name string, def int) int {
 	return def
 }
 
-// jellyfinStartGate bounds concurrent Jellyfin request STARTS, for the media proxy
-// (ProxyPolicy.StartGate) and every API call (jellyfinGET). Jellyfin 10.11.11 crashes (SIGSEGV)
+// isJellyfinRequest reports whether a request is addressed to the Jellyfin server.
+func isJellyfinRequest(req *http.Request) bool {
+	base, err := url.Parse(getJellyfinBaseURL())
+	return err == nil && base.Host != "" && req.URL.Host == base.Host
+}
+
+// jellyfinStartGate bounds concurrent Jellyfin request STARTS for every request the gateway sends to
+// Jellyfin (see gatedTransport). Jellyfin 10.11.11 crashes (SIGSEGV)
 // when PlaybackInfo and audio direct-stream starts overlap 18-way -- reproduced against Jellyfin
 // itself, with no Telos code in the path -- after logging a file-lock race on its transcode
 // directory. Twelve-way is fine, so six slots keep a wide margin. Members already streaming are

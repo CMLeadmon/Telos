@@ -97,14 +97,6 @@ func jellyfinGET(ctx context.Context, path string, token string) (*http.Response
 	if token != "" {
 		req.Header.Set("X-Emby-Token", token)
 	}
-	// Same gate as the media proxy: Jellyfin crashes when a mix of PlaybackInfo and audio starts runs
-	// 18-way concurrent (reproduced against Jellyfin directly), so API calls queue briefly for a slot
-	// that is released as soon as the response headers arrive.
-	release, gateErr := jellyfinStartGate(requestCtx)
-	if gateErr != nil {
-		return nil, fmt.Errorf("jellyfin request not started: %w", gateErr)
-	}
-	defer release()
 	return upstreamHTTPClient.Do(req)
 }
 
