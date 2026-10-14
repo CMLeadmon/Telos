@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -483,6 +484,33 @@ def database_state(cache_dir):
     return {"digest": "sha256:" + digest, "retrievedAt": stamp(moment.astimezone(datetime.timezone.utc))}
 
 
+def extract_oci_layout(archive, scratch):
+    """Trivy reads an OCI image only as a layout DIRECTORY; the builder archives third-party images as OCI-archive tarballs.
+
+    Returns the extracted directory when ``archive`` is a tar with ``oci-layout`` and ``index.json`` at its top, else None (a
+    docker archive, or not a tar at all, is scanned as it is). Extraction is defensive even though the archive's digest was
+    already checked against the lock: regular files and directories only, nothing outside the target, no links or devices.
+    """
+    import tarfile
+    try:
+        bundle = tarfile.open(archive, "r:*")
+    except (tarfile.TarError, OSError):
+        return None
+    with bundle:
+        names = bundle.getnames()
+        if "oci-layout" not in names or "index.json" not in names:
+            return None
+        target = Path(scratch) / "oci-layout"
+        target.mkdir()
+        base = target.resolve()
+        for member in bundle.getmembers():
+            destination = (target / member.name).resolve()
+            if not (member.isfile() or member.isdir()) or os.path.isabs(member.name) or base not in (destination, *destination.parents):
+                raise Refused(f"{Path(archive).name}: the archive holds an entry that is not a plain file or directory inside it ({member.name[:80]})")
+        bundle.extractall(target, filter="data")
+    return target
+
+
 def scan(candidate_lock, artifact_root, sbom_dir, tools_dir, source_dir=None, run=run_tool, binary=verified_binary, now=None,
          policy_path=LICENSE_POLICY, acceptances_path=RISK_ACCEPTANCES, cache_dir=None):
     """Scan a frozen (or rehearsal) artifact graph. Returns (report, findings); raises Refused when a scan could not run."""
@@ -525,15 +553,23 @@ def scan(candidate_lock, artifact_root, sbom_dir, tools_dir, source_dir=None, ru
     for path, sha in sorted(expected.items()):
         if kinds.get(path) not in SBOM_KINDS:
             continue
-        output = Path(tempfile.mkdtemp(prefix="trivy.")) / "result.json"
-        target = ["image", "--input", str(root / path)] if kinds[path] == "oci-image" else ["rootfs", str(root / path)]
-        completed = run([trivy, *target, "--cache-dir", cache, "--skip-db-update", "--severity", "HIGH,CRITICAL", "--format", "json", "--output", str(output), "-q"], timeout=3600)
-        if completed.returncode != 0:
-            raise Refused(f"trivy failed for {path}: {completed.stderr.strip()[-200:]}")
-        vulnerability_findings, accepted = evaluate_vulnerabilities(json.loads(output.read_text(encoding="utf-8")), sha, acceptances, now)
-        findings += [f"{path}: {item}" for item in vulnerability_findings]
-        accepted_all += [dict(item, artifact=path) for item in accepted]
-        report_artifacts.append({"path": path, "sha256": sha, "highAccepted": len(accepted), "blocking": len(vulnerability_findings)})
+        scratch = Path(tempfile.mkdtemp(prefix="trivy."))
+        try:
+            output = scratch / "result.json"
+            if kinds[path] == "oci-image":
+                layout = extract_oci_layout(root / path, scratch)
+                target = ["image", "--input", str(layout or (root / path))]
+            else:
+                target = ["rootfs", str(root / path)]
+            completed = run([trivy, *target, "--cache-dir", cache, "--skip-db-update", "--severity", "HIGH,CRITICAL", "--format", "json", "--output", str(output), "-q"], timeout=3600)
+            if completed.returncode != 0:
+                raise Refused(f"trivy failed for {path}: {completed.stderr.strip()[-200:]}")
+            vulnerability_findings, accepted = evaluate_vulnerabilities(json.loads(output.read_text(encoding="utf-8")), sha, acceptances, now)
+            findings += [f"{path}: {item}" for item in vulnerability_findings]
+            accepted_all += [dict(item, artifact=path) for item in accepted]
+            report_artifacts.append({"path": path, "sha256": sha, "highAccepted": len(accepted), "blocking": len(vulnerability_findings)})
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
     # Licenses: linked dependencies are judged, isolated services and base layers inventoried.
     license_report, ours = {}, {}
     for path, sha in sorted(expected.items()):

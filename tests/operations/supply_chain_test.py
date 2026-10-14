@@ -689,6 +689,54 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.command(rehearsal=False)[0], sc.EXIT_USAGE, "a candidate scan takes its commit from the lock, never from the command line")
 
 
+class OciLayoutTests(unittest.TestCase):
+    """Trivy takes an OCI image only as a layout directory, so OCI-archive tarballs are unpacked first (found by the live scan)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.dir = Path(self.tmp.name)
+
+    def tar(self, name, members):
+        import io, tarfile
+        path = self.dir / name
+        with tarfile.open(path, "w") as bundle:
+            for member, data in members:
+                if isinstance(member, tarfile.TarInfo):
+                    bundle.addfile(member)
+                    continue
+                info = tarfile.TarInfo(member)
+                info.size = len(data)
+                bundle.addfile(info, io.BytesIO(data))
+        return path
+
+    def test_an_oci_archive_is_unpacked_to_a_layout_directory(self):
+        archive = self.tar("a.oci.tar", [("oci-layout", b'{"imageLayoutVersion":"1.0.0"}'), ("index.json", b"{}"), ("blobs/sha256/abc", b"layer")])
+        layout = sc.extract_oci_layout(archive, self.dir)
+        self.assertEqual(sorted(p.name for p in layout.iterdir()), ["blobs", "index.json", "oci-layout"])
+        self.assertEqual((layout / "blobs" / "sha256" / "abc").read_bytes(), b"layer")
+
+    def test_a_docker_archive_and_a_non_tar_are_scanned_as_they_are(self):
+        self.assertIsNone(sc.extract_oci_layout(self.tar("d.tar", [("manifest.json", b"[]")]), self.dir))
+        (self.dir / "x.tar").write_bytes(b"not a tar at all")
+        self.assertIsNone(sc.extract_oci_layout(self.dir / "x.tar", self.dir))
+
+    def test_an_unsafe_member_is_refused_and_nothing_is_written_outside(self):
+        import tarfile
+        link = tarfile.TarInfo("blobs/evil")
+        link.type, link.linkname = tarfile.SYMTYPE, "/etc/passwd"
+        for name, members in (("traversal.tar", [("oci-layout", b"{}"), ("index.json", b"{}"), ("../escaped", b"x")]),
+                              ("absolute.tar", [("oci-layout", b"{}"), ("index.json", b"{}"), ("/tmp/telos-escaped", b"x")]),
+                              ("link.tar", [("oci-layout", b"{}"), ("index.json", b"{}"), (link, b"")])):
+            with self.subTest(name):
+                work = self.dir / ("work-" + name)
+                work.mkdir()
+                with self.assertRaises(sc.Refused):
+                    sc.extract_oci_layout(self.tar(name, members), work)
+                self.assertFalse((self.dir / "escaped").exists())
+                self.assertEqual([p.name for p in (work / "oci-layout").rglob("*")], [], "nothing is extracted before every member passed")
+
+
 class ModuleShapeTests(unittest.TestCase):
     def test_no_top_level_definition_appears_twice(self):
         # A splice once left a second copy of write_scan_result, check_policy and a stale main behind; the later copy silently won at
