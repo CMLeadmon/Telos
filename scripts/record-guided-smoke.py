@@ -123,21 +123,7 @@ def build_record(catalog, args, lock, lock_digest, answers, started, finished, o
         if entry["answer"] not in ANSWERS:
             raise gs.GuidedError(f"{item['id']}: the answer must be pass, fail or not_run")
         assertions.append({"id": item["id"], "answer": entry["answer"], "notes": redact(entry.get("notes", ""))})
-    attachments = []
-    folder = Path(out_dir) / f"{args.platform}.attachments"
-    for number, source in enumerate(answers.get("attachments", []), 1):
-        source = Path(source)
-        if source.is_symlink() or not source.is_file() or source.stat().st_size > gs.MAX_ATTACHMENT_BYTES:
-            raise gs.GuidedError(f"attachment {source.name} is missing, a link or too large")
-        data = source.read_bytes()
-        name = re.sub(r"[^A-Za-z0-9._-]", "_", source.name) or f"file-{number}"
-        try:
-            rg.reject_secret_text(data.decode("utf-8"), source.name)
-        except UnicodeDecodeError:
-            pass
-        except rg.GraphError as error:
-            raise gs.GuidedError(str(error))
-        attachments.append({"path": f"{args.platform}.attachments/{name}", "sha256": rg.raw_sha256(data)})
+    attachments, mapping = gs.attachment_refs(args.platform, answers.get("attachments", []))
     principal = os.environ.get("TELOS_EVIDENCE_SIGNING_PRINCIPAL", "unsigned-tester")
     record = {
         "schemaVersion": 1, "matrix": args.matrix, "platform": args.platform,
@@ -146,9 +132,9 @@ def build_record(catalog, args, lock, lock_digest, answers, started, finished, o
         "applicationVersion": answers["applicationVersion"], "os": answers["os"], "osVersion": answers["osVersion"],
         "deviceModel": answers["deviceModel"], "hostId": answers["hostId"],
         "startedAt": gs.stamp(started), "finishedAt": gs.stamp(finished), "testerPrincipal": principal,
-        "assertions": assertions, "attachments": sorted(attachments, key=lambda a: a["path"]),
+        "assertions": assertions, "attachments": attachments,
     }
-    return record, folder
+    return record, mapping
 
 
 def main(argv=None, input_fn=input, output=sys.stdout):
@@ -186,38 +172,14 @@ def main(argv=None, input_fn=input, output=sys.stdout):
         else:
             answers = interactive_answers(catalog, args.matrix, args.platform, detect_context(args.matrix), input_fn, output)
         finished = gs.now_utc()
-        record, folder = build_record(catalog, args, lock, lock_digest, answers, started, finished, out.parent)
+        record, mapping = build_record(catalog, args, lock, lock_digest, answers, started, finished, out.parent)
         # Everything but the signature is checked before a byte is written.
         status = gs.validate_record(record, catalog, lock, lock_digest, now=finished)
         data = rg.canonical_bytes(record)
-        key, principal = os.environ.get("TELOS_EVIDENCE_SIGNING_KEY"), os.environ.get("TELOS_EVIDENCE_SIGNING_PRINCIPAL")
-        signature = None
-        reason = None
-        if not key or not principal:
-            reason = "no signing key or principal in the environment"
-        else:
-            try:
-                signature = gs.sign_record(data, key)
-                gs.verify_signature(args.signers, record, data, signature)
-            except (signing.SigningError, gs.GuidedError) as error:
-                signature, reason = None, str(error)[:200]
-        sources = [Path(p) for p in answers.get("attachments", [])]
-        if signature is None:
-            draft = Path(args.draft_dir)
-            draft.mkdir(parents=True, exist_ok=True, mode=0o700)
-            target = draft / f"{args.matrix}-{args.platform}-{record['finishedAt'].replace(':', '')}.draft.json"
-            rg.write_atomic_exclusive(str(target), data, 0o600)
-            print(f"record-guided-smoke: saved an UNSIGNED draft ({status}) at {target}: {reason}. It is not importable evidence.", file=sys.stderr)
-            return 3
-        out.parent.mkdir(parents=True, exist_ok=True)
-        if sources:
-            folder.mkdir(parents=True, exist_ok=True)
-            for ref, source in zip(record["attachments"], sorted(sources, key=lambda s: re.sub(r"[^A-Za-z0-9._-]", "_", s.name))):
-                shutil.copyfile(source, out.parent / ref["path"])
-        rg.write_atomic_exclusive(str(Path(str(out) + ".sig")), signature, 0o644)
-        rg.write_atomic_exclusive(str(out), data, 0o644)
-        print(f"record-guided-smoke: wrote {out} ({status}, signed by {principal})")
-        return 0
+        code, message = gs.write_record(record, mapping, out, args.signers, args.draft_dir, os.environ.get("TELOS_EVIDENCE_SIGNING_KEY"),
+                                        os.environ.get("TELOS_EVIDENCE_SIGNING_PRINCIPAL"), status)
+        print(f"record-guided-smoke: {message}", file=sys.stderr if code else sys.stdout)
+        return code
     except (gs.GuidedError, rg.GraphError, signing.SigningError, json.JSONDecodeError, KeyError) as error:
         print(f"record-guided-smoke: {error}", file=sys.stderr)
         return 1

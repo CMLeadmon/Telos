@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -165,6 +166,75 @@ def verify_signature(signers, record, record_bytes, signature):
     except signing.SigningError as error:
         fail(f"{record['platform']}: the record is not signed by an enrolled tester: {error}")
 
+
+
+# ------------------------------------------------------------------ writing a finished record
+
+def file_sha256(path):
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def safe_name(name, number=1):
+    return re.sub(r"[^A-Za-z0-9._-]", "_", name) or f"file-{number}"
+
+
+def attachment_refs(platform, sources):
+    """Hash attachment files; return (refs sorted by path, {ref path: source}). Refuses links, large files and secrets."""
+    refs, mapping = [], {}
+    for number, source in enumerate(sources, 1):
+        source = Path(source)
+        if source.is_symlink() or not source.is_file() or source.stat().st_size > MAX_ATTACHMENT_BYTES:
+            fail(f"attachment {source.name} is missing, a link or too large")
+        data = source.read_bytes()
+        try:
+            rg.reject_secret_text(data.decode("utf-8"), source.name)
+        except UnicodeDecodeError:
+            pass
+        except rg.GraphError as error:
+            fail(str(error))
+        path = f"{platform}.attachments/{safe_name(source.name, number)}"
+        if path in mapping:
+            fail(f"two attachments would both be named {path}")
+        refs.append({"path": path, "sha256": rg.raw_sha256(data)})
+        mapping[path] = source
+    return sorted(refs, key=lambda ref: ref["path"]), mapping
+
+
+def write_record(record, mapping, out, signers, draft_dir, key=None, principal=None, status=None):
+    """Write a validated record beside its attachments and a detached signature; or, with no enrolled tester, only a draft.
+
+    Returns (exit code, message): 0 written and signed, 3 saved as an unsigned draft outside the records directory.
+    """
+    out = Path(out)
+    data = rg.canonical_bytes(record)
+    signature, reason = None, None
+    if not key or not principal:
+        reason = "no signing key or principal in the environment"
+    else:
+        try:
+            signature = sign_record(data, key)
+            verify_signature(signers, record, data, signature)
+        except (signing.SigningError, GuidedError) as error:
+            signature, reason = None, str(error)[:200]
+    if signature is None:
+        draft = Path(draft_dir)
+        draft.mkdir(parents=True, exist_ok=True, mode=0o700)
+        target = draft / f"{record['matrix']}-{record['platform']}-{record['finishedAt'].replace(':', '')}.draft.json"
+        rg.write_atomic_exclusive(str(target), data, 0o600)
+        return 3, f"saved an UNSIGNED draft ({status}) at {target}: {reason}. It is not importable evidence."
+    out.parent.mkdir(parents=True, exist_ok=True)
+    for ref_path, source in mapping.items():
+        target = out.parent / ref_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    rg.write_atomic_exclusive(str(Path(str(out) + ".sig")), signature, 0o644)
+    rg.write_atomic_exclusive(str(out), data, 0o644)
+    return 0, f"wrote {out} ({status}, signed by {principal})"
 
 # ------------------------------------------------------------------ aggregation
 

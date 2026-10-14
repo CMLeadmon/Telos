@@ -74,7 +74,7 @@ that the file is from an unidentified source; confirm only if the checksum match
 
 ## Manual smoke (`desktop-linux`)
 
-Run against the exact AppImage and the node under test. Record the OS build, WebKitGTK and
+Run against the exact AppImage and the node under test, with `scripts/record-guided-smoke.py --matrix desktop --platform linux-appimage` (its eleven questions are this list; see [browser-certification.md](browser-certification.md)). Record the OS build, WebKitGTK and
 GStreamer versions, the AppImage digest, the node and candidate identity, start and end time,
 and each assertion's result. A skipped assertion makes the platform `not_run`.
 

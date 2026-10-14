@@ -2,6 +2,14 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# With --records-dir this is the browser-matrix aggregator (all seven signed platform records, candidate-bound):
+#   certify-browser-matrix.sh (--candidate-lock FILE | --rehearsal --source-commit SHA --rehearsal-lock FILE) --records-dir DIR --result-out FILE
+# Without it, the gate-runner placeholder shape reports not_run.
+for argument in "$@"; do
+  case "$argument" in
+    --records-dir) exec python3 -I "$script_dir/lib/guided_smoke.py" aggregate --matrix browser "$@" ;;
+  esac
+done
 original_argv=("$0" "$@")
 candidate_lock=""
 evidence_out=""

@@ -200,6 +200,11 @@ scripts/lib/release_compose.py
 scripts/lib/candidate_install.py
 scripts/lib/evidence_bundle.py
 scripts/lib/stage_release.py
+scripts/lib/guided_smoke.py
+scripts/lib/browser_report.py
+scripts/record-guided-smoke.py
+scripts/certify-desktop.sh
+release/guided-assertions.json
 scripts/promote-release.sh
 release/publisher-policy.json
 scripts/import-evidence.py
@@ -240,6 +245,7 @@ tests/operations/candidate_install_test.py
 tests/operations/candidate_workflow_contract_test.py
 tests/operations/evidence_bundle_test.py
 tests/operations/stage_release_test.py
+tests/operations/guided_smoke_test.py
 tests/operations/release_cli_test.sh
 tests/operations/generations_test.py
 tests/operations/recovery_drill_test.py

@@ -40,7 +40,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await page.waitForURL("**/chat/**");
   }
 
-  test("the origin is HTTPS and the page comes from the static client", async ({ page }) => {
+  test("the origin is HTTPS and the page comes from the static client @assertion:trusted-https", async ({ page }) => {
     expect(new URL(BASE).protocol).toBe("https:");
     const response = await page.goto("/");
     expect(response?.status()).toBe(200);
@@ -54,7 +54,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     expect(unknown.headers()["content-type"] ?? "").not.toContain("text/html");
   });
 
-  test("a member signs in, chats, and the message survives a reload", async ({ page }) => {
+  test("a member signs in, chats, and the message survives a reload @assertion:member-auth @assertion:chat", async ({ page }) => {
     await signIn(page, MEMBER);
     await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
     const text = `hosted-${Math.random().toString(36).slice(2)}`;
@@ -66,7 +66,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await expect(page.locator(".mbody", { hasText: text })).toBeVisible();
   });
 
-  test("a member stores, comments on, downloads and deletes a file", async ({ page }) => {
+  test("a member stores, comments on, downloads and deletes a file @assertion:files @assertion:commentary", async ({ page }) => {
     await signIn(page, MEMBER);
     await page.goto("/files/");
     await expect(page.getByTestId("files-dropzone")).toBeVisible();
@@ -99,7 +99,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await expect(page.getByTestId("file-row").filter({ hasText: name })).toHaveCount(0, { timeout: 20_000 });
   });
 
-  test("Stream and Library show either real content or their own unavailable state", async ({ page }) => {
+  test("Stream and Library show either real content or their own unavailable state @assertion:stream-library-states", async ({ page }) => {
     await signIn(page, MEMBER);
     for (const area of ["stream", "library"] as const) {
       await page.goto(`/${area}/`);
@@ -112,7 +112,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await expect(page.locator(".chan", { hasText: "general" })).toBeVisible();
   });
 
-  test("settings and administration are reachable for the right roles", async ({ page, browser }) => {
+  test("settings and administration are reachable for the right roles @assertion:settings-admin", async ({ page, browser }) => {
     await signIn(page, MEMBER);
     await page.goto("/settings/");
     await expect(page.getByTestId("settings-page")).toBeVisible();
@@ -127,7 +127,7 @@ test.describe("hosted node (cookie mode, same origin)", () => {
     await ownerContext.close();
   });
 
-  test("logging out ends the session and signing in works again", async ({ page }) => {
+  test("logging out ends the session and signing in works again @assertion:logout-login", async ({ page }) => {
     await signIn(page, MEMBER);
     await page.getByLabel("log out").click();
     await page.waitForURL("**/login/**");

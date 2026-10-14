@@ -1,0 +1,669 @@
+{
+  "config": {
+    "argv": [
+      "/home/carter/.local/telos-toolchain/node/bin/node",
+      "/home/carter/Projects/Telos/frontend/node_modules/.bin/playwright",
+      "test",
+      "--list"
+    ],
+    "configFile": "/home/carter/Projects/Telos/frontend/playwright.config.ts",
+    "rootDir": "/home/carter/Projects/Telos/frontend/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {},
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/home/carter/Projects/Telos/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "chrome",
+        "name": "chrome",
+        "testDir": "/home/carter/Projects/Telos/frontend/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "hosted-node.spec.ts"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/home/carter/Projects/Telos/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "firefox",
+        "name": "firefox",
+        "testDir": "/home/carter/Projects/Telos/frontend/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "hosted-node.spec.ts"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/home/carter/Projects/Telos/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "edge",
+        "name": "edge",
+        "testDir": "/home/carter/Projects/Telos/frontend/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "hosted-node.spec.ts"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/home/carter/Projects/Telos/frontend/test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "webkit",
+        "name": "webkit",
+        "testDir": "/home/carter/Projects/Telos/frontend/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "hosted-node.spec.ts"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "json",
+        {
+          "outputFile": "playwright-candidate.json"
+        }
+      ],
+      [
+        "list",
+        null
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.61.1",
+    "workers": 8,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "hosted-node.spec.ts",
+      "file": "hosted-node.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "hosted node (cookie mode, same origin)",
+          "file": "hosted-node.spec.ts",
+          "line": 22,
+          "column": 6,
+          "specs": [
+            {
+              "title": "the origin is HTTPS and the page comes from the static client @assertion:trusted-https",
+              "ok": true,
+              "tags": [
+                "assertion:trusted-https"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-ef781b8aaafcc36c96f0",
+              "file": "hosted-node.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "a member signs in, chats, and the message survives a reload @assertion:member-auth @assertion:chat",
+              "ok": true,
+              "tags": [
+                "assertion:member-auth",
+                "assertion:chat"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-bd0c2fe26a108f2d72e7",
+              "file": "hosted-node.spec.ts",
+              "line": 57,
+              "column": 7
+            },
+            {
+              "title": "a member stores, comments on, downloads and deletes a file @assertion:files @assertion:commentary",
+              "ok": true,
+              "tags": [
+                "assertion:files",
+                "assertion:commentary"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-7d5aaf33863828129648",
+              "file": "hosted-node.spec.ts",
+              "line": 69,
+              "column": 7
+            },
+            {
+              "title": "Stream and Library show either real content or their own unavailable state @assertion:stream-library-states",
+              "ok": true,
+              "tags": [
+                "assertion:stream-library-states"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-f52392c42c358bbbc6a9",
+              "file": "hosted-node.spec.ts",
+              "line": 102,
+              "column": 7
+            },
+            {
+              "title": "settings and administration are reachable for the right roles @assertion:settings-admin",
+              "ok": true,
+              "tags": [
+                "assertion:settings-admin"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-98b9fc18f683e2c95b95",
+              "file": "hosted-node.spec.ts",
+              "line": 115,
+              "column": 7
+            },
+            {
+              "title": "logging out ends the session and signing in works again @assertion:logout-login",
+              "ok": true,
+              "tags": [
+                "assertion:logout-login"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "chrome",
+                  "projectName": "chrome",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-94578d0d4f17190d864e",
+              "file": "hosted-node.spec.ts",
+              "line": 130,
+              "column": 7
+            },
+            {
+              "title": "the origin is HTTPS and the page comes from the static client @assertion:trusted-https",
+              "ok": true,
+              "tags": [
+                "assertion:trusted-https"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-f94505ed6db2265654cc",
+              "file": "hosted-node.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "a member signs in, chats, and the message survives a reload @assertion:member-auth @assertion:chat",
+              "ok": true,
+              "tags": [
+                "assertion:member-auth",
+                "assertion:chat"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-6200bb01853c3c94fc65",
+              "file": "hosted-node.spec.ts",
+              "line": 57,
+              "column": 7
+            },
+            {
+              "title": "a member stores, comments on, downloads and deletes a file @assertion:files @assertion:commentary",
+              "ok": true,
+              "tags": [
+                "assertion:files",
+                "assertion:commentary"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-8707f04d0f6974190490",
+              "file": "hosted-node.spec.ts",
+              "line": 69,
+              "column": 7
+            },
+            {
+              "title": "Stream and Library show either real content or their own unavailable state @assertion:stream-library-states",
+              "ok": true,
+              "tags": [
+                "assertion:stream-library-states"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-d1abb8717e5bb08f01eb",
+              "file": "hosted-node.spec.ts",
+              "line": 102,
+              "column": 7
+            },
+            {
+              "title": "settings and administration are reachable for the right roles @assertion:settings-admin",
+              "ok": true,
+              "tags": [
+                "assertion:settings-admin"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-b9c1cb72d6c63af884ac",
+              "file": "hosted-node.spec.ts",
+              "line": 115,
+              "column": 7
+            },
+            {
+              "title": "logging out ends the session and signing in works again @assertion:logout-login",
+              "ok": true,
+              "tags": [
+                "assertion:logout-login"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "firefox",
+                  "projectName": "firefox",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-6350a6069fb7f2552499",
+              "file": "hosted-node.spec.ts",
+              "line": 130,
+              "column": 7
+            },
+            {
+              "title": "the origin is HTTPS and the page comes from the static client @assertion:trusted-https",
+              "ok": true,
+              "tags": [
+                "assertion:trusted-https"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-21532912e76f9395f79d",
+              "file": "hosted-node.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "a member signs in, chats, and the message survives a reload @assertion:member-auth @assertion:chat",
+              "ok": true,
+              "tags": [
+                "assertion:member-auth",
+                "assertion:chat"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-fcc20d9d1eb43e1ae973",
+              "file": "hosted-node.spec.ts",
+              "line": 57,
+              "column": 7
+            },
+            {
+              "title": "a member stores, comments on, downloads and deletes a file @assertion:files @assertion:commentary",
+              "ok": true,
+              "tags": [
+                "assertion:files",
+                "assertion:commentary"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-911949112c47ef9e65f8",
+              "file": "hosted-node.spec.ts",
+              "line": 69,
+              "column": 7
+            },
+            {
+              "title": "Stream and Library show either real content or their own unavailable state @assertion:stream-library-states",
+              "ok": true,
+              "tags": [
+                "assertion:stream-library-states"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-7c39196e058623d78329",
+              "file": "hosted-node.spec.ts",
+              "line": 102,
+              "column": 7
+            },
+            {
+              "title": "settings and administration are reachable for the right roles @assertion:settings-admin",
+              "ok": true,
+              "tags": [
+                "assertion:settings-admin"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-712401603611649a2397",
+              "file": "hosted-node.spec.ts",
+              "line": 115,
+              "column": 7
+            },
+            {
+              "title": "logging out ends the session and signing in works again @assertion:logout-login",
+              "ok": true,
+              "tags": [
+                "assertion:logout-login"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "edge",
+                  "projectName": "edge",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-b65488a0f06015c81250",
+              "file": "hosted-node.spec.ts",
+              "line": 130,
+              "column": 7
+            },
+            {
+              "title": "the origin is HTTPS and the page comes from the static client @assertion:trusted-https",
+              "ok": true,
+              "tags": [
+                "assertion:trusted-https"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-71c4ac24d9bd3fabc36e",
+              "file": "hosted-node.spec.ts",
+              "line": 43,
+              "column": 7
+            },
+            {
+              "title": "a member signs in, chats, and the message survives a reload @assertion:member-auth @assertion:chat",
+              "ok": true,
+              "tags": [
+                "assertion:member-auth",
+                "assertion:chat"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-964874e9879f07bee34f",
+              "file": "hosted-node.spec.ts",
+              "line": 57,
+              "column": 7
+            },
+            {
+              "title": "a member stores, comments on, downloads and deletes a file @assertion:files @assertion:commentary",
+              "ok": true,
+              "tags": [
+                "assertion:files",
+                "assertion:commentary"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-2f1675859ff642578d08",
+              "file": "hosted-node.spec.ts",
+              "line": 69,
+              "column": 7
+            },
+            {
+              "title": "Stream and Library show either real content or their own unavailable state @assertion:stream-library-states",
+              "ok": true,
+              "tags": [
+                "assertion:stream-library-states"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-e146f32436b6bb881b7e",
+              "file": "hosted-node.spec.ts",
+              "line": 102,
+              "column": 7
+            },
+            {
+              "title": "settings and administration are reachable for the right roles @assertion:settings-admin",
+              "ok": true,
+              "tags": [
+                "assertion:settings-admin"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-c03a7ce250af64a91614",
+              "file": "hosted-node.spec.ts",
+              "line": 115,
+              "column": 7
+            },
+            {
+              "title": "logging out ends the session and signing in works again @assertion:logout-login",
+              "ok": true,
+              "tags": [
+                "assertion:logout-login"
+              ],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "webkit",
+                  "projectName": "webkit",
+                  "results": [],
+                  "status": "skipped"
+                }
+              ],
+              "id": "c07db13100ceee259d81-69f545896f20d8fb8867",
+              "file": "hosted-node.spec.ts",
+              "line": 130,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-14T11:09:58.153Z",
+    "duration": 49.00100000000003,
+    "expected": 0,
+    "skipped": 24,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}
