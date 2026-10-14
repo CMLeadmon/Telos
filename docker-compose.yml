@@ -22,12 +22,37 @@ networks:
     name: telos-egress
     driver: bridge
 
+# Controls every service shares. Each service still states its own user, limits,
+# writable paths and (except where documented) no-new-privileges, so a reviewer
+# reads one block per service; config/runtime-hardening.json is the policy these are
+# verified against, statically (rendered model) and live (running containers).
+x-hardened: &hardened
+  cap_drop:
+    - ALL
+  read_only: true
+  # Podman's k8s-file driver truncates a container log at max-size (it has no file
+  # count); max-file is kept for provider portability.
+  logging:
+    driver: k8s-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
 volumes:
+  # Created owned by Traefik's non-root identity so ACME state can be written.
   traefik_acme:
+    driver_opts:
+      o: "uid=65532,gid=65532"
   postgres_data:
   redis_data:
   jellyfin_config:
+  jellyfin_cache:
+  clamav_db:
+  # Grimmory is started as the node's app identity (not its root entrypoint), so
+  # its data volume has to belong to that identity.
   grimmory_config:
+    driver_opts:
+      o: "uid=${APP_UID},gid=${APP_GID}"
   grimmory_db_data:
 
 services:
@@ -35,18 +60,28 @@ services:
     image: docker.io/library/traefik:v3.3@sha256:2cd5cc75530c8d07ae0587c743d23eb30cae2436d07017a5ff78498b1a43d09f
     container_name: telos-traefik
     restart: unless-stopped
+    stop_grace_period: 30s
+    <<: *hardened
     security_opt:
       - no-new-privileges:true
+    user: "65532:65532"
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     networks:
       - telos-ingress
-    # Host-side bindings only; the container still listens on 80/443, so
-    # config/traefik.yaml and the ACME httpChallenge entryPoint are unchanged.
+    # Host-side bindings only. Traefik runs unprivileged, so it listens on 8080/8443
+    # inside the container (config/traefik.yaml) while the host still serves 80/443.
     # Rootless container runtimes cannot bind privileged ports — override these
     # in .env (e.g. 8081/8443) to bring the stack up without root. Let's Encrypt
     # HTTP-01 requires the public :80, so leave the defaults in production.
     ports:
-      - "${TRAEFIK_HTTP_PORT:-80}:80"
-      - "${TRAEFIK_HTTPS_PORT:-443}:443"
+      - "${TRAEFIK_HTTP_PORT:-80}:8080"
+      - "${TRAEFIK_HTTPS_PORT:-443}:8443"
     environment:
       - TELOS_DOMAIN=${TELOS_DOMAIN}
       - TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL=${ACME_EMAIL:?Set ACME_EMAIL in .env}
@@ -54,6 +89,12 @@ services:
       - ./config/traefik.yaml:/etc/traefik/traefik.yaml:ro,z
       - ./config/dynamic:/etc/traefik/dynamic:ro,z
       - traefik_acme:/letsencrypt
+    healthcheck:
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # One-shot schema-owner migrator. Applies migrations, then exits; telos-core
   # only starts (as the least-privilege runtime role) after it succeeds.
@@ -64,6 +105,19 @@ services:
     container_name: telos-migrate
     command: ["./telos-core", "migrate"]
     restart: "no"
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cpus: 1
+    mem_limit: 256m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,6 +134,19 @@ services:
     container_name: telos-audiobook-migrate
     command: ["./telos-core", "audiobook-migrate"]
     restart: "no"
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cpus: 1
+    mem_limit: 512m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
     depends_on:
       postgres:
         condition: service_healthy
@@ -120,6 +187,19 @@ services:
     # Exceeds the 55s staged shutdown budget (30s HTTP + 10s sockets + 15s
     # outbox) plus cleanup margin.
     stop_grace_period: 75s
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cpus: 2
+    mem_limit: 1g
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,7 +210,6 @@ services:
     # Fixed non-root identity. group_add lets the gateway write the storage tree
     # that `telos init` created for the operator's group; existing storage is
     # never recursively chowned (see documentation/operations/install.md).
-    user: "10001:10001"
     group_add:
       - "${APP_GID}"
     networks:
@@ -161,6 +240,9 @@ services:
       - TELOS_USER_QUOTA_BYTES=${TELOS_USER_QUOTA_BYTES:-1073741824}
       - TELOS_NODE_RESERVE_BYTES=${TELOS_NODE_RESERVE_BYTES:-5368709120}
       - TELOS_ENV=${TELOS_ENV:-production}
+      # The root filesystem is read-only: multipart upload parts spill to disk, so they go
+      # to the storage volume rather than the small /tmp tmpfs.
+      - TMPDIR=/data/shared/staging/tmp
       - TELOS_BOOTSTRAP_TOKEN=${TELOS_BOOTSTRAP_TOKEN}
     volumes:
       # One controlled shared root; the gateway confines all physical I/O
@@ -187,14 +269,21 @@ services:
       dockerfile: Dockerfile
     container_name: telos-client
     restart: unless-stopped
+    stop_grace_period: 15s
+    <<: *hardened
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
-    read_only: true
+    user: "101:101"
     tmpfs:
       - /var/cache/nginx:size=16m,mode=1777
       - /var/run:size=1m,mode=1777
+    cpus: 0.25
+    mem_limit: 128m
+    pids_limit: 64
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
     networks:
       - telos-ingress
     healthcheck:
@@ -207,9 +296,27 @@ services:
     image: docker.io/library/postgres:16.14-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
     container_name: telos-postgres
     restart: unless-stopped
-    # Start as the image's own unprivileged user instead of root-then-gosu; the
-    # image's data directory is already owned by this user, so nothing needs root.
+    stop_grace_period: 30s
+    # Starts as the image's own unprivileged user instead of root-then-gosu; the image's
+    # data directory is already owned by this user, so nothing needs root.
+    <<: *hardened
+    # no-new-privileges is deliberately NOT set (documented exception, see
+    # config/runtime-hardening.json and docs/implementation/design-alterations.md A16):
+    # on Ubuntu 26.04 it leaves this image's processes under different AppArmor
+    # labels and AppArmor then denies the signals its entrypoint depends on.
+    # Compensating controls: non-root user, all capabilities dropped, read-only
+    # root, internal-only network, default AppArmor profile still enforced.
     user: postgres
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /var/run/postgresql:size=1m,mode=1777
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     # Enable query statistics with parameter redaction and no statement logging.
     command:
       - postgres
@@ -221,13 +328,6 @@ services:
       - pg_stat_statements.track=top
       - -c
       - log_statement=none
-    # no-new-privileges is deliberately NOT set on this service. On Ubuntu 26.04
-    # (AppArmor 5, crun's name-only profile stacked under containers-default) it
-    # leaves a container's processes labelled differently from each other, and
-    # AppArmor then denies signals between them: gosu spins, `pg_ctl stop` gets
-    # EPERM, and the startup process cannot signal the postmaster, so Postgres
-    # never finishes starting. AppArmor confinement stays on. See
-    # docs/implementation/design-alterations.md A16.
     networks:
       - telos-db
     environment:
@@ -251,8 +351,18 @@ services:
     image: docker.io/library/redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: telos-redis
     restart: unless-stopped
+    stop_grace_period: 20s
+    <<: *hardened
     security_opt:
       - no-new-privileges:true
+    user: redis
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     networks:
       - telos-backend
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
@@ -275,8 +385,23 @@ services:
       dockerfile: deploy/egress-proxy/Dockerfile
     container_name: telos-egress-proxy
     restart: unless-stopped
+    stop_grace_period: 15s
+    <<: *hardened
     security_opt:
       - no-new-privileges:true
+    user: proxy
+    tmpfs:
+      - /var/spool/squid:size=128m,mode=1777
+      - /var/log/squid:size=64m,mode=1777
+      - /run:size=1m,mode=1777
+      - /tmp:size=16m,mode=1777
+    cpus: 0.5
+    mem_limit: 512m
+    pids_limit: 128
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     networks:
       - telos-backend
       - telos-egress
@@ -293,11 +418,27 @@ services:
     image: docker.io/clamav/clamav:1.5.4@sha256:638d90201ee7ee6a82d249a2fc23b132e578673b5f1f2766852b127676ca1ef6
     container_name: telos-clamav
     restart: unless-stopped
+    stop_grace_period: 30s
+    <<: *hardened
     security_opt:
       - no-new-privileges:true
+    user: clamav
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run:size=4m,mode=1777,notmpcopyup
+      - /var/log/clamav:size=16m,mode=1777,notmpcopyup
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 8192
+        hard: 8192
     networks:
       - telos-backend
     # FreshClam reaches database.clamav.net only through the controlled proxy.
+    volumes:
+      - clamav_db:/var/lib/clamav
     environment:
       - http_proxy=http://telos-egress-proxy:3128
       - https_proxy=http://telos-egress-proxy:3128
@@ -314,7 +455,20 @@ services:
     image: docker.io/jellyfin/jellyfin:10.11.11@sha256:aefb67e6a7ff1debdd154a78a7bbb780fd0c873d8639210a7f6a2016ad2b35db
     container_name: telos-jellyfin
     restart: unless-stopped
+    stop_grace_period: 30s
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
     user: "${APP_UID}:${APP_GID}"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cpus: 4
+    mem_limit: 4g
+    pids_limit: 512
+    ulimits:
+      nofile:
+        soft: 32768
+        hard: 32768
     networks:
       - telos-backend
     environment:
@@ -328,12 +482,40 @@ services:
       - no_proxy=localhost,127.0.0.1,telos-core,postgres,redis,grimmory,grimmory-db
     volumes:
       - jellyfin_config:/config
+      - jellyfin_cache:/cache
       - ${STORAGE_PATH:-/mnt/storage/shared}/media:/data/media:ro,z
+    # Liveness only: a configured Jellyfin answers the root with a redirect to its Base
+    # URL, which curl -f accepts; the gateway's own readiness probe checks /jellyfin.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null -m 3 http://localhost:8096/System/Info/Public"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
   grimmory-db:
     image: docker.io/library/mariadb:10.11@sha256:7db29378d4fdab73f8123bbc2b48905c90d1a4b00cf848b028f1e81e623257f2
     container_name: telos-grimmory-db
     restart: unless-stopped
+    stop_grace_period: 30s
+    <<: *hardened
+    # no-new-privileges is deliberately NOT set (documented exception, see
+    # config/runtime-hardening.json and docs/implementation/design-alterations.md A16):
+    # on Ubuntu 26.04 it leaves this image's processes under different AppArmor
+    # labels and AppArmor then denies the signals its entrypoint depends on.
+    # Compensating controls: non-root user, all capabilities dropped, read-only
+    # root, internal-only network, default AppArmor profile still enforced.
+    user: mysql
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+      - /run/mysqld:size=1m,mode=1777
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 256
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     networks:
       - telos-db
     environment:
@@ -353,6 +535,25 @@ services:
     image: docker.io/grimmory/grimmory:v3.5.0@sha256:bf6fe21c6e247597f7869664a440b5a34242e2d2940575cae39c17bfaa66dc0b
     container_name: telos-grimmory
     restart: unless-stopped
+    stop_grace_period: 30s
+    # The upstream entrypoint starts as root, creates a user in /etc/passwd and su-execs
+    # to it, which needs a writable root and three capabilities. The same JVM command
+    # runs directly as the node's app identity instead, with everything locked down
+    # (design alteration A19); /app/data, /books and /bookdrop are mounts below.
+    entrypoint: ["java", "--enable-native-access=ALL-UNNAMED", "--enable-preview", "-jar", "/app/app.jar"]
+    <<: *hardened
+    security_opt:
+      - no-new-privileges:true
+    user: "${APP_UID}:${APP_GID}"
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    cpus: 2
+    mem_limit: 2g
+    pids_limit: 512
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     depends_on:
       grimmory-db:
         condition: service_healthy

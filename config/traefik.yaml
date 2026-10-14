@@ -1,13 +1,22 @@
+# Traefik runs unprivileged inside its container, so it listens above 1024; the host
+# still serves 80/443 (docker-compose.yml maps 80->8080 and 443->8443). The ping
+# entrypoint is internal-only and exists for the container health check.
 entryPoints:
   web:
-    address: ":80"
+    address: ":8080"
     http:
       redirections:
         entryPoint:
-          to: websecure
+          # The public HTTPS port, not websecure's in-container :8443.
+          to: ":443"
           scheme: https
   websecure:
-    address: ":443"
+    address: ":8443"
+  ping:
+    address: ":8082"
+
+ping:
+  entryPoint: ping
 
 providers:
   file:

@@ -96,8 +96,9 @@ def validate_policy(policy):
     if set(policy) != {"schemaVersion", "logBounds", "services"}:
         raise PolicyError("policy keys must be exactly schemaVersion, logBounds, services")
     bounds = policy["logBounds"]
-    if not isinstance(bounds, dict) or set(bounds) != {"maxSizeMiB", "maxFiles"} or not all(isinstance(v, int) and v > 0 for v in bounds.values()):
-        raise PolicyError("logBounds must be {maxSizeMiB, maxFiles} positive integers")
+    if not isinstance(bounds, dict) or set(bounds) != {"driver", "maxSizeMiB"} or bounds["driver"] != "k8s-file" or \
+            not isinstance(bounds["maxSizeMiB"], int) or bounds["maxSizeMiB"] <= 0:
+        raise PolicyError("logBounds must be {driver: k8s-file, maxSizeMiB: positive integer}")
     services = policy["services"]
     if not isinstance(services, dict) or not services:
         raise PolicyError("policy must name at least one service")
@@ -109,6 +110,8 @@ def validate_policy(policy):
         optional = {"user", "profile"}
         if not required <= set(service) or set(service) - required - optional:
             raise PolicyError(f"{name}: keys must be {sorted(required)} plus optional {sorted(optional)}")
+        if service["uid"] != "app" and (not isinstance(service["uid"], int) or isinstance(service["uid"], bool) or service["uid"] <= 0):
+            raise PolicyError(f"{name}: uid must be a positive integer or \"app\"")
         image = service["image"]
         if not isinstance(image, dict) or image.get("kind") not in ("locked", "built") or \
                 (image["kind"] == "locked" and not image.get("key")) or (image["kind"] == "built" and not image.get("artifact")):
@@ -227,14 +230,20 @@ def check_static(policy, model, lock, today=None):
         elif "build" not in service:
             bad("a Telos-built image must have a build section")
 
-        # identity
+        # identity: every service states its user explicitly; "app" services run as the
+        # node's APP_UID:APP_GID, which interpolates to a numeric non-root pair.
         user = service.get("user")
-        if user is not None and str(user).split(":")[0] in ("0", "root"):
-            bad("runs as root")
-        if "user" in rule and str(user) != str(rule["user"]):
-            bad(f"user {user!r} differs from the policy identity {rule['user']!r}")
-        if "nonRoot" not in skip and user is None and rule["uid"] == 0:
-            bad("policy allows root without a documented exception")
+        if user is None:
+            if "nonRoot" not in skip:
+                bad("does not state the user it runs as")
+        else:
+            if str(user).split(":")[0] in ("0", "root"):
+                bad("runs as root")
+            if rule["uid"] == "app":
+                if not re.fullmatch(r"[1-9][0-9]*:[1-9][0-9]*", str(user)):
+                    bad(f"user {user!r} is not a numeric non-root uid:gid pair")
+            elif "user" in rule and str(user) != str(rule["user"]):
+                bad(f"user {user!r} differs from the policy identity {rule['user']!r}")
 
         # isolation
         if service.get("privileged"):
@@ -300,16 +309,12 @@ def check_static(policy, model, lock, today=None):
             if soft is None or hard is None or int(soft) > limits["nofile"] or int(hard) > limits["nofile"]:
                 bad(f"nofile is missing or above {limits['nofile']}")
 
-        # logging
+        # logging: Podman's k8s-file driver truncates a container log at max-size (it has
+        # no file count), so the bound is the driver and the size.
         logging = service.get("logging") or {}
-        options = logging.get("options") or {}
-        size = parse_bytes(options.get("max-size"))
-        try:
-            files = int(options.get("max-file"))
-        except (TypeError, ValueError):
-            files = None
-        if size is None or size > bounds["maxSizeMiB"] * (1 << 20) or files is None or files > bounds["maxFiles"]:
-            bad(f"logging is not rotated within {bounds['maxSizeMiB']} MiB x {bounds['maxFiles']} files")
+        size = parse_bytes((logging.get("options") or {}).get("max-size"))
+        if logging.get("driver") != bounds["driver"] or size is None or size > bounds["maxSizeMiB"] * (1 << 20):
+            bad(f"logging must use {bounds['driver']} with max-size at most {bounds['maxSizeMiB']} MiB")
 
         # lifecycle
         restart = str(service.get("restart", ""))
@@ -404,7 +409,7 @@ def check_runtime(policy, observations, lock, candidate_images=None, today=None)
                 gid = int(status["Gid"].split()[1])
                 if (uid == 0 or gid == 0) and "nonRoot" not in skip:
                     bad(f"PID 1 runs as uid {uid} gid {gid}")
-                if rule["uid"] and uid != rule["uid"]:
+                if rule["uid"] != "app" and uid != rule["uid"]:
                     bad(f"PID 1 runs as uid {uid}, the policy says {rule['uid']}")
                 effective = decode_capabilities(status["CapEff"])
                 unexpected = sorted(effective - set(rule["capAdd"]))
@@ -430,13 +435,10 @@ def check_runtime(policy, observations, lock, candidate_images=None, today=None)
                 bad(f"pids limit {host['pidsLimit']} is missing or above {limits['pids']}")
             if host["nofile"] is None or host["nofile"] > limits["nofile"]:
                 bad(f"nofile {host['nofile']} is missing or above {limits['nofile']}")
-        size, files = host["logMaxSizeBytes"], host["logMaxFiles"]
-        if size is None or size > bounds["maxSizeMiB"] * (1 << 20) or files is None or files > bounds["maxFiles"]:
-            bad("log rotation is unbounded or missing")
+        if host["logDriver"] != bounds["driver"] or host["logMaxSizeBytes"] is None or host["logMaxSizeBytes"] > bounds["maxSizeMiB"] * (1 << 20):
+            bad("log rotation is unbounded or uses a different driver")
         if host["restart"] != rule["restart"]:
             bad(f"restart policy {host['restart']!r} differs from {rule['restart']!r}")
-        if not rule["oneShot"] and (host["stopTimeout"] is None or host["stopTimeout"] < rule["stopGraceSeconds"]):
-            bad(f"stop timeout {host['stopTimeout']} is below {rule['stopGraceSeconds']}s")
 
         allowed_writable = set(rule["writable"]["volumes"]) | set(rule["writable"]["tmpfs"])
         for mount in observed["mounts"]:
@@ -478,9 +480,7 @@ def project_inspect(inspected, status_text, tcp_text):
     """
     state = inspected.get("State") or {}
     host = inspected.get("HostConfig") or {}
-    config = inspected.get("Config") or {}
     log = host.get("LogConfig") or {}
-    log_options = log.get("Config") or {}
     nano = host.get("NanoCpus") or 0
     if not nano and host.get("CpuQuota") and host.get("CpuPeriod"):
         nano = int(host["CpuQuota"] * 1e9 / host["CpuPeriod"])
@@ -507,10 +507,9 @@ def project_inspect(inspected, status_text, tcp_text):
             "nanoCpus": nano,
             "pidsLimit": host.get("PidsLimit") or 0,
             "nofile": _nofile(host.get("Ulimits")),
-            "logMaxSizeBytes": parse_bytes(log_options.get("max-size")),
-            "logMaxFiles": int(log_options["max-file"]) if str(log_options.get("max-file", "")).isdigit() else None,
+            "logDriver": log.get("Type") or "",
+            "logMaxSizeBytes": parse_bytes(log.get("Size")),
             "restart": (host.get("RestartPolicy") or {}).get("Name") or "no",
-            "stopTimeout": config.get("StopTimeout"),
         },
         "mounts": [{"source": m.get("Source", ""), "destination": m.get("Destination", ""), "writable": bool(m.get("RW")), "type": m.get("Type", "")}
                    for m in inspected.get("Mounts") or []],

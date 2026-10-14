@@ -1,0 +1,44 @@
+# Static configuration for a node served by an operator-managed private CA
+# (TELOS_PRIVATE_CA=1). It is config/traefik.yaml with ONE change, the ACME directory;
+# tests/operations/private_ca_config_test.sh keeps the two from drifting.
+# Traefik runs unprivileged inside its container, so it listens above 1024; the host
+# still serves 80/443 (docker-compose.yml maps 80->8080 and 443->8443). The ping
+# entrypoint is internal-only and exists for the container health check.
+entryPoints:
+  web:
+    address: ":8080"
+    http:
+      redirections:
+        entryPoint:
+          # The public HTTPS port, not websecure's in-container :8443.
+          to: ":443"
+          scheme: https
+  websecure:
+    address: ":8443"
+  ping:
+    address: ":8082"
+
+ping:
+  entryPoint: ping
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      # No public CA is ever contacted on a private-CA node: the directory is a name
+      # that cannot resolve. (Traefik ignores TRAEFIK_* environment variables when a
+      # static configuration file exists, so this cannot be an overlay environment.)
+      caServer: https://acme.disabled.invalid/directory
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+
+log:
+  level: INFO
+
+accessLog: {}
+

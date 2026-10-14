@@ -22,4 +22,11 @@ openssl x509 -req -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out s
 cat server.leaf ca.crt >server.crt
 rm -f server.csr server.ext server.leaf ca.srl
 chmod 0644 ca.crt server.crt; chmod 0600 ca.key server.key
+# Traefik runs as UID 65532: it needs to traverse the directory and read the leaf and its
+# key, and nothing else (the CA key stays root-only).
+if [[ "$(id -u)" -eq 0 ]]; then
+  chgrp 65532 . server.key; chmod 0750 .; chmod 0640 server.key
+else
+  echo "make-private-ca: not root; give UID 65532 read access to server.crt/server.key before starting the node" >&2
+fi
 echo "make-private-ca: $out/server.crt for $domain (CA: $out/ca.crt)"

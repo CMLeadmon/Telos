@@ -422,6 +422,11 @@ func main() {
 	if err := os.MkdirAll("/data/shared/staging", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging dir: %v", err)
 	}
+	// The container root is read-only; TMPDIR points here so large multipart
+	// uploads spill to the storage volume instead of a small tmpfs.
+	if err := os.MkdirAll("/data/shared/staging/tmp", 0700); err != nil {
+		log.Printf("Warning: Failed to create temporary upload dir: %v", err)
+	}
 	if err := os.MkdirAll("/data/shared/staging/library", 0755); err != nil {
 		log.Printf("Warning: Failed to create staging library dir: %v", err)
 	}

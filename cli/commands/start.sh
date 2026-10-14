@@ -50,6 +50,13 @@ run() {
   [ "$build" -eq 1 ] && args+=(--build)
 
   [ "${TELOS_DEV:-0}" = "1" ] && note "using docker-compose.dev.yml"
+  prepare_volume_ownership
+  local unreadable
+  if unreadable="$(private_ca_unreadable)"; then
+    warn "refusing to start: Traefik runs as UID 65532 and cannot read $unreadable"
+    note "give that user access, for example: chgrp 65532 <dir> server.key; chmod 0750 <dir>; chmod 0640 server.key"
+    return 1
+  fi
   info "Starting Telos stack..."
 
   if ! compose "${args[@]}"; then

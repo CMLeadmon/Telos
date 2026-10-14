@@ -66,6 +66,19 @@ text = open(path, encoding="utf-8").read()
 start = text.index("  telos-client:\n")
 end = text.index("\n  postgres:\n") + 1
 block = text[start:end]
+# The shared controls come from the x-hardened anchor; a mutation that removes one of
+# them first writes the merge out, then drops that key.
+HARDENED = {
+    "cap_drop": "    cap_drop:\n      - ALL\n",
+    "read_only": "    read_only: true\n",
+    "logging": "    logging:\n      driver: k8s-file\n      options:\n        max-size: 10m\n        max-file: \"3\"\n",
+}
+
+
+def expanded(block, without):
+    return block.replace("    <<: *hardened\n", "".join(v for k, v in HARDENED.items() if k not in without), 1)
+
+
 if mutation == "backend-network":
     block = block.replace("      - telos-ingress\n", "      - telos-ingress\n      - telos-backend\n", 1)
 elif mutation == "db-network-only":
@@ -79,9 +92,9 @@ elif mutation == "token-env":
 elif mutation == "volume":
     block = block.replace("    networks:\n", "    volumes:\n      - ${STORAGE_PATH:-/mnt/storage/shared}:/data/shared:z\n    networks:\n", 1)
 elif mutation == "writable-root":
-    block = block.replace("    read_only: true\n", "", 1)
+    block = expanded(block, ("read_only",))
 elif mutation == "keeps-capabilities":
-    block = block.replace("    cap_drop:\n      - ALL\n", "", 1)
+    block = expanded(block, ("cap_drop",))
 elif mutation == "no-healthcheck":
     block = re.sub(r"    healthcheck:.*", "", block, flags=re.S)
 elif mutation == "depends-on-core":

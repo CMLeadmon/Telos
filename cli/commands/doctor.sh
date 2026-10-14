@@ -213,6 +213,11 @@ check_node() {
   fi
 
   check_ingress_forwarding "$runtime"
+  local unreadable
+  if unreadable="$(private_ca_unreadable)"; then
+    dx_bad "Traefik (UID 65532) cannot read $unreadable, so HTTPS has no certificate" \
+      "chgrp 65532 on the TLS directory and key; chmod 0750 the directory and 0640 server.key"
+  fi
 }
 
 # A published port reaches Traefik only if the host forwards packets arriving from
