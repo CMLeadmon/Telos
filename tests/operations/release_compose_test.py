@@ -2,6 +2,8 @@
 """The derived release model: no build keys, every third-party image locked to its platform manifest,
 every self-built image required from images.env. Each test breaks one input and expects a refusal."""
 
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -142,10 +144,11 @@ class VerifyTests(Fixture):
 
 class CommandLineTests(Fixture):
     def test_derive_and_verify_commands(self):
-        self.assertEqual(rc.main(["derive", "--root", str(self.src), "--out-dir", str(self.out)]), 0)
-        self.assertEqual(rc.main(["verify", "--dir", str(self.out)]), 0)
-        (self.out / rc.OVERLAY).write_text("services: {}\n", encoding="utf-8")
-        self.assertEqual(rc.main(["verify", "--dir", str(self.out)]), 1)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(rc.main(["derive", "--root", str(self.src), "--out-dir", str(self.out)]), 0)
+            self.assertEqual(rc.main(["verify", "--dir", str(self.out)]), 0)
+            (self.out / rc.OVERLAY).write_text("services: {}\n", encoding="utf-8")
+            self.assertEqual(rc.main(["verify", "--dir", str(self.out)]), 1)
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@
 #   RESTIC_CREDENTIALS_FILE  optional KEY=VALUE backend credentials, same ownership/mode
 #   TELOS_NODE_PATH          node directory (default /var/lib/telos)
 #   TELOS_BACKUP_TMP_ROOT    staging root (default /var/tmp); needs room for the stage
-#   TELOS_RELEASE_ROOT       installed release tree (default /opt/telos)
+#   TELOS_RELEASE_ROOT       installed release tree (default: the tree this script is in)
 # Test seams (tests/operations/backup_restore_test.sh): TELOS_BACKUP_REQUIRE_ROOT=0.
 
 set -euo pipefail
@@ -54,7 +54,7 @@ node_path="${TELOS_NODE_PATH:-/var/lib/telos}"
 state_dir="$node_path/state"
 ops_dir="$node_path/ops"
 tmp_root="${TELOS_BACKUP_TMP_ROOT:-/var/tmp}"
-release_root="${TELOS_RELEASE_ROOT:-/opt/telos}"
+release_root="${TELOS_RELEASE_ROOT:-$(cd "$script_dir/.." && pwd)}"   # the tree this script belongs to: a generation, or /opt/telos
 export TELOS_MAINTENANCE_DIR="$state_dir"
 journal="$state_dir/backup-stage.journal"
 

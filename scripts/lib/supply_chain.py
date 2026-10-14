@@ -41,6 +41,7 @@ TOOLS_LOCK = ROOT / "ci" / "tools.lock"
 LICENSE_POLICY = ROOT / "ci" / "license-policy.json"
 RISK_ACCEPTANCES = ROOT / "ci" / "risk-acceptances.json"
 SBOM_INDEX = "sbom-index.json"
+SBOM_PAYLOAD_DIR = "sbom"
 SBOM_KINDS = ("oci-image", "desktop")
 LOCK_FILES = ("backend/go.sum", "frontend/package-lock.json", "frontend/src-tauri/Cargo.lock")
 MAX_ACCEPTANCE_DAYS = 30
@@ -427,7 +428,8 @@ def validate_sbom_dir(candidate_lock, sbom_dir, lock_tools=None, now=None, max_a
     for entry in index["entries"]:
         by_digest[entry["artifactSha256"]] = entry
     documents = {}
-    expected_artifacts = {path: digest.split(":", 1)[1] for path, digest in lock["artifacts"].items()}
+    # The SBOM files (and their index) are themselves payload; they describe the other artifacts and need no SBOM of their own.
+    expected_artifacts = {path: digest.split(":", 1)[1] for path, digest in lock["artifacts"].items() if not path.startswith(SBOM_PAYLOAD_DIR + "/")}
     for path, sha in sorted(expected_artifacts.items()):
         entry = by_digest.get(sha)
         if entry is None:

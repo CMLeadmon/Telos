@@ -368,6 +368,20 @@ class SbomValidationTests(unittest.TestCase):
         (self.sboms / f"{'a' * 64}.spdx.json").unlink()
         self.refused("is missing")
 
+    def test_a_lock_that_includes_the_sbom_files_themselves_still_validates(self):
+        artifacts = dict(self.artifacts)
+        artifacts["sbom/sbom-index.json"] = sha((self.sboms / sc.SBOM_INDEX).read_bytes())
+        artifacts["sbom/" + "a" * 64 + ".spdx.json"] = sha((self.sboms / f"{'a' * 64}.spdx.json").read_bytes())
+        self.write_lock(artifacts)
+        self.validate()
+
+    def test_a_missing_sbom_is_not_excused_by_the_sbom_directory_exemption(self):
+        artifacts = dict(self.artifacts)
+        artifacts["images/other.tar"] = "f" * 64   # an image outside sbom/ with no index entry still fails
+        self.write_lock(artifacts)
+        with self.assertRaises(sc.Failed):
+            self.validate()
+
     def test_an_oci_image_without_an_sbom_fails(self):
         self.entry("images/core.tar").update(sbom=None, exempt="trust me")
         self.write_index()

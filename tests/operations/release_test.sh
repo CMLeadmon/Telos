@@ -18,4 +18,8 @@ python3 -B tests/operations/release_graph_test.py
 bash tests/operations/signer_trust_test.sh
 python3 -B tests/operations/gate_runner_v2_test.py
 python3 -B tests/operations/frozen_artifact_test.py
+python3 -B tests/operations/release_compose_test.py
+python3 -B tests/operations/build_release_test.py
+python3 -B tests/operations/candidate_install_test.py
+bash tests/operations/release_cli_test.sh
 echo "Release test suite passed."

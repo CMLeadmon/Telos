@@ -259,6 +259,13 @@ def write_receipt(root, node, generation_id, require_root_owner=True):
                "generationPath": os.path.join(os.path.realpath(root), "generations", generation_id), "installedAt": now()}
     rg.validate_record("installed-generation", receipt)
     atomic_replace(os.path.join(state_dir(node), RECEIPT_NAME), rg.canonical_bytes(receipt))
+    # The lock install-candidate kept for this generation becomes the lock services name ("the installed candidate"),
+    # replaced together with the receipt so the two can never disagree about what is installed.
+    kept = os.path.join(state_dir(node), "candidates", generation_id, "candidate-lock.json")
+    if os.path.isfile(kept) and not os.path.islink(kept):
+        data = _read(kept)
+        if rg.raw_sha256(data) == generation_id:
+            atomic_replace(os.path.join(state_dir(node), "current-candidate-lock.json"), data, mode=0o644)
     return receipt
 
 

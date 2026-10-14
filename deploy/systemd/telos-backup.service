@@ -1,6 +1,6 @@
 [Unit]
 Description=Telos encrypted off-node backup
-Documentation=file:///opt/telos/documentation/operations/backup-and-restore.md
+Documentation=file:///srv/telos/current/documentation/operations/backup-and-restore.md
 After=network-online.target podman.service
 Wants=network-online.target
 # A node with no repository configured is not backed up and says so; nothing here
@@ -23,8 +23,8 @@ UMask=0077
 # removed on every exit path by the script. See docs/implementation/design-alterations.md A22.
 EnvironmentFile=/etc/telos/backup.env
 Environment=TELOS_NODE_PATH=/var/lib/telos
-Environment=TELOS_RELEASE_ROOT=/opt/telos
-ExecStart=/opt/telos/scripts/backup.sh --candidate-lock /srv/telos/current/candidate-lock.json --result-out /var/lib/telos/state/backup-latest.result.json
+Environment=TELOS_RELEASE_ROOT=/srv/telos/current
+ExecStart=/srv/telos/current/scripts/backup.sh --candidate-lock /var/lib/telos/state/current-candidate-lock.json --result-out /var/lib/telos/state/backup-latest.result.json
 # The script traps SIGTERM, restarts the services it stopped and removes its plaintext
 # stage, so give it time to do that before systemd escalates to SIGKILL.
 KillSignal=SIGTERM
