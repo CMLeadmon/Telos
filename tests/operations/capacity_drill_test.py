@@ -508,7 +508,8 @@ class RunTests(unittest.TestCase):
 
         return drill.run(["--target-file", self.target_file, "--rehearsal", "--source-commit", base.COMMIT, "--duration", duration,
                           "--result-out", str(self.out / "result.json")], remote_factory=self.remote_factory(), verifier_identity=lambda: verifier,
-                         runner=runner, k6=k6, prepare=prepare, smoke=smoke, resolver=lambda host: "192.0.2.10")
+                         runner=runner, k6=k6, prepare=prepare, smoke=smoke, resolver=lambda host: "192.0.2.10",
+                         journey_recorder=lambda origin, member, directory: steps.append("journey-member"))
 
     def result(self):
         return rg.verify_result_directory(self.out, "result.json")
@@ -522,6 +523,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(self.steps[0], "prepare")
         self.assertEqual(self.steps[-1], "cleanup")
         self.assertIn("k6", self.steps)
+        self.assertLess(self.steps.index("journey-member"), self.steps.index("cleanup"), "the journey member is recorded before cleanup runs")
 
     def test_a_short_run_is_not_run_but_still_cleans_up(self):
         self.assertEqual(self.invoke(summary=good_summary(), duration="10m"), 3)

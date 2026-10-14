@@ -31,6 +31,7 @@ import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import ssl
 import stat
@@ -287,7 +288,7 @@ def locked_k6():
 
 
 def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, runner=rp.run_program, k6=run_k6,
-        prepare=None, smoke=cid.run_smoke, resolver=None):
+        prepare=None, smoke=cid.run_smoke, resolver=None, journey_recorder=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--target-file", required=True)
     parser.add_argument("--duration", default="30m")
@@ -353,10 +354,12 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         journey_scratch = scratch / "smoke"
         journey_scratch.mkdir(mode=0o700)
         smoke_target = dict(target)
+        # A fresh name every run: the journey member cannot be deleted by itself, and an earlier run's would collide.
+        journey = dict(credentials, member=dict(credentials["member"], username=f"journey-{secrets.token_hex(4)}"))
         creds_path = journey_scratch / "credentials.json"
         descriptor = os.open(creds_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as handle:
-            json.dump(credentials, handle)
+            json.dump(journey, handle)
         smoke_target["credentialsFile"] = str(creds_path)
         args.fixture_manifest = None
         smoke_code, report, summary_text = smoke(args, mode, commit, lock_digest, smoke_target, journey_scratch, manifest, cid.host_descriptor_for(facts))
@@ -364,6 +367,7 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
         bad = [r["id"] for r in rows if r["status"] != "passed"]
         assertions.append(check("capacity.smoke", "the member journey still passes after the load", report is not None and rows and not bad,
                                 f"{len(rows)} journey assertions passed", f"journey after load: {bad[:5] or summary_text}"))
+        (journey_recorder or record_journey_member)(target["origin"], journey["member"], fixture_dir)
     finally:
         cleaned = True
         if prepared:
@@ -380,6 +384,28 @@ def run(argv, remote_factory=dc.Remote, verifier_identity=dc.local_machine_id, r
     return dc.finalize(args, mode, commit, lock_digest, GATE_ID, assertions, observation, cid.host_descriptor_for(facts),
                        {"python3": platform.python_version(), "podman": cid.podman_version(facts)}, facts["observedAt"],
                        label="capacity-drill", runtime_facts=facts)
+
+
+def record_journey_member(origin, member, fixture_dir, make_session=None):
+    """Add the journey's member to the cleanup manifest so the fixture cleanup removes it too."""
+    import browser_node_smoke as smoke_client
+    try:
+        with tempfile.TemporaryDirectory(prefix="telos-journey-id.") as directory:
+            session = (make_session or (lambda: smoke_client.Session(origin, ssl.create_default_context(), os.path.join(directory, "jar.json"))))()
+            status = session.request("POST", "/api/v1/auth/login", json_body=member)[0]
+            if status != 200:
+                return False
+            me = json.loads(session.request("GET", "/api/v1/auth/me")[2] or b"{}")
+            session.request("POST", "/api/v1/auth/logout")
+            user_id = me.get("ID") or me.get("id")
+            path = Path(fixture_dir) / "cleanup.json"
+            created = json.loads(path.read_text(encoding="utf-8"))
+            if user_id and user_id not in created["userIds"]:
+                created["userIds"].append(user_id)
+                path.write_text(json.dumps(created), encoding="utf-8")
+            return bool(user_id)
+    except (OSError, ValueError, smoke_client.Assertion):
+        return False
 
 
 def prepare_fixture(command, target, lock_digest, owner, manifest, out_dir):
