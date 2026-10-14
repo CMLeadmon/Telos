@@ -115,6 +115,11 @@ make_node() {  # prints the node directory
   printf "STORAGE_PATH=%s\nPOSTGRES_PASSWORD=%s\n" "$work/storage-$1" "$CANARY_SECRET" >"$n/node.env"
   echo "a book" >"$work/storage-$1/books/book.epub"
   echo "release file" >"$work/release-$1/README"
+  # A release root as install.sh leaves it, plus build output that must never be archived.
+  mkdir -p "$work/release-$1/config" "$work/release-$1/frontend/src-tauri/target/debug" "$work/release-$1/telos-review"
+  cp config/release-exclude.txt "$work/release-$1/config/release-exclude.txt"
+  head -c 1048576 /dev/zero >"$work/release-$1/frontend/src-tauri/target/debug/huge.bin"
+  echo "review" >"$work/release-$1/telos-review/index.html"
   chmod 0700 "$n/state"
   for c in telos-traefik telos-core telos-client telos-postgres telos-grimmory-db telos-jellyfin telos-grimmory; do touch "$work/stub-$1/running/$c"; done
   printf '%s' "$CANARY_PASSWORD" >"$work/pw-$1"; chmod 0600 "$work/pw-$1"
@@ -178,6 +183,10 @@ assert "--read-data-subset=5%" in restic[verbs.index("check")]
 forget = restic[verbs.index("forget")]
 assert "--keep-daily 14" in forget and "--keep-weekly 8" in forget and "--prune" in forget, forget
 PY
+# The release capsule carries the release, not what was built beside it.
+capsule_members="$(tar -tf "$snap/release-capsule.tar")"
+grep -qx './README' <<<"$capsule_members" && grep -qx './config/release-exclude.txt' <<<"$capsule_members" || fail "the release capsule lacks the release files"
+! grep -qE 'src-tauri/target|telos-review' <<<"$capsule_members" || fail "build output leaked into the release capsule"
 status_file="$work/node-ok/ops/last-backup.prom"
 grep -q '^telos_backup_last_result 1$' "$status_file" || fail "success status not recorded: $(cat "$status_file")"
 grep -Eq '^telos_backup_last_success_timestamp_seconds [1-9][0-9]+$' "$status_file" || fail "last-success time not recorded"
@@ -197,12 +206,15 @@ declare -a MATRIX=(
   "snapshot verification|manifest-mismatch|check forget"
   "repository check (5% of data)|check|forget"
   "retention|prune|"
+  "release capsule|capsule|backup snapshots ls dump check forget"
 )
 for row in "${MATRIX[@]}"; do
   IFS='|' read -r step injected forbidden <<<"$row"
   id="fail-$injected"
   make_node "$id" >/dev/null
-  if run_backup "$id" FAIL_AT="$injected"; then fail "$id: injected failure '$injected' still exited zero"; fi
+  extra_env=(FAIL_AT="$injected")
+  [[ "$injected" != capsule ]] || extra_env+=(TELOS_CAPSULE_MAX_BYTES=100)   # a capsule that large means build output leaked in
+  if run_backup "$id" "${extra_env[@]}"; then fail "$id: injected failure '$injected' still exited zero"; fi
   if [[ "$injected" == restart ]]; then assert_clean "$id" norestart; else assert_clean "$id"; fi
   grep -qF "FAILED at step '$step'" "$work/out-$id" || fail "$id: expected a failure at '$step', got: $(tail -3 "$work/out-$id")"
   for verb in $forbidden; do

@@ -1,0 +1,18 @@
+# Paths that never belong in an installed release or in the backup's release capsule.
+# One tar --exclude pattern per line, rooted at the release directory ("./"). install.sh and
+# scripts/backup.sh both read this file, so a build artefact cannot be copied to /opt/telos
+# and then archived into every backup (a Tauri `target/` directory once made the capsule 11 GB).
+./.git
+./.env
+./.env.local
+./.env.bak.*
+./.telos
+./node_modules
+./frontend/node_modules
+./frontend/out
+./frontend/.next
+./frontend/src-tauri/target
+./frontend/test-results
+./frontend/playwright-report
+./backend/out
+./telos-review

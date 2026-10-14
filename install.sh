@@ -141,20 +141,13 @@ else
 info "Installing application tree..."
 mkdir -p "$INSTALL_DIR" || die "cannot create $INSTALL_DIR"
 
-# Exclusions: build output and VCS metadata are regenerated or irrelevant, and
-# .env must never be copied from one node to another — that would clone another
-# node's credentials. Note the patterns are deliberately specific: a blanket
-# './.env.*' would also drop .env.example, which `telos init` reads.
-tar -C "$SOURCE_DIR" \
-    --exclude='./.git' \
-    --exclude='./.env' \
-    --exclude='./.env.local' \
-    --exclude='./.env.bak.*' \
-    --exclude='./node_modules' \
-    --exclude='./frontend/node_modules' \
-    --exclude='./frontend/out' \
-    --exclude='./backend/out' \
-    --exclude='./frontend/.next' \
+# Exclusions live in config/release-exclude.txt (shared with the backup's release
+# capsule): build output and VCS metadata are regenerated or irrelevant, and .env must
+# never be copied from one node to another — that would clone another node's
+# credentials. The patterns are deliberately specific: a blanket './.env.*' would also
+# drop .env.example, which `telos init` reads.
+[ -f "$SOURCE_DIR/config/release-exclude.txt" ] || die "config/release-exclude.txt is missing from $SOURCE_DIR; refusing to copy unfiltered build output"
+tar -C "$SOURCE_DIR" --exclude-from="$SOURCE_DIR/config/release-exclude.txt" \
     -cf - . 2>/dev/null | tar -C "$INSTALL_DIR" -xf - \
   || die "failed to copy the application tree to $INSTALL_DIR"
 

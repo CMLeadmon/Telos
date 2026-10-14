@@ -48,6 +48,7 @@ WRITERS_START_ORDER=(telos-grimmory telos-jellyfin telos-core telos-traefik)
 REQUIRED_CONTAINERS=(telos-traefik telos-core telos-client telos-postgres telos-grimmory-db telos-jellyfin telos-grimmory)
 RETENTION_DAILY=14
 RETENTION_WEEKLY=8
+CAPSULE_MAX_BYTES="${TELOS_CAPSULE_MAX_BYTES:-$((1 << 30))}"   # source + configuration; larger means build output leaked in
 
 node_path="${TELOS_NODE_PATH:-/var/lib/telos}"
 state_dir="$node_path/state"
@@ -345,7 +346,12 @@ SQL
   tar -C "$storage_path" -cf "$data/shared-storage.tar" --exclude=./staging/tmp .
   step="release capsule"
   [ -d "$release_root" ] || die "the installed release was not found at $release_root"
-  tar -C "$release_root" -cf "$data/release-capsule.tar" --exclude=.git --exclude=node_modules --exclude=telos-review .
+  [ -f "$release_root/config/release-exclude.txt" ] || die "the installed release has no config/release-exclude.txt"
+  tar -C "$release_root" -cf "$data/release-capsule.tar" --exclude-from="$release_root/config/release-exclude.txt" .
+  # The capsule is source and configuration. Anything near this size is build output that
+  # slipped past the exclusion list, and would be archived into every backup.
+  [ "$(stat -c %s "$data/release-capsule.tar")" -le "$CAPSULE_MAX_BYTES" ] \
+    || die "the release capsule is larger than $((CAPSULE_MAX_BYTES >> 20)) MiB; extend config/release-exclude.txt"
 
   step="restart writers"
   for container in "${WRITERS_START_ORDER[@]}"; do
