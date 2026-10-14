@@ -243,7 +243,7 @@ run_restore() {
   step="configuration restore"
   journal_event "$step" begin
   mkdir -p "$node_path"
-  install -m 0600 -o root -g root -- "$data/node.env" "$node_path/node.env"
+  install -m 0600 -- "$data/node.env" "$node_path/node.env"
   tar -C "$node_path" -xf "$data/node-config.tar" --numeric-owner
   mkdir -p "$state_dir"; chmod 0700 "$state_dir"
   mkdir -p "$storage_path"
