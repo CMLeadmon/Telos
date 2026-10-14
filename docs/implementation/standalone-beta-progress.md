@@ -397,3 +397,17 @@ final tooling. Generations were rebuilt by the real builder from the same commit
 **Limits of this evidence:** rehearsal generations on two virtual machines, not a frozen candidate against an exact signed predecessor; each run exercised only
 the branch its generation pair selects (the candidate-bound claim is limited to that branch, see A38); the observer was a rehearsal machine; `candidate` mode of the
 drill (restore bound to the predecessor's lock) is covered by hermetic tests only. `upgrade-rollback` stays `not_run` for certification.
+
+## P5 (live) — encrypted-backup gate run against the generation-layout node (rehearsal; not certification evidence)
+
+`scripts/drills/backup.sh` ran live for the first time (`telos-review/beta-evidence/vm/*encrypted-backup-drill-rehearsal`): the node took a real backup of the
+running 12-service stack, and the verifier — with its own copy of the repository password — found the snapshot, proved the repository encrypted (a wrong password is
+refused), ran `restic check --read-data-subset=5%`, dumped and validated the manifest from the repository, compared every component's size, confirmed retention
+14 daily / 8 weekly, and confirmed no plaintext was left and every service was running again: **passed, 11 assertions, 19 s**, with an observed-runtime subject.
+The real systemd service (`telos-backup.service`, generation layout) also ran once to success in 13 s.
+
+Found by running it: (1) the gate sent its node program as `str` where the transport takes bytes — hermetic tests used an injected transport and never saw it;
+(2) the node's timer had been installed during earlier work but never enabled, and its unit and a rehearsal drop-in still named the pre-generation `/opt/telos`
+layout, so the first complete run failed `backup.schedule` — correctly; the runbook step now says to install the units from the active generation and
+enable the timer, and that the gate checks it. **Limits:** the repository is an SFTP path on the verifier VM, not an independent off-site location; the
+password was copied to the verifier by hand (the gate's contract is that the verifier holds its own copy); rehearsal record, not a candidate's.

@@ -35,8 +35,13 @@ directory is root-only and removed on every exit path.
    `RESTIC_REPOSITORY=…`, `RESTIC_PASSWORD_FILE=/etc/telos/restic.pw`, optionally
    `RESTIC_CREDENTIALS_FILE=` for backend keys (same ownership and mode). For SFTP use a key that
    can only reach the repository directory (`restrict,command="internal-sftp -d …"`).
-4. `systemctl enable --now telos-backup.timer` (installed under `deploy/systemd/`). It runs at
-   00:00, 06:00, 12:00 and 18:00 with up to 30 minutes of jitter and catches up after downtime.
+4. Install the units from the **active generation** and enable the timer — nothing does this for you, and the
+   `encrypted-backup` gate fails (`backup.schedule`) on a node whose timer is not enabled and active:
+   `sudo install -m 0644 /srv/telos/current/deploy/systemd/telos-backup.{service,timer} /etc/systemd/system/`,
+   `sudo systemctl daemon-reload`, `sudo systemctl enable --now telos-backup.timer`. It runs at
+   00:00, 06:00, 12:00 and 18:00 with up to 30 minutes of jitter and catches up after downtime. The unit runs the
+   active generation's `backup.sh` bound to `state/current-candidate-lock.json`, which an upgrade, rollback or
+   restore keeps pointing at the generation that is serving; re-install the units after a release changes them.
 
 ## What a backup does
 
