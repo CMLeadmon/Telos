@@ -28,6 +28,8 @@ All normative architecture specifications, deployment guides, state stores, and 
 * **Frontend Architecture:** [documentation/architecture/04-frontend-architecture.md](./documentation/architecture/04-frontend-architecture.md)
 * **Roadmap & Licensing:** [documentation/architecture/05-roadmap-and-licensing.md](./documentation/architecture/05-roadmap-and-licensing.md)
 * **Beta Feature Status:** [documentation/product/beta-feature-status.md](./documentation/product/beta-feature-status.md)
+* **Security Policy and Known Vulnerabilities:** [SECURITY.md](./SECURITY.md), [documentation/security/known-vulnerabilities.md](./documentation/security/known-vulnerabilities.md)
+* **Manual Fresh-Install Test (Ubuntu):** [documentation/operations/manual-fresh-install-test.md](./documentation/operations/manual-fresh-install-test.md)
 * **Agent Guide:** [AGENTS.md](./AGENTS.md)
 
 ---
