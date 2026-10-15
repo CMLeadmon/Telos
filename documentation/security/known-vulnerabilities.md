@@ -40,7 +40,8 @@ easy it is to exploit **in Telos**; see *How reachable is this?*.
   exploitation of any of these in Telos. We have **not** carried out an exploitability analysis of each advisory against Telos.
 - **Many findings come from a few small helper programs.** Of the 296 findings, 61 are in `kepubify` (an e-book conversion
   helper inside Grimmory, built with an old Go compiler), and 50 are in `gosu` (a tiny user-switching helper inside the PostgreSQL and
-  MariaDB images; Telos starts those databases directly as their unprivileged user instead of through that helper). Counting
+  MariaDB images; Telos starts those databases directly as their own unprivileged user, so the images' hand-off through that helper should not
+  run. We have not independently confirmed that). Counting
   advisories, not programs, overstates how many separate things need attention.
 - **A fix usually exists somewhere, but not yet in an image we can pull.** For almost every advisory below a corrected version of the
   component has been published (listed in the tables). The container images that package them have not all been rebuilt yet. Telos
@@ -72,14 +73,14 @@ These are 13 distinct advisories: CVE-2025-68121 (a Go standard-library flaw) ap
 
 Plain-language reading:
 
-- **Grimmory — Tomcat (3):** the web server inside Grimmory has authentication and access-control bypass advisories. They matter if
-  an attacker can reach Grimmory's web interface. Telos does not publish Grimmory to the network; see below.
-- **Grimmory — `kepubify` (4):** an e-book conversion helper built with Go 1.17; the advisories concern its use of Go's HTML and
-  network libraries on untrusted input.
+- **Grimmory — Tomcat (3):** the web server inside Grimmory has advisories in Tomcat's own access-control and DIGEST/FORM sign-in
+  features. Whether Grimmory uses those features has not been assessed. Telos does not publish Grimmory to the network; see below.
+- **Grimmory — `kepubify` (4):** an e-book conversion helper compiled with Go 1.17. The advisories are in Go's own standard library
+  (HTML templating, IP-address handling, TLS) as compiled into that helper; what the helper does with them has not been assessed.
 - **Jellyfin (6):** the Perl interpreter and XML library of its base operating system, and two "security feature bypass" advisories in the
   .NET web runtime it is built on.
-- **MariaDB and PostgreSQL (1 each):** the `gosu` helper (certificate validation when resuming a TLS session). Not used by Telos's
-  way of starting these databases.
+- **MariaDB and PostgreSQL (1 each):** the `gosu` helper (certificate validation when resuming a TLS session). Telos starts these
+  databases as their own unprivileged user, so the images' hand-off through `gosu` should not run; not independently confirmed.
 
 ## High-severity findings by component
 
