@@ -396,7 +396,6 @@ export function AudiobookPlayer({ itemId, onClose }: AudiobookPlayerProps) {
 
       <div className="abp-body">
         <div className="abp-cover">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
           <AuthenticatedImage
             path={libraryCoverPath(itemId)}
             alt=""

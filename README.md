@@ -37,7 +37,7 @@ All normative architecture specifications, deployment guides, state stores, and 
 ## 2. Tech Stack Summary
 
 * **Backend / Gateway:** Go 1.26.9 + Gorilla WebSocket + pgx/v5 (PostgreSQL) + go-redis/v9 (Redis cache).
-* **Frontend Client:** React 19 + Next.js 16.2.10 (Node.js 24.18.0 LTS) + TypeScript + Zustand (chat/theme/preferences stores) + TailwindCSS v4.
+* **Frontend Client:** React 19 + Next.js 16.3.8 (Node.js 24.18.0 LTS) + TypeScript + Zustand (chat/theme/preferences stores) + TailwindCSS v4.
 * **Infrastructure Services:** Traefik v3 edge router (ACME TLS + file-provider routing), PostgreSQL 16.15 database, Redis 7 (pub/sub), MariaDB 10.11 (Grimmory catalog DB), Jellyfin (headless media transcoder), Grimmory (digital book server), and ClamAV (upload malware scanning).
 
 ---

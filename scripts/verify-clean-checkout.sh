@@ -418,10 +418,10 @@ run_inventory() {
 		fail_inventory "backend/Dockerfile does not pin golang:1.26.9-alpine"
 	tree_file docker-compose.yml | grep -q 'image: docker\.io/library/postgres:16\.15-alpine' ||
 		fail_inventory "docker-compose.yml does not pin postgres:16.15-alpine"
-	tree_file frontend/package.json | grep -q '"next": "16\.2\.10"' ||
-		fail_inventory "frontend/package.json does not pin next 16.2.10 exactly"
-	tree_file frontend/package.json | grep -q '"postcss": "8\.5\.10"' ||
-		fail_inventory "frontend/package.json does not pin the postcss 8.5.10 override"
+	tree_file frontend/package.json | grep -q '"next": "16\.3\.8"' ||
+		fail_inventory "frontend/package.json does not pin next 16.3.8 exactly"
+	tree_file frontend/package.json | grep -q '"postcss": "8\.5\.23"' ||
+		fail_inventory "frontend/package.json does not pin the postcss 8.5.23 override"
 	tree_file frontend/package.json | grep -q '"epubjs": "0\.4\.2"' ||
 		fail_inventory "frontend/package.json does not pin epubjs 0.4.2"
 	if tree_file frontend/package.json | grep -nE '"(dependencies|devDependencies)"' -A 40 |

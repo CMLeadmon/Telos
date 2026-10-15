@@ -55,3 +55,20 @@ The first live scan of a rehearsal candidate (Trivy 0.75.0, database of 2026-10-
 `golang.org/x/crypto` v0.51.0, two in `golang.org/x/net` v0.55.0 and one in `golang.org/x/text` v0.37.0 (fixed in 0.55.0, 0.60.0 and 0.39.0). The Go
 toolchain resolved the set together (`go get golang.org/x/net@v0.60.0`): `x/net` v0.60.0, `x/crypto` v0.57.0, `x/text` v0.42.0, `x/sync` v0.23.0 and
 `x/sys` v0.48.0, all BSD-3-Clause (recorded in `ci/license-policy.json`). Build, vet and the unit suite pass; the integration suite runs on the reference VM.
+
+## Update 2026-10-14: production npm advisories since the baseline
+
+The CI step `npm --prefix frontend audit --omit=dev --audit-level=moderate` went red after new advisories were published (8 findings: 1 Critical, 6 High, 1 Moderate), so the
+pins above moved. Telos ships a static export, so the server-side Next.js advisories (Server Actions, middleware, image optimization, custom servers) do not describe a running
+Telos service; the gate still cannot pass with them, and raising the pins costs less than accepting them.
+
+| Package | Was | Now | Why |
+|---|---|---|---|
+| `next` (and `eslint-config-next`) | 16.2.10 | 16.3.8 | advisories affect every release up to 16.3.7 |
+| `pdfjs-dist` | 6.1.200 | 6.2.108 | PDF.js arbitrary-script advisory, fixed in 6.2.108 |
+| `postcss` override | 8.5.10 | 8.5.23 | source-map file-read advisories, fixed after 8.5.22; the version Next 16.3.8 itself pins |
+| `xmldom` override | `@xmldom/xmldom@0.9.10` | `@xmldom/xmldom@0.9.12` | the 0.9.x advisories end at 0.9.11 |
+| lockfile only | | `nanoid` 3.3.20, `source-map-js` 1.2.2, `baseline-browser-mapping` 2.11.28, `sharp` 0.35.5 | in-range updates made with `npm update` |
+
+Result: `npm audit --omit=dev` reports 0 vulnerabilities; lint, `tsc`, the unit tests, the production build and the bundle check pass, and the Playwright gate has no failure in its Chromium
+and mobile-Chrome projects on the reference host (its WebKit project needs system libraries that host lacks, so that project is verified by CI).
