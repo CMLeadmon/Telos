@@ -24,6 +24,7 @@ Use `main` at or after the commit that added this file. An older checkout of `ma
 the standalone installer, the pinned images, the node CLI changes or the fixes described here.
 
 Conventions: commands are for a normal terminal as user `carter`; `sudo` appears where it is required. `$SRC` is the checkout.
+**A new terminal window starts without `$SRC` and without `PODMAN_COMPOSE_PROVIDER` (section 2). Set both again in every new window.**
 
 ```bash
 export SRC="$HOME/Projects/Telos"
@@ -90,11 +91,19 @@ sudo env | grep PODMAN_COMPOSE_PROVIDER        # expect the line you just added
 
 If that grep prints nothing, run the later commands as `sudo env PODMAN_COMPOSE_PROVIDER=/opt/telos-tools/podman-compose/bin/podman-compose telos …`.
 
+`/etc/environment` is read when you log in, so **this terminal does not have the variable yet**, and `./install.sh --check` in section 3 runs as you, not through `sudo`.
+Set it for this terminal as well (every new terminal window needs it again, or log out and back in once):
+
+```bash
+export PODMAN_COMPOSE_PROVIDER=/opt/telos-tools/podman-compose/bin/podman-compose
+echo "$PODMAN_COMPOSE_PROVIDER" && "$PODMAN_COMPOSE_PROVIDER" --version     # expect the path, then podman-compose version 1.6.0
+```
+
 ## 3. Preflight and install the command
 
 ```bash
 cd "$SRC"
-./install.sh --check          # read-only
+./install.sh --check          # read-only; run it in the terminal where you did the export in section 2
 ```
 
 Expected: every line ✔ (host Ubuntu 26.04 reference release, x86_64, kernel, Podman, podman-compose, ports 80 and 443 free,
@@ -379,7 +388,8 @@ Bring the test VMs back if you want them: `~/.local/telos-vm/vm.sh start node; ~
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
-| `install.sh --check` says Podman or podman-compose is missing | Section 2 not finished, or `PODMAN_COMPOSE_PROVIDER` not visible to `sudo` | Re-check `sudo env \| grep PODMAN`; use the `sudo env …` form |
+| `install.sh --check` says "no podman-compose provider found" | `PODMAN_COMPOSE_PROVIDER` is not set in this terminal (`/etc/environment` is only read at login), or the venv step of section 2 was skipped | `echo "$PODMAN_COMPOSE_PROVIDER"`; run the `export` in section 2; `ls -l /opt/telos-tools/podman-compose/bin/podman-compose` |
+| A `sudo telos …` command says it cannot find the provider | The variable is not visible to `sudo` | `sudo env \| grep PODMAN`; use the `sudo env PODMAN_COMPOSE_PROVIDER=… telos …` form |
 | `telos doctor` lists a placeholder or an unreadable signing file | `init` did not complete | It names one repair per defect; never re-run `init` over an existing node |
 | Browser says "unrecognized name" or the lock is missing while `status` is all healthy | Traefik cannot read the certificate (it runs as UID 65532) | `sudo ls -ld /var/lib/telos-tls; sudo ls -l /var/lib/telos-tls` — directory `root:65532 0750`, `server.key` `0640`; `telos start` also checks this |
 | Browser certificate warning | CA not imported in that browser | Section 4; do not click through |
