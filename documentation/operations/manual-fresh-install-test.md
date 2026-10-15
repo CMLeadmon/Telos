@@ -20,14 +20,14 @@ results sheet and a teardown that puts the machine back as it was.
 | **Undo** | Section 11 reverses every one of those. |
 | **Not covered** | Public DNS and Let's Encrypt (this machine has no public name), the encrypted off-node backup (needs a separate restic repository), upgrades and the Linux desktop app. |
 
-Use the **branch** `standalone-beta-impl`, not `main`. `main` is the 29 August state and does not contain the standalone installer,
-the pinned images, the node CLI changes or the fixes described here.
+Use `main` at or after the commit that added this file. An older checkout of `main` (the 29 August state, `237692f`) does not contain
+the standalone installer, the pinned images, the node CLI changes or the fixes described here.
 
 Conventions: commands are for a normal terminal as user `carter`; `sudo` appears where it is required. `$SRC` is the checkout.
 
 ```bash
 export SRC="$HOME/Projects/Telos"
-cd "$SRC" && git branch --show-current && git log --oneline -1   # expect: standalone-beta-impl and the newest commit
+cd "$SRC" && git branch --show-current && git log --oneline -1   # expect: main and the newest commit
 ```
 
 ## 1. Machine check and making room

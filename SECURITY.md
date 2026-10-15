@@ -2,9 +2,9 @@
 
 ## Status
 
-Telos has no stable release. The **standalone beta** (the `standalone-beta-impl` line) is under test and **has not been certified**;
-it should not be exposed to untrusted users or hold data you cannot afford to lose. Only that line has been assessed the way this
-document describes. The `main` branch predates that work and has not been scanned or hardened in the same way.
+Telos has no stable release. The **standalone beta**, which is what `main` now carries, is under test and **has not been certified**;
+it should not be exposed to untrusted users or hold data you cannot afford to lose. Earlier states of `main` (commit `237692f`, 29
+August 2026, and older) predate the hardening, image pinning and scanning described here and were not assessed the same way.
 
 ## Reporting a vulnerability
 
@@ -44,5 +44,5 @@ These properties were checked on reference test machines. Independent security t
 
 | Line | Security fixes |
 |---|---|
-| Standalone beta (`standalone-beta-impl`, until released) | Yes, best effort while it is in beta |
-| `main` (pre-standalone) | Not assessed |
+| `main` (the standalone beta, unreleased) | Yes, best effort while it is in beta |
+| Older states of `main` (`237692f` and earlier) | Not assessed |

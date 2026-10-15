@@ -1,6 +1,6 @@
 # Known vulnerabilities in the components Telos bundles
 
-> **Scanned 2026-10-14** · applies to the **standalone beta line** (the `standalone-beta-impl` work, not yet released) ·
+> **Scanned 2026-10-14** · applies to the **standalone beta**, which is what `main` carries (not yet released) ·
 > scanner Trivy 0.75.0, vulnerability database retrieved 2026-10-14 16:47 UTC · severities High and Critical only.
 > This is a point-in-time snapshot. New flaws are published every day; re-run the scan (below) rather than trusting an old copy.
 
