@@ -156,9 +156,10 @@ It creates `/var/lib/telos/node.env` (root-only, generated secrets, never printe
 `/mnt/storage/shared` (owned by you, because `sudo` records your user id as the application identity). **`init` never overwrites
 anything and has no `--force`.** If it refuses, read why; do not delete a node you want to keep.
 
-Tell Telos the certificate comes from your private CA (two lines appended to `node.env`):
+Tell Telos the certificate comes from your private CA. `init` already wrote these two keys **empty** (it copies them from `.env.example`), and Telos refuses a file in which a key appears twice (`duplicate variable`), so remove the empty lines first, then add the real values:
 
 ```bash
+sudo sed -i -e '/^TELOS_PRIVATE_CA=/d' -e '/^TELOS_TLS_PATH=/d' /var/lib/telos/node.env
 printf 'TELOS_PRIVATE_CA=1\nTELOS_TLS_PATH=/var/lib/telos-tls\n' | sudo tee -a /var/lib/telos/node.env >/dev/null
 sudo grep -E '^(TELOS_DOMAIN|TELOS_PUBLIC_ORIGIN|TELOS_PRIVATE_CA|TELOS_TLS_PATH|STORAGE_PATH|TELOS_ENV)=' /var/lib/telos/node.env
 ```
