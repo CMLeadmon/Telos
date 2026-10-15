@@ -150,7 +150,9 @@ simplest is to use Firefox, or import the same file under Settings → Privacy a
 sudo telos init --domain telos.test --acme-email ops@telos.test
 ```
 
-Creates `/var/lib/telos/node.env` (root-only, generated secrets, never printed), the signing keys and the storage tree under
+It asks one question, **"Storage path for media and books [/mnt/storage/shared]"**: press **Enter** to accept the default, which the rest of this runbook assumes. (`--storage /mnt/storage/shared` on the command answers it in advance.)
+
+It creates `/var/lib/telos/node.env` (root-only, generated secrets, never printed), the signing keys and the storage tree under
 `/mnt/storage/shared` (owned by you, because `sudo` records your user id as the application identity). **`init` never overwrites
 anything and has no `--force`.** If it refuses, read why; do not delete a node you want to keep.
 
