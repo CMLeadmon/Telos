@@ -6,7 +6,7 @@
 #   TELOS_TEST_DATABASE_URL=postgres://telos:testpw@127.0.0.1:55432/telos_test?sslmode=disable \
 #   TELOS_TEST_REDIS_URL=redis://127.0.0.1:56379/0 \
 #     podman run --rm --network host -v ./backend:/app:z -w /app \
-#     docker.io/library/golang:1.26.5@sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678 go test ./...
+#     docker.io/library/golang:1.26.9@sha256:37cfcca63222ec499bec5e8ad7aad52dbf7529db36d5812b8eae2f0621aa92d6 go test ./...
 #   podman compose -f docker-compose.test.yml down -v
 services:
   postgres-test:

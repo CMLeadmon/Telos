@@ -476,3 +476,11 @@ MariaDB (1) and Postgres (1, the `gosu` binary) — all at the newest upstream t
 accept a Critical, so closing it means replacing an image, an upstream rebuild, or a changed policy; none of that is decided here. `ci/risk-acceptances.json` is still empty.
 
 **Addendum — the same two local-catalog runs repeated at the final commit `c98c9b4`** (after the pin refresh and Go module bump): host 23 passed, node VM **45 of 49 passed** (the same four `not_run` that need a frozen candidate). The 30-minute capacity drill was also repeated on the refreshed stack (T4): 18 checks passed, 0 failed requests, p95 84 ms (mutation p95 57 ms), 12 containers with no restart, 25 live sessions — no measurable change from before the refresh (p95 83 ms).
+
+## CI remediation after the push of `main` (2026-10-14)
+
+The first push of the beta line to `main` (`ff64c06`, then `61b3d83`) left four CI checks red: `compose-validation`, `supply-chain-source`, `browser-node-fixtures` and the Desktop workflow's `linux-appimage`. Causes and fixes are in A43.
+Each was reproduced or measured before being changed: the compose check by running the new test against the old validator (same `FAIL (0s < 75s)`); the rehearsal test in an `ubuntu:24.04` container (bash 5.2.21, the runner's) where the old test fails with CI's message and the fixed test passes;
+the Go advisories by `govulncheck` in the pinned `golang:1.26.9` image (no reachable vulnerabilities; vet and unit tests pass); the AppImage check from the CI log (`rejected: unsupported artifact in the desktop bundle: Telos.AppDir/.DirIcon`).
+Locally the CI-equivalent suites pass (truth-and-gates set, image lock, supply chain, monitoring, runtime hardening, the desktop and candidate workflow contracts). The Desktop AppImage build itself runs only on CI, so its result is the CI run that follows this commit.
+Not changed: the beta is still not certified, and the open items listed earlier (signing keys, public DNS and certificates, real devices, a frozen candidate) are unchanged.

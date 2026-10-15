@@ -57,12 +57,15 @@ jobs:
           image="$bundle/Telos_${version}_amd64.AppImage"
           python3 scripts/write-artifact-identity.py --artifact "$image" --source-commit "$GITHUB_SHA" \
             --version "$version" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --out "$image.identity.json"
-          python3 scripts/verify-desktop-artifact.py --platform linux --artifact "$bundle" --identity "$image.identity.json"
+          # Tauri leaves its Telos.AppDir staging tree beside the AppImage. Verify exactly what is uploaded: the image and its sidecar alone.
+          mkdir desktop-out
+          cp "$image" "$image.identity.json" desktop-out/
+          python3 scripts/verify-desktop-artifact.py --platform linux --artifact desktop-out --identity "desktop-out/$(basename "$image").identity.json"
       - uses: actions/upload-artifact@v4
         with:
           name: telos-linux-appimage
           if-no-files-found: error
           path: |
-            frontend/src-tauri/target/release/bundle/appimage/*.AppImage
-            frontend/src-tauri/target/release/bundle/appimage/*.AppImage.identity.json
+            desktop-out/*.AppImage
+            desktop-out/*.AppImage.identity.json
             prerequisite-versions.txt

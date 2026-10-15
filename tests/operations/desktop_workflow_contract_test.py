@@ -58,6 +58,15 @@ class DesktopWorkflowContract(unittest.TestCase):
         self.assertIn("*.AppImage.identity.json", paths)
         self.assertNotIn("mv ", self.script)  # uploaded without renaming
 
+    def test_the_verified_directory_is_the_uploaded_one(self):
+        # Tauri leaves Telos.AppDir beside the AppImage; the verifier rejects any file that is not the image or its sidecar.
+        self.assertIn("--artifact desktop-out", self.script)
+        self.assertNotIn('--artifact "$bundle"', self.script)
+        self.assertLess(self.script.index("cp \"$image\""), self.script.index("verify-desktop-artifact.py --platform linux"))
+        upload = [s for s in self.job["steps"] if s.get("uses", "").startswith("actions/upload-artifact")][0]
+        self.assertIn("desktop-out/*.AppImage", upload["with"]["path"])
+        self.assertNotIn("src-tauri/target", upload["with"]["path"])
+
     def test_no_updater_or_signing_configuration(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         for forbidden in ("TAURI_SIGNING_PRIVATE_KEY", "TAURI_PRIVATE_KEY", "updater", "secrets."):

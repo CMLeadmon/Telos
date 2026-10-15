@@ -408,8 +408,8 @@ run_inventory() {
 	fi
 
 	# Pinned-toolchain assertions: no build input may float.
-	tree_file backend/go.mod | grep -qE '^go 1\.26\.5$' ||
-		fail_inventory "backend/go.mod does not pin go 1.26.5"
+	tree_file backend/go.mod | grep -qE '^go 1\.26\.9$' ||
+		fail_inventory "backend/go.mod does not pin go 1.26.9"
 	[ "$(tree_file .nvmrc 2>/dev/null || true)" = "24.18.0" ] ||
 		fail_inventory ".nvmrc does not pin Node.js 24.18.0"
 	tree_file backend/Dockerfile | grep -q 'FROM docker\.io/library/node:24\.18\.0-alpine' ||

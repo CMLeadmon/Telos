@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 
 NODE = {"uses": "actions/setup-node@v4", "with": {"node-version": "24.18.0"}}
-GO = {"uses": "actions/setup-go@v5", "with": {"go-version": "1.26.5"}}
+GO = {"uses": "actions/setup-go@v5", "with": {"go-version": "1.26.9"}}
 CHECKOUT = {"uses": "actions/checkout@v4"}
 
 
@@ -53,6 +53,7 @@ EXPECTED_JOBS = {
             run("sudo apt-get update",
                 "sudo apt-get install -y podman podman-compose python3-yaml"),
             run("podman --version", "podman-compose --version",
+                "podman compose version  # records which provider renders the model (the runner also ships docker-compose)",
                 "python3 -c 'import yaml'"),
             run("bash scripts/validate-compose.sh --env-file .env.example"),
         ],

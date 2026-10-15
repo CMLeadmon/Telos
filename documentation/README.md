@@ -22,7 +22,7 @@ Telos merges Discord-style chat, Jellyfin-style streaming, Grimmory-style public
 |---|---|
 | **Default Host** | `telos.local` |
 | **Modules** | Chat · Stream · Library · Files, plus Settings |
-| **Tech Stack** | Go 1.26.5 core gateway + React 19 / Next.js 16 / TypeScript / Zustand client |
+| **Tech Stack** | Go 1.26.9 core gateway + React 19 / Next.js 16 / TypeScript / Zustand client |
 | **Headless Services** | Traefik v3, PostgreSQL 16.15, Redis 7, Jellyfin, Grimmory, MariaDB 10.11, ClamAV, Squid (controlled egress) |
 | **Operator Entry Point** | Authoritative Bash `./telos` CLI (`install.sh` → `telos doctor` / `start` / `status` / `stop`); `backend/cmd/telos/` is experimental |
 | **Theming System** | Synthwave (default) / Ink |

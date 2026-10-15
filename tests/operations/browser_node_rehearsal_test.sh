@@ -108,7 +108,14 @@ stop_node
 
 # --- an interrupted rehearsal restores the services -----------------------------------------------------
 start_node
-credentials | TELOS_REHEARSAL_SETTLE_SECONDS=30 rehearse "$work/out-int" --bootstrap-empty-node >"$work/int.out" 2>&1 &
+# The controller is started as a plain command, not through rehearse(): `$!` must be the script's own pid.
+# Bash 5.3 execs the last command of a function in a pipeline, so $! happened to be the script there; bash 5.2
+# (the CI runner) keeps a wrapper subshell, the TERM hit only that subshell, and the script went on with
+# Jellyfin stopped.
+rm -rf "$work/out-int"; mkdir -p "$work/out-int"
+credentials | TELOS_REHEARSAL_SETTLE_SECONDS=30 SSL_CERT_FILE="$work/ca.pem" "$repo_root/scripts/rehearse-browser-node.sh" \
+  --public-url "https://localhost:$port" --rehearsal --source-commit "$commit" --result-out "$work/out-int/result.json" \
+  --fixture-manifest "$work/manifest.json" --bootstrap-empty-node >"$work/int.out" 2>&1 &
 controller=$!; pids+=("$controller")
 for _ in $(seq 1 200); do [[ -e "$work/flags/jellyfin-down" ]] && break; sleep 0.05; done
 [[ -e "$work/flags/jellyfin-down" ]] || fail "the outage stage never started"

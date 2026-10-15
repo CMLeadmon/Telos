@@ -122,16 +122,18 @@ fi
 
 if want stop-grace; then
 	secs="$(python3 - "$rendered" <<'PY'
-import sys, yaml
+import re, sys, yaml
 doc = yaml.safe_load(open(sys.argv[1]))
 svc = (doc.get("services") or {}).get("telos-core", {})
 val = svc.get("stop_grace_period", "0s")
-# Accept "75s" or nanosecond int forms.
-s = str(val)
-if s.endswith("s") and s[:-1].isdigit():
-    print(int(s[:-1]))
-elif s.isdigit():
-    print(int(s) // 1_000_000_000)
+# Providers render the same period differently: podman-compose keeps "75s", docker-compose
+# normalizes it to "1m15s", and some emit nanoseconds. Accept a Go duration or a bare number.
+s = str(val).strip()
+UNITS = {"h": 3600.0, "m": 60.0, "s": 1.0, "ms": 1e-3, "us": 1e-6, "ns": 1e-9}
+if s.isdigit():
+    print(int(s) // 1_000_000_000 if int(s) >= 1_000_000 else int(s))
+elif re.fullmatch(r"(?:[0-9]+(?:\.[0-9]+)?(?:h|ms|us|ns|m|s))+", s):
+    print(int(sum(float(n) * UNITS[u] for n, u in re.findall(r"([0-9]+(?:\.[0-9]+)?)(h|ms|us|ns|m|s)", s))))
 else:
     print(0)
 PY

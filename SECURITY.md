@@ -26,8 +26,8 @@ reported to those projects. Tell us as well if Telos's configuration makes one o
 
 The components Telos ships are scanned against public advisory databases. At the last scan (2026-10-14) the container images of Telos's own server and web
 client had no High or Critical findings, and the **15 Critical findings are all in four bundled third-party components**
-(Grimmory, Jellyfin, MariaDB, PostgreSQL). If you build Telos from source, use **Go 1.26.9 or newer**: the repository still pins
-Go 1.26.5, which has 16 known standard-library vulnerabilities. The full list, what it means, how reachable it is, and what you can do now are in
+(Grimmory, Jellyfin, MariaDB, PostgreSQL). If you build Telos from source, use **Go 1.26.9 or newer**: checkouts at or before
+`61b3d83` pinned Go 1.26.5, which has 16 known standard-library vulnerabilities (later commits pin 1.26.9). The full list, what it means, how reachable it is, and what you can do now are in
 [documentation/security/known-vulnerabilities.md](documentation/security/known-vulnerabilities.md).
 
 ## How Telos limits exposure

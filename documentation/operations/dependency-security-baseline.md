@@ -3,7 +3,7 @@
 P2-T1 record. Scanners: `govulncheck` (latest release; the plan's pinned
 v1.1.2 does not compile under Go 1.26 due to an old `x/tools`
 incompatibility, so the current release is the reviewed substitution) run in
-the `golang:1.26.5` container, and `npm audit --omit=dev` under the Node
+the `golang:1.26.9` container, and `npm audit --omit=dev` under the Node
 24.18.0 lockfile. Only package/advisory/version data is recorded.
 
 ## Failing baseline (before remediation)

@@ -91,8 +91,8 @@ Run the gates that match what you touched. Go is not installed on the host — b
 
 ```bash
 # Backend — unit suite (integration tests self-skip without a live PG/Redis)
-podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go test ./...
-podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.5 go vet ./...
+podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.9 go test ./...
+podman run --rm -v ./backend:/app:z -w /app docker.io/library/golang:1.26.9 go vet ./...
 
 # Backend — integration suite (spins up disposable PG 16.15 + Redis 7, isolated network)
 bash scripts/test-backend.sh                 # all
@@ -122,7 +122,7 @@ grep -rnE "TO""DO|TB""D" documentation/ AGENTS.md
 Things that are not obvious from the tree and that cost real time to rediscover.
 
 - **The host runs podman, not docker.** Use `podman` / `podman-compose`. Go is not installed
-  on the host; backend toolchain commands run in `docker.io/library/golang:1.26.5` per §5.
+  on the host; backend toolchain commands run in `docker.io/library/golang:1.26.9` per §5.
 - **`backend/` is one flat Go package (`module telos-core`) of ~50 files, not one file.**
   `main.go` holds the route table (`mux.Handle(...)`) and the `//go:embed` directives; the
   work lives in siblings named for their concern (`auth.go`, `chat.go`, `realtime.go`,

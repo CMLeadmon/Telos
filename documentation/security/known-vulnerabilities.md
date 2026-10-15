@@ -9,7 +9,7 @@
 Telos is its own server and web client **plus** well-known open-source programs it runs alongside: Jellyfin (video and music),
 Grimmory (e-books), PostgreSQL and MariaDB (databases), Traefik (the HTTPS front door), and a few supporting services. When the
 exact versions Telos currently ships are checked against public databases of known security flaws, **Telos's own server and web
-client container images have no High or Critical findings** (but see *Building Telos yourself* below), and **all 15 Critical findings are in four bundled third-party components** (Grimmory,
+client container images have no High or Critical findings** (for builds from older repository commits, see *Building Telos yourself* below), and **all 15 Critical findings are in four bundled third-party components** (Grimmory,
 Jellyfin, MariaDB, PostgreSQL). For Grimmory and Jellyfin the project already ships the newest published version, so the fix has to
 come from those projects' next releases. Until then, Telos cannot be certified as a beta under its own release rules (see
 *What the project is doing*).
@@ -51,9 +51,9 @@ easy it is to exploit **in Telos**; see *How reachable is this?*.
 
 ## Building Telos yourself: use Go 1.26.9 or newer
 
-The official container images are built with Go 1.26.9, and the scan of the built gateway (`telos-core`) reports no Go findings. The
-repository itself, however, still names **Go 1.26.5** (in `backend/go.mod`, the CI configuration and the `golang:1.26.5` test image).
-`govulncheck` run with that exact toolchain reports **16 reachable vulnerabilities in Go's own standard library**: 10 fixed in Go
+The official container images are built with Go 1.26.9, and the scan of the built gateway (`telos-core`) reports no Go findings. Repository
+commits up to and including `61b3d83` named **Go 1.26.5** (in `backend/go.mod`, the CI configuration and the `golang:1.26.5` test image);
+commits after it name Go 1.26.9 everywhere. `govulncheck` run with the old 1.26.5 toolchain reported **16 reachable vulnerabilities in Go's own standard library**: 10 fixed in Go
 1.26.9 and 6 fixed in Go 1.26.6. They are mostly resource-exhaustion problems in code the Telos gateway uses to serve HTTP:
 
 | Go package | What the advisories are about | Fixed in |
@@ -66,9 +66,11 @@ repository itself, however, still names **Go 1.26.5** (in `backend/go.mod`, the 
 What this means for you:
 
 - **Using the official images:** not affected by these 16, because the images are built with Go 1.26.9.
-- **Building the gateway yourself** with `go build`, or running the repository's CI and test containers as they are pinned today: build with
-  **Go 1.26.9 or newer**. A binary built with Go 1.26.5 contains these flaws, and the CI check `supply-chain-source` fails for exactly this reason.
-- **Open fix:** raising the repository's own Go pins (about two dozen places) to 1.26.9. It has not been done yet.
+- **Building the gateway yourself** with `go build`: build with **Go 1.26.9 or newer**. A binary built with Go 1.26.5 contains these flaws.
+  This applies to any checkout at or before `61b3d83`; later commits pin Go 1.26.9 in `backend/go.mod`, the CI configuration, the test image
+  (`release/images.lock`) and the documented commands.
+- **Fixed in the repository:** with the pins raised to 1.26.9, `govulncheck` reports no reachable vulnerabilities in the gateway, and the CI check
+  `supply-chain-source` passes the Go step it failed before.
 
 ## The 15 Critical findings
 

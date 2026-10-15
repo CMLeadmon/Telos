@@ -16,7 +16,7 @@ if command -v go >/dev/null 2>&1; then
   (cd "$repo_root/backend" && CGO_ENABLED=0 go build -o "$binary" .)
 elif command -v podman >/dev/null 2>&1; then
   podman run --rm -v "$repo_root/backend:/app:z" -v "$work:/out:z" -w /app -e CGO_ENABLED=0 \
-    docker.io/library/golang:1.26.5 go build -o /out/telos-core .
+    docker.io/library/golang:1.26.9 go build -o /out/telos-core .
 else
   echo "not_run: a Go toolchain or Podman is required to build telos-core" >&2
   exit 3

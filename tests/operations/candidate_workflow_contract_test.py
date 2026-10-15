@@ -75,6 +75,10 @@ class CandidateWorkflowContract(unittest.TestCase):
         for needed in ("write-artifact-identity.py", "--run-id \"$GITHUB_RUN_ID\"", "--run-attempt \"$GITHUB_RUN_ATTEMPT\"", "verify-desktop-artifact.py --platform linux"):
             self.assertIn(needed, script)
         self.assertLess(script.index("write-artifact-identity.py"), script.index("verify-desktop-artifact.py"))
+        # Tauri leaves Telos.AppDir beside the AppImage: verify the staged upload set, never the bundle directory.
+        self.assertIn("--artifact desktop-out", script)
+        self.assertNotIn('--artifact "$bundle"', script)
+        self.assertLess(script.index('cp "$image"'), script.index("verify-desktop-artifact.py"))
 
     def test_uploads_are_named_with_the_version_and_the_lock_and_kept_two_weeks(self):
         uploads = [s for j in self.jobs.values() for s in j["steps"] if str(s.get("uses", "")).startswith("actions/upload-artifact")]

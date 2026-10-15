@@ -265,6 +265,31 @@ rm -f "$fixture/docker-compose.setup.yml"
 set +e; output="$(run_overlay_check "$fixture")"; status=$?; set -e
 [[ $status -ne 0 ]] || { echo "a missing overlay was accepted" >&2; exit 1; }
 
+# The stop budget is judged by its length whichever way the provider writes it: podman-compose keeps
+# "75s", docker-compose renders "1m15s" (the GitHub runner resolves `podman compose` to it), and a
+# period below the staged-shutdown budget fails in every spelling.
+grace_fixture="$work/grace"
+make_fixture "$grace_fixture"
+python3 - "$grace_fixture/docker-compose.yml" <<'PY'
+import sys
+text = open(sys.argv[1], encoding="utf-8").read()
+assert text.count("    stop_grace_period: 75s\n") == 1
+open(sys.argv[1] + ".template", "w", encoding="utf-8").write(text)
+PY
+for spelling in "75s:accept" "1m15s:accept" "2m:accept" "1h:accept" "90000000000:accept" "74s:reject" "1m14s:reject" "60s:reject" "1m:reject" "banana:reject"; do
+  value="${spelling%%:*}"; verdict="${spelling##*:}"
+  sed "s/^    stop_grace_period: 75s\$/    stop_grace_period: $value/" "$grace_fixture/docker-compose.yml.template" >"$grace_fixture/docker-compose.yml"
+  set +e
+  output="$(bash "$repo_root/scripts/validate-compose.sh" --root "$grace_fixture" --env-file tests/fixtures/compose.env --checks stop-grace 2>&1)"
+  status=$?
+  set -e
+  if [[ "$verdict" == accept ]]; then
+    [[ $status -eq 0 ]] || { echo "stop_grace_period $value was rejected: $output" >&2; exit 1; }
+  else
+    [[ $status -ne 0 ]] || { echo "stop_grace_period $value was accepted: $output" >&2; exit 1; }
+  fi
+done
+
 # An unknown check must be a usage error, never a silent pass.
 set +e
 bash "$repo_root/scripts/validate-compose.sh" --root "$valid" --env-file tests/fixtures/compose.env --checks no-such-check >/dev/null 2>&1

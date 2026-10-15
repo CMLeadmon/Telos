@@ -121,13 +121,13 @@
   "schemaVersion": 2,
   "testImages": {
     "golang-test": {
-      "manifestDigest": "sha256:705e964a93a2fd2e75c7d59bb7d781b57e30f12293ffde5175c69229e18fb678",
+      "manifestDigest": "sha256:37cfcca63222ec499bec5e8ad7aad52dbf7529db36d5812b8eae2f0621aa92d6",
       "platforms": {
-        "linux/amd64": "sha256:55d3b3d8ea3ae125d21f528f392a7ae0efbd9c69cbac7a479921121af3c7b2a2"
+        "linux/amd64": "sha256:cf7e928cb9edc2ed8b3cc6fe77ee1ee30b9fea28149564c8840097321a7600ea"
       },
       "registry": "docker.io",
-      "resolvedAt": "2026-10-13T19:46:54Z",
-      "source": "docker.io/library/golang:1.26.5"
+      "resolvedAt": "2026-10-15T00:27:59Z",
+      "source": "docker.io/library/golang:1.26.9"
     },
     "postgres-test": {
       "manifestDigest": "sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea",
